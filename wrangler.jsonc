@@ -1,7 +1,33 @@
 {
   "name": "drsarwantests",
+  "main": "src/worker.js",
   "compatibility_date": "2026-10-01",
   "assets": {
-    "directory": "./public"
-  }
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "drsarwantests-bookings",
+      // Paste the Database ID from Cloudflare → Storage & Databases → D1 here:
+      "database_id": "8a12640e-86aa-47dd-bec4-74aea1ccfb71",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    "PRICE_INR": "1899",
+    // Paytm merchant UPI ID, shown to customers for copy/paste
+    "UPI_ID": "paytmqr28100505010115zcn7xuztuf@paytm",
+    // Exact payment string from the Paytm QR (signed by Paytm, so it is used as-is; customers enter the amount)
+    "UPI_QR_STRING": "upi://pay?pa=paytmqr28100505010115zcn7xuztuf@paytm&pn=Paytm%20Merchant&mc=5499&mode=02&orgid=000000&paytmqr=28100505010115ZCN7XUZTUF&sign=MEUCIQDjRK1wUlGotc2vmW99LTW/1ZuI+0xO2/fhiXwiAJ9INQIgEBG3EGA3oO9OQwfZz1vC9dWyrsRdvefUyKKhrIvFGX0=",
+    "UPI_NAME": "Dr. Sarwan Diagnostic Labs",
+    // WhatsApp number that receives booking alerts, with country code, digits only, e.g. 919812345678
+    "WA_ADMIN_PHONE": "918368143677"
+  },
+  // Secrets (set in Cloudflare dashboard → Worker → Settings → Variables and Secrets, type "Secret"):
+  //   ADMIN_PASSWORD    – password for drsarwantests.com/admin
+  //   CALLMEBOT_APIKEY  – free WhatsApp alert key (see README)
+  "observability": { "enabled": true }
 }

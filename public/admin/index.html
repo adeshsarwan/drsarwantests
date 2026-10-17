@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Bookings Admin · Dr. Sarwan Diagnostic Labs</title>
+<link rel="icon" href="/assets/logo.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=Figtree:wght@400;500;600;700&display=swap">
+<style>
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:#f4f7fa;color:#1b2a4e;font-family:Figtree,system-ui,sans-serif;font-size:15px}
+header{background:#fff;border-bottom:1px solid #e1e8ee;position:sticky;top:0;z-index:5}
+.wrap{max-width:1180px;margin:0 auto;padding:0 16px}
+.bar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;padding:10px 0}
+h1{font-family:Archivo,sans-serif;font-size:20px;margin:0}
+button,select,input{font:inherit}
+.btn{border:0;border-radius:999px;background:#1f6977;color:#fff;font-weight:700;padding:10px 16px;min-height:42px;cursor:pointer}
+.btn.ghost{background:#fff;color:#1f6977;border:1.5px solid #1f6977}
+.btn.sm{padding:6px 12px;min-height:34px;font-size:13.5px}
+.btn.warn{background:#fff;color:#b23f28;border:1.5px solid #e2b3a8}
+.btn:disabled{opacity:.5;cursor:default}
+.card{background:#fff;border-radius:16px;border:1px solid #e1e8ee;padding:18px;margin-top:16px}
+.days{display:flex;gap:8px;overflow-x:auto;padding:4px 0 8px}
+.day{flex:none;border:1.5px solid #c7d4de;background:#fff;color:#1b2a4e;border-radius:12px;padding:6px 10px;cursor:pointer;text-align:center;min-width:70px}
+.day b{display:block;font-family:Archivo,sans-serif;font-size:18px}
+.day small{display:block;color:#5a6880}
+.day[aria-pressed="true"]{background:#1b2a4e;border-color:#1b2a4e;color:#fff}
+.day[aria-pressed="true"] small{color:#c9d6e6}
+.count{display:inline-block;margin-top:3px;font-size:11.5px;font-weight:700;border-radius:999px;padding:1px 7px;background:#e6f3f1;color:#1f6977}
+.day[aria-pressed="true"] .count{background:#2e4372;color:#fff}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.stat{background:#fff;border:1px solid #e1e8ee;border-radius:14px;padding:14px}
+.stat b{display:block;font-family:Archivo,sans-serif;font-size:26px}
+.stat span{color:#5a6880;font-size:13.5px}
+.slots{display:flex;flex-direction:column;gap:8px}
+.slot{display:grid;grid-template-columns:140px 1fr;gap:12px;align-items:start;border:1px solid #e1e8ee;border-radius:12px;padding:12px}
+.slot .t{font-family:Archivo,sans-serif;font-weight:700}
+.free{color:#5a6880;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.who{display:flex;flex-direction:column;gap:4px}
+.who .n{font-weight:700;font-size:16px}
+.who a{color:#1f6977}
+.acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.pill{display:inline-block;border-radius:999px;padding:2px 10px;font-size:12.5px;font-weight:700;margin-left:6px;vertical-align:middle}
+.st-pending{background:#fff4d6;color:#8a5a00}
+.st-payment_submitted{background:#ffe3d9;color:#a33a1f}
+.st-confirmed{background:#dff3ea;color:#17694a}
+.st-collected{background:#e1e9f7;color:#2a4a8a}
+.st-cancelled,.st-expired{background:#eef1f4;color:#5a6880}
+.st-blocked{background:#2b2f36;color:#fff}
+.meta{color:#5a6880;font-size:13.5px}
+#login{max-width:380px;margin:12vh auto;background:#fff;border:1px solid #e1e8ee;border-radius:18px;padding:28px}
+#login input{width:100%;padding:12px 14px;border:1px solid #c7d4de;border-radius:12px;margin:10px 0 14px;font-size:16px}
+.err{color:#b23f28;font-weight:600;min-height:1em}
+.toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:#1b2a4e;color:#fff;padding:10px 16px;border-radius:12px;font-weight:600;display:none;z-index:10}
+.legend{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+@media (max-width:640px){.slot{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div id="login" hidden>
+<img src="/assets/logo.png" alt="Dr. Sarwan Diagnostic Labs" style="height:44px">
+<h1 style="margin-top:14px">Bookings admin</h1>
+<form id="loginForm">
+<label for="pw" style="display:block;margin-top:12px;font-weight:600">Admin password</label>
+<input id="pw" type="password" autocomplete="current-password" required>
+<p class="err" id="loginErr"></p>
+<button class="btn" style="width:100%">Sign in</button>
+</form>
+</div>
+
+<div id="app" hidden>
+<header><div class="wrap bar">
+<div style="display:flex;align-items:center;gap:12px"><img src="/assets/logo.png" alt="" style="height:36px"><h1>Home collection bookings</h1></div>
+<div style="display:flex;gap:8px;flex-wrap:wrap">
+<button class="btn ghost sm" id="refresh">Refresh</button>
+<button class="btn ghost sm" id="csv">Export CSV</button>
+<button class="btn ghost sm" id="testWa">Test WhatsApp alert</button>
+<button class="btn ghost sm" id="logout">Sign out</button>
+</div>
+</div></header>
+
+<main class="wrap" style="padding-bottom:40px">
+<div class="stats" style="margin-top:16px" id="stats"></div>
+
+<div class="card">
+<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+<h2 style="font-family:Archivo,sans-serif;font-size:18px;margin:0" id="dayTitle">Schedule</h2>
+<label class="meta"><input type="checkbox" id="showPast"> Show past 14 days</label>
+</div>
+<div class="days" id="days" role="group" aria-label="Select day"></div>
+<div class="slots" id="slots"></div>
+<div class="legend meta">
+<span class="pill st-payment_submitted">Paid – verify</span>
+<span class="pill st-pending">Awaiting payment</span>
+<span class="pill st-confirmed">Confirmed</span>
+<span class="pill st-collected">Collected</span>
+<span class="pill st-blocked">Blocked</span>
+</div>
+</div>
+
+<div class="card">
+<h2 style="font-family:Archivo,sans-serif;font-size:18px;margin:0 0 6px">Needs your attention</h2>
+<p class="meta" style="margin:0 0 10px">Payments submitted by customers. Check the UTR in your Paytm / bank app, then confirm.</p>
+<div id="attention" class="slots"></div>
+</div>
+</main>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(function(){
+const $=s=>document.querySelector(s);
+let KEY=sessionStorage.getItem('dsl_admin')||'';
+let data=null, sel=null;
+const STATUS_TXT={pending:'Awaiting payment',payment_submitted:'Paid – verify',confirmed:'Confirmed',collected:'Collected',cancelled:'Cancelled',expired:'Expired',blocked:'Blocked'};
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const ist=()=>new Date(Date.now()+330*60000).toISOString().slice(0,10);
+const addDays=(d,n)=>{const x=new Date(d+'T00:00:00Z');x.setUTCDate(x.getUTCDate()+n);return x.toISOString().slice(0,10)};
+const fmt=(d,o)=>new Date(d+'T00:00:00Z').toLocaleDateString('en-IN',{timeZone:'UTC',...o});
+function toast(m){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(t._t);t._t=setTimeout(()=>t.style.display='none',2600)}
+async function api(path,opts={}){
+  const r=await fetch(path,{...opts,headers:{'content-type':'application/json','x-admin-key':KEY,...(opts.headers||{})}});
+  if(r.status===401){logout();throw new Error('Wrong password')}
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(j.error||'Request failed');
+  return j;
+}
+function logout(){KEY='';sessionStorage.removeItem('dsl_admin');$('#app').hidden=true;$('#login').hidden=false}
+$('#logout').onclick=logout;
+$('#loginForm').onsubmit=async e=>{e.preventDefault();KEY=$('#pw').value;$('#loginErr').textContent='';
+  try{await load();sessionStorage.setItem('dsl_admin',KEY);$('#login').hidden=true;$('#app').hidden=false}catch(err){$('#loginErr').textContent=err.message}};
+
+async function load(){
+  const today=ist(), from=$('#showPast')&&$('#showPast').checked?addDays(today,-14):today;
+  data=await api(`/api/admin/bookings?from=${from}&to=${addDays(today,14)}&all=1`);
+  if(!sel||sel<data.from||sel>data.to) sel=today;
+  render();
+}
+function active(b){return !['cancelled','expired'].includes(b.status)}
+function render(){
+  const today=ist();
+  const bookings=data.bookings.filter(b=>b.status!=='blocked');
+  const up=bookings.filter(b=>b.date>=today&&active(b));
+  const toVerify=bookings.filter(b=>b.status==='payment_submitted');
+  const confirmedUp=up.filter(b=>['confirmed','collected'].includes(b.status));
+  $('#stats').innerHTML=[
+    [toVerify.length,'Payments to verify'],
+    [up.filter(b=>b.date===today).length,'Today'],
+    [up.filter(b=>b.date===addDays(today,1)).length,'Tomorrow'],
+    [up.length,'Upcoming (14 days)'],
+    ['Rs. '+confirmedUp.reduce((a,b)=>a+(b.amount||0),0).toLocaleString('en-IN'),'Confirmed revenue (upcoming)'],
+  ].map(([v,l])=>`<div class="stat"><b>${v}</b><span>${l}</span></div>`).join('');
+  // days
+  const days=[];for(let d=data.from;d<=data.to;d=addDays(d,1))days.push(d);
+  $('#days').innerHTML=days.map(d=>{const n=data.bookings.filter(b=>b.date===d&&active(b)&&b.status!=='blocked').length;
+    return `<button class="day" data-d="${d}" aria-pressed="${d===sel}"><small>${fmt(d,{weekday:'short'})}</small><b>${fmt(d,{day:'numeric'})}</b><small>${fmt(d,{month:'short'})}</small>${n?`<span class="count">${n} booked</span>`:''}</button>`}).join('');
+  document.querySelectorAll('.day').forEach(b=>b.onclick=()=>{sel=b.dataset.d;render()});
+  $('#dayTitle').textContent='Schedule · '+fmt(sel,{weekday:'long',day:'numeric',month:'long'});
+  // slots
+  $('#slots').innerHTML=data.slots.map(s=>{
+    const all=data.bookings.filter(b=>b.date===sel&&b.slot===s.time);
+    const cur=all.find(active);
+    const old=all.filter(b=>!active(b));
+    let body;
+    if(!cur) body=`<div class="free">Free <button class="btn warn sm" data-block="${s.time}">Block slot</button></div>`;
+    else if(cur.status==='blocked') body=`<div class="free"><span class="pill st-blocked" style="margin:0">Blocked</span><button class="btn ghost sm" data-unblock="${s.time}">Unblock</button></div>`;
+    else body=card(cur);
+    const hist=old.length?`<details class="meta" style="margin-top:6px"><summary>${old.length} cancelled/expired</summary>${old.map(b=>`<div>${esc(b.name)} · ${esc(b.phone)} · <span class="pill st-${b.status}">${STATUS_TXT[b.status]}</span>${b.utr?` · UTR ${esc(b.utr)} <button class="btn ghost sm" data-id="${b.id}" data-st="confirmed">Restore & confirm</button>`:''}</div>`).join('')}</details>`:'';
+    return `<div class="slot"><div class="t">${esc(s.label)}</div><div>${body}${hist}</div></div>`}).join('');
+  $('#attention').innerHTML=toVerify.length?toVerify.map(b=>`<div class="slot"><div class="t">${fmt(b.date,{day:'numeric',month:'short'})}<br><span class="meta">${esc(data.slots.find(s=>s.time===b.slot)?.label||b.slot)}</span></div><div>${card(b)}</div></div>`).join(''):'<p class="meta" style="margin:0">Nothing to verify right now.</p>';
+  document.querySelectorAll('[data-st]').forEach(b=>b.onclick=()=>setStatus(b.dataset.id,b.dataset.st));
+  document.querySelectorAll('[data-block]').forEach(b=>b.onclick=()=>block(b.dataset.block,true));
+  document.querySelectorAll('[data-unblock]').forEach(b=>b.onclick=()=>block(b.dataset.unblock,false));
+}
+function card(b){
+  const wa=`https://wa.me/91${b.phone}?text=`+encodeURIComponent(`Hi ${b.name}, your Dr. Sarwan Diagnostic Labs home test (Ref ${b.id}) is confirmed for ${fmt(b.date,{weekday:'short',day:'numeric',month:'short'})}, ${data.slots.find(s=>s.time===b.slot)?.label||b.slot}. Please fast for 10–12 hours before collection (water is fine).`);
+  const acts=[];
+  if(['pending','payment_submitted'].includes(b.status)) acts.push(`<button class="btn sm" data-id="${b.id}" data-st="confirmed">Payment received – Confirm</button>`);
+  if(b.status==='confirmed') acts.push(`<button class="btn sm" data-id="${b.id}" data-st="collected">Mark sample collected</button>`);
+  if(b.status!=='cancelled') acts.push(`<button class="btn warn sm" data-id="${b.id}" data-st="cancelled">Cancel & free slot</button>`);
+  return `<div class="who"><div><span class="n">${esc(b.name)}</span><span class="pill st-${b.status}">${STATUS_TXT[b.status]||b.status}</span></div>
+  <div><a href="tel:+91${esc(b.phone)}">+91 ${esc(b.phone)}</a> · <a href="${wa}" target="_blank" rel="noopener">WhatsApp confirmation</a></div>
+  <div class="meta">${esc(b.address)}, ${esc(b.pincode)}</div>
+  <div class="meta">Ref ${esc(b.id)} · Rs. ${b.amount}${b.utr?` · UTR <b>${esc(b.utr)}</b>`:''}${b.cycle?` · ${esc(b.cycle)}`:''}${b.notes?` · Note: ${esc(b.notes)}`:''}</div>
+  <div class="acts">${acts.join('')}</div></div>`;
+}
+async function setStatus(id,st){
+  if(st==='cancelled'&&!confirm('Cancel this booking and free the slot?'))return;
+  try{await api(`/api/admin/bookings/${id}/status`,{method:'POST',body:JSON.stringify({status:st})});toast('Updated');await load()}catch(e){toast(e.message)}
+}
+async function block(slot,on){
+  try{await api('/api/admin/block',{method:'POST',body:JSON.stringify({date:sel,slot,block:on})});toast(on?'Slot blocked':'Slot unblocked');await load()}catch(e){toast(e.message)}
+}
+$('#refresh').onclick=()=>load().then(()=>toast('Refreshed'));
+$('#showPast').onchange=load;
+$('#testWa').onclick=async()=>{try{await api('/api/admin/test-whatsapp',{method:'POST'});toast('Test alert sent')}catch(e){toast(e.message)}};
+$('#csv').onclick=async()=>{try{const r=await fetch('/api/admin/export.csv',{headers:{'x-admin-key':KEY}});if(!r.ok)throw new Error('Export failed');
+  const u=URL.createObjectURL(await r.blob());const a=document.createElement('a');a.href=u;a.download=`bookings_${ist()}.csv`;a.click();URL.revokeObjectURL(u)}catch(e){toast(e.message)}};
+setInterval(()=>{if(KEY&&!document.hidden)load().catch(()=>{})},60000);
+if(KEY){load().then(()=>{$('#app').hidden=false}).catch(()=>logout())}else{$('#login').hidden=false}
+})();
+</script>
+</body>
+</html>

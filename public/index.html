@@ -20,7 +20,38 @@ summary{cursor:pointer;list-style:none}
 summary::-webkit-details-marker{display:none}
 details[open] .faq-plus{transform:rotate(45deg)}
 </style>
-<style>html{scroll-behavior:smooth}*,*::before,*::after{box-sizing:border-box}img{max-width:100%}section{scroll-margin-top:84px}.bookbar p{white-space:nowrap}@media (max-width:760px){.navlink{display:none !important}.hide-sm{display:none}.bookbar > div{flex-wrap:nowrap !important;padding:10px 16px !important}}</style>
+<style>html{scroll-behavior:smooth}*,*::before,*::after{box-sizing:border-box}img{max-width:100%}section{scroll-margin-top:84px}.bookbar p{white-space:nowrap}@media (max-width:760px){.navlink{display:none !important}.hide-sm{display:none}.bookbar > div{flex-wrap:nowrap !important;padding:10px 16px !important}}
+#booker{scroll-margin-top:96px}.bookbar{transition:transform .25s}.bookbar.away{transform:translateY(110%)}.bk-kicker{margin:0 0 6px;font-weight:700;font-size:13px;letter-spacing:1px;text-transform:uppercase;color:#1f6977}
+.bk-h{margin:0 0 12px;font-family:Archivo,sans-serif;font-weight:800;font-size:20px;color:#1b2a4e}
+.bk-muted{color:#5a6880;font-size:15px}
+.bk-note{margin:14px 0 0;font-size:13.5px;color:#5a6880}
+.bk-err{margin:12px 0 0;color:#b23f28;font-weight:600;font-size:15px;min-height:0}
+.bk-err:empty{display:none}
+.bk-chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;scrollbar-width:thin}
+.bk-chip{flex:none;display:flex;flex-direction:column;align-items:center;gap:1px;min-width:62px;padding:8px 6px;border:1.5px solid #c7d4de;border-radius:14px;background:#fff;color:#1b2a4e;font:inherit;font-size:12.5px;cursor:pointer}
+.bk-chip strong{font-family:Archivo,sans-serif;font-size:20px;line-height:1.1}
+.bk-chip[aria-pressed="true"]{background:#1f6977;border-color:#1f6977;color:#fff}
+.bk-slots{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px}
+.bk-slot{min-height:46px;border:1.5px solid #1f6977;border-radius:12px;background:#fff;color:#1f6977;font:inherit;font-weight:700;font-size:15px;cursor:pointer}
+.bk-slot:hover:not(:disabled){background:#e6f3f1}
+.bk-slot:disabled{border-color:#e1e7ec;background:#f2f5f7;color:#a3afbd;text-decoration:line-through;cursor:not-allowed}
+.bk-picked{display:flex;flex-wrap:wrap;align-items:center;gap:8px;background:#f3f9fd;border-radius:12px;padding:10px 14px;margin:6px 0 16px;font-weight:600;font-size:15px}
+.bk-link{background:none;border:0;padding:4px;color:#1f6977;font:inherit;font-weight:700;text-decoration:underline;cursor:pointer}
+.bk-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr));gap:14px}
+.bk-wide{grid-column:1/-1}
+.bk-field{display:flex;flex-direction:column;gap:6px}
+.bk-field label{font-weight:600;font-size:14.5px}
+.bk-field input,.bk-field select,.bk-field textarea{font:inherit;font-size:16px;padding:12px 14px;border:1px solid #c7d4de;border-radius:12px;min-height:48px;background:#fff;color:#1b2a4e;width:100%}
+.bk-field textarea{resize:vertical}
+.bk-btn{display:block;text-align:center;line-height:1.25;width:100%;margin-top:18px;font-family:Archivo,sans-serif;font-weight:800;font-size:18px;color:#fff;background:#1f6977;border:0;border-radius:999px;padding:15px 22px;min-height:52px;cursor:pointer;text-decoration:none}
+.bk-btn:disabled{opacity:.6;cursor:wait}
+.bk-btn-alt{background:#d9533a;margin-top:0}
+.bk-pay{display:flex;flex-wrap:wrap;gap:20px;align-items:center}
+.bk-qr{flex:none;width:180px;height:180px;border:1px solid #dfe8ef;border-radius:16px;overflow:hidden;background:#fff;display:flex;align-items:center;justify-content:center}
+.bk-qr svg{width:100%;height:100%}
+.bk-timer{margin:10px 0 0;font-size:14px;color:#b23f28}
+@media (max-width:760px){.bk-qr{width:150px;height:150px}}
+</style>
 </head>
 <body>
 <div style="font-family: Figtree, sans-serif; color: #1b2a4e; background: #ffffff; font-size: 17px; line-height: 1.55">
@@ -250,15 +281,65 @@ details[open] .faq-plus{transform:rotate(45deg)}
 <p style="margin: 8px 0 28px; color: #d6e4ee">Fasting · Home sample collection · E-report</p>
 <a href="tel:8368143677" style="color: #ffffff; text-decoration: none; display: inline-flex; align-items: center; gap: 10px; font-family: Archivo, sans-serif; font-weight: 800; font-size: 26px"><svg aria-hidden="true" viewBox="0 0 24 24" width="28" height="28"><path fill="currentColor" d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8z"></path></svg>Call 8368143677</a>
 </div>
-<form id="book-form" style="flex: 1 1 min(100%, 420px); min-width: 0; background: #ffffff; color: #1b2a4e; border-radius: 24px; padding: 32px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px">
-<div style="display: flex; flex-direction: column; gap: 6px"><label for="bk-name" style="font-weight: 600; font-size: 15px">Full name</label><input id="bk-name" name="name" required type="text" autocomplete="name" style="font: inherit; padding: 12px 14px; border: 1px solid #c7d4de; border-radius: 12px; min-height: 48px; box-sizing: border-box"></div>
-<div style="display: flex; flex-direction: column; gap: 6px"><label for="bk-phone" style="font-weight: 600; font-size: 15px">Mobile number</label><input id="bk-phone" name="phone" required type="tel" autocomplete="tel" style="font: inherit; padding: 12px 14px; border: 1px solid #c7d4de; border-radius: 12px; min-height: 48px; box-sizing: border-box"></div>
-<div style="display: flex; flex-direction: column; gap: 6px"><label for="bk-pin" style="font-weight: 600; font-size: 15px">Pincode / area</label><input id="bk-pin" name="pin" required type="text" autocomplete="postal-code" style="font: inherit; padding: 12px 14px; border: 1px solid #c7d4de; border-radius: 12px; min-height: 48px; box-sizing: border-box"></div>
-<div style="display: flex; flex-direction: column; gap: 6px"><label for="bk-date" style="font-weight: 600; font-size: 15px">Preferred date</label><input id="bk-date" name="date" type="date" style="font: inherit; padding: 12px 14px; border: 1px solid #c7d4de; border-radius: 12px; min-height: 48px; box-sizing: border-box"></div>
-<div style="display: flex; flex-direction: column; gap: 6px; grid-column: 1 / -1"><label for="bk-cycle" style="font-weight: 600; font-size: 15px">Where are you in your cycle? (optional)</label><select id="bk-cycle" name="cycle" style="font: inherit; padding: 12px 14px; border: 1px solid #c7d4de; border-radius: 12px; min-height: 48px; box-sizing: border-box; background: #ffffff"><option>Day 2–5 of my period</option><option>Another day of my cycle</option><option>My cycles are irregular</option><option>I'm on hormonal contraception</option></select></div>
-<button type="submit" style="grid-column: 1 / -1; font-family: Archivo, sans-serif; font-weight: 800; font-size: 19px; color: #ffffff; background: #1f6977; border: 0; border-radius: 999px; padding: 16px 24px; min-height: 52px; cursor: pointer">Book Home Test · Rs. 1899</button>
-<p style="grid-column: 1 / -1; margin: 0; font-size: 13.5px; color: #5a6880">Submitting opens WhatsApp with your details. Our team will confirm your slot and fasting instructions.</p>
+<div id="booker" style="flex: 1 1 min(100%, 520px); min-width: 0; background: #ffffff; color: #1b2a4e; border-radius: 24px; padding: 28px">
+
+<div data-step="1">
+<p class="bk-kicker">Step 1 of 3 · Choose your collection slot</p>
+<h3 class="bk-h">Pick a date</h3>
+<div id="bk-dates" class="bk-chips" role="group" aria-label="Collection date"><span class="bk-muted">Loading dates…</span></div>
+<h3 class="bk-h" style="margin-top: 22px">Pick a 30-minute slot <span class="bk-muted" style="font-weight: 500; font-size: 14px">(6 AM – 11 AM, fasting)</span></h3>
+<div id="bk-slots" class="bk-slots" role="group" aria-label="Collection time slot"><span class="bk-muted">Choose a date first.</span></div>
+<p class="bk-note">One home collection per slot, so slots fill up fast. Booked slots are greyed out.</p>
+</div>
+
+<form data-step="2" hidden id="bk-form" novalidate>
+<p class="bk-kicker">Step 2 of 3 · Your details</p>
+<div class="bk-picked"><span id="bk-picked-text"></span> <button type="button" class="bk-link" data-go="1">Change</button></div>
+<div class="bk-grid">
+<div class="bk-field"><label for="bk-name">Patient's full name</label><input id="bk-name" name="name" autocomplete="name" required></div>
+<div class="bk-field"><label for="bk-phone">Mobile number (WhatsApp)</label><input id="bk-phone" name="phone" type="tel" inputmode="numeric" autocomplete="tel" required placeholder="10-digit mobile"></div>
+<div class="bk-field bk-wide"><label for="bk-address">Full address for sample collection</label><textarea id="bk-address" name="address" rows="2" autocomplete="street-address" required placeholder="House / flat, street, area, landmark"></textarea></div>
+<div class="bk-field"><label for="bk-pin">Pincode</label><input id="bk-pin" name="pincode" inputmode="numeric" maxlength="6" autocomplete="postal-code" required></div>
+<div class="bk-field"><label for="bk-cycle">Where are you in your cycle?</label><select id="bk-cycle" name="cycle"><option>Day 2–5 of my period</option><option>Another day of my cycle</option><option>My cycles are irregular</option><option>I'm on hormonal contraception</option><option>Not applicable</option></select></div>
+<div class="bk-field bk-wide"><label for="bk-notes">Anything we should know? (optional)</label><input id="bk-notes" name="notes" placeholder="e.g. gate code, preferred contact time"></div>
+<div aria-hidden="true" style="position: absolute; left: -9999px"><label>Website<input name="website" tabindex="-1" autocomplete="off"></label></div>
+</div>
+<p id="bk-err2" class="bk-err" role="alert"></p>
+<button type="submit" class="bk-btn" id="bk-continue">Continue to payment · Rs. <span class="bk-amt">1899</span></button>
+<p class="bk-note">Your slot is held for <span class="bk-hold">15</span> minutes while you pay.</p>
 </form>
+
+<div data-step="3" hidden>
+<p class="bk-kicker">Step 3 of 3 · Pay by UPI</p>
+<div class="bk-picked"><span id="bk-ref"></span></div>
+<div class="bk-pay">
+<div id="bk-qr" class="bk-qr" role="img" aria-label="Dr. Sarwan Diagnostic Labs Paytm UPI QR code"></div>
+<div style="flex: 1 1 220px; min-width: 0">
+<p style="margin: 0; font-family: Anton, sans-serif; font-size: 40px; line-height: 1">Rs. <span class="bk-amt">1899</span></p>
+<p id="bk-amount-note" hidden style="margin: 8px 0 0; background: #fff4d6; color: #6b4700; border-radius: 10px; padding: 8px 12px; font-weight: 700; font-size: 15px">Enter amount Rs. <span class="bk-amt">1899</span> in your UPI app</p>
+<p style="margin: 8px 0 12px; color: #3b4a68; font-size: 15px">Scan with any UPI app (Paytm, GPay, PhonePe), or tap the button on your phone.</p>
+<a id="bk-upi-link" class="bk-btn bk-btn-alt" href="#">Pay with UPI app</a>
+<p style="margin: 12px 0 0; font-size: 14px; color: #3b4a68">UPI ID: <strong id="bk-upi-id" style="word-break: break-all"></strong> <button type="button" class="bk-link" id="bk-copy">Copy</button></p>
+<p class="bk-timer">Slot held for <strong id="bk-countdown">15:00</strong></p>
+</div>
+</div>
+<form id="bk-paid-form" novalidate style="margin-top: 18px">
+<div class="bk-field"><label for="bk-utr">After paying, enter the 12-digit UPI transaction ID (UTR / reference no.)</label><input id="bk-utr" name="utr" inputmode="numeric" autocomplete="off" required placeholder="e.g. 412345678901"></div>
+<p id="bk-err3" class="bk-err" role="alert"></p>
+<button type="submit" class="bk-btn" id="bk-paid-btn">I've paid · Confirm my booking</button>
+</form>
+<p class="bk-note">Can't find the UTR? It's in your UPI app's payment details. Or call/WhatsApp <a href="tel:8368143677">8368143677</a> with your booking ref.</p>
+</div>
+
+<div data-step="4" hidden>
+<div style="width: 56px; height: 56px; border-radius: 50%; background: #e3f4ef; display: flex; align-items: center; justify-content: center; margin-bottom: 14px"><svg aria-hidden="true" viewBox="0 0 24 24" width="30" height="30"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="#1f6977" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+<h3 class="bk-h" style="font-size: 26px">Booking received!</h3>
+<p style="margin: 8px 0 0; font-size: 17px">Ref <strong id="bk-done-ref"></strong> · <span id="bk-done-slot"></span></p>
+<p style="margin: 14px 0 0; color: #3b4a68">We'll verify your payment and confirm on WhatsApp. Please fast for 10–12 hours overnight before your slot (water is fine).</p>
+<a id="bk-done-wa" class="bk-btn bk-btn-alt" style="margin-top: 18px" target="_blank" rel="noopener" href="https://wa.me/918368143677">Message us on WhatsApp</a>
+</div>
+
+</div>
 </div>
 </section>
 
@@ -291,16 +372,7 @@ details[open] .faq-plus{transform:rotate(45deg)}
 </div>
 
 </div>
-<script>
-document.getElementById('book-form').addEventListener('submit',function(e){
-  e.preventDefault();
-  var f=e.target, v=function(n){return (f.elements[n]&&f.elements[n].value||'').trim();};
-  var msg='Hi Dr. Sarwan Diagnostic Labs, I would like to book the Hormone & Fertility Panel (7 tests, Rs. 1899) home collection.%0A'+
-    'Name: '+encodeURIComponent(v('name'))+'%0AMobile: '+encodeURIComponent(v('phone'))+'%0APincode/Area: '+encodeURIComponent(v('pin'))+
-    '%0APreferred date: '+encodeURIComponent(v('date')||'Flexible')+'%0ACycle: '+encodeURIComponent(v('cycle'));
-  if(window.gtag){gtag('event','generate_lead',{form:'book_home_test'});}
-  window.open('https://wa.me/918368143677?text='+msg,'_blank');
-});
-</script>
+
+<script src="/booking.js" defer></script>
 </body>
 </html>
