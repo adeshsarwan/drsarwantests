@@ -17,7 +17,7 @@
   async function api(path, opts = {}) {
     const r = await fetch(path, { headers: { 'content-type': 'application/json' }, ...opts });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw Object.assign(new Error(j.error || 'Something went wrong. Please call 8368143677.'), { status: r.status });
+    if (!r.ok) throw Object.assign(new Error(j.error || 'Something went wrong. Please call 8368143677.'), { status: r.status, code: j.code });
     return j;
   }
 
@@ -29,7 +29,6 @@
       return;
     }
     root.querySelectorAll('.bk-amt').forEach((el) => (el.textContent = state.cfg.amount));
-    root.querySelectorAll('.bk-hold').forEach((el) => (el.textContent = state.cfg.holdMinutes));
     if (state.cfg.mapsKey) initPlaces(state.cfg.mapsKey);
     const box = $('#bk-dates');
     box.innerHTML = '';
@@ -60,6 +59,7 @@
         b.setAttribute('aria-label', `${s.label}${s.available ? '' : ' (booked)'}`);
         if (!s.available) b.title = 'Booked';
         b.addEventListener('click', () => {
+          if (state.reslot) return moveBooking(d, s);
           state.slot = s.time; state.slotLabel = s.label;
           $('#bk-picked-text').textContent = `${fmtDate(d, { weekday: 'long', day: 'numeric', month: 'long' })} · ${s.label}`;
           show(2);
@@ -119,14 +119,6 @@
         $('#bk-qr').innerHTML = '<p class="bk-muted" style="padding:12px">Use the UPI ID below to pay.</p>';
       }
     }
-    clearInterval(state.timer);
-    const end = Date.parse(b.expiresAt);
-    const tick = () => {
-      const s = Math.max(0, Math.round((end - Date.now()) / 1000));
-      $('#bk-countdown').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-      if (!s) { clearInterval(state.timer); $('#bk-countdown').textContent = 'expired, submit your UTR quickly'; }
-    };
-    tick(); state.timer = setInterval(tick, 1000);
     show(3);
   }
 
@@ -170,7 +162,15 @@
     try {
       const b = state.booking;
       const r = await api(`/api/bookings/${b.id}/paid`, { method: 'POST', body: JSON.stringify({ token: b.token, utr, screenshot: state.shot || undefined }) });
-      clearInterval(state.timer);
+      finishBooking(b, r, utr);
+    } catch (e) {
+      if (e.code === 'slot_taken') return startReslot(e.message);
+      err.textContent = e.message;
+    }
+    finally { btn.disabled = false; btn.textContent = btn.dataset.t; }
+  });
+
+  function finishBooking(b, r, utr) {
       $('#bk-done-ref').textContent = b.id;
       $('#bk-done-slot').textContent = `${r.dateLabel || b.dateLabel} · ${r.slotLabel || b.slotLabel}`;
       const f = state.form || {};
@@ -187,9 +187,29 @@
       $('#bk-done-wa').href = 'https://wa.me/918368143677?text=' + encodeURIComponent(msg);
       if (window.gtag) gtag('event', 'purchase', { transaction_id: b.id, value: b.amount, currency: 'INR' });
       show(4);
-    } catch (e) { err.textContent = e.message; }
-    finally { btn.disabled = false; btn.textContent = btn.dataset.t; }
-  });
+  }
+
+  // ---- slot taken after payment: let the patient pick a new slot without paying again ----
+  function startReslot(message) {
+    state.reslot = true;
+    $('#bk-reslot-text').textContent = message;
+    $('#bk-reslot').hidden = false;
+    $('#bk-step1-kicker').textContent = 'Choose a new collection slot';
+    show(1);
+    pickDate(state.date);
+  }
+  async function moveBooking(d, s) {
+    const b = state.booking;
+    try {
+      const r = await api(`/api/bookings/${b.id}/reslot`, { method: 'POST', body: JSON.stringify({ token: b.token, date: d, slot: s.time }) });
+      state.reslot = false; $('#bk-reslot').hidden = true;
+      b.date = r.date; b.dateLabel = r.dateLabel; b.slot = r.slot; b.slotLabel = r.slotLabel;
+      finishBooking(b, r, $('#bk-utr').value.replace(/\s/g, ''));
+    } catch (e) {
+      $('#bk-reslot-text').textContent = e.message;
+      pickDate(d);
+    }
+  }
 
   // ---- Save QR to Photos (iPhone share sheet → "Save Image"; elsewhere a normal download) ----
   $('#bk-save-qr').addEventListener('click', async () => {

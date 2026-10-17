@@ -11,13 +11,14 @@ Landing page + home-collection booking system for Dr. Sarwan Diagnostic Labs
 ## How booking works
 1. Customer picks a date (next 14 days) and a 30-minute slot between 6:00 and 11:00 AM.
    Only one booking per slot. Slots must start at least 3 hours from now.
-2. Customer enters name, mobile, address, pincode → the slot is **held for 15 minutes**.
-3. Customer pays Rs. 1899 to the Paytm QR / UPI ID and enters the UPI transaction ID (UTR).
+2. Customer enters name, mobile and address. The slot is **not** reserved yet.
+3. Customer pays Rs. 1899 to the Paytm QR / UPI ID and uploads the payment screenshot. That is when the slot is taken.
+   If someone else paid for the same slot first, the payment is kept and the customer picks another free slot.
 4. Booking becomes **"Paid – verify"**, and the customer sends the details to 8368143677 on WhatsApp with one tap.
 5. You check the UTR in your Paytm business app, then click **Confirm** in `/admin`
-   (and send the customer a pre-written WhatsApp confirmation with one tap).
+   A ready-made WhatsApp confirmation message pops up with **Copy message** and **Open WhatsApp**.
 
-If a hold expires without payment, the slot is released automatically.
+Unpaid bookings never block a slot and are marked expired after 2 hours.
 
 ## One-time Cloudflare setup
 1. **Create the database**: Cloudflare dashboard → Storage & Databases → D1 → Create →

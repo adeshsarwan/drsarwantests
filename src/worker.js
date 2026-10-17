@@ -6,10 +6,11 @@ const SLOT_END_MIN = 11 * 60;     // last slot ends at 11:00
 const SLOT_LEN_MIN = 30;
 const BOOK_DAYS_AHEAD = 14;       // how far ahead people can book
 const MIN_LEAD_MIN = 180;         // a slot must start at least 3 hours from now
-const HOLD_MIN = 15;              // minutes a slot is held while the customer pays
+const HOLD_MIN = 120;             // unpaid bookings are marked expired after this (they never hold a slot)
 const IST_OFFSET_MIN = 330;       // UTC+05:30
 
-const ACTIVE = ["pending", "payment_submitted", "confirmed", "collected", "blocked"];
+// Statuses that occupy a slot. An unpaid ("pending") booking does NOT hold the slot.
+const ACTIVE = ["payment_submitted", "confirmed", "collected", "blocked"];
 const ADMIN_SETTABLE = ["payment_submitted", "confirmed", "collected", "cancelled"];
 
 export const SLOTS = (() => {
@@ -92,8 +93,9 @@ const SCHEMA = [
     name TEXT NOT NULL, phone TEXT NOT NULL, address TEXT NOT NULL, pincode TEXT NOT NULL, city TEXT, state TEXT, cycle TEXT, notes TEXT,
     amount INTEGER NOT NULL, status TEXT NOT NULL, utr TEXT, source TEXT, created_at TEXT NOT NULL, expires_at TEXT,
     paid_at TEXT, updated_at TEXT NOT NULL)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS one_booking_per_slot ON bookings(date, slot)
-    WHERE status IN ('pending', 'payment_submitted', 'confirmed', 'collected', 'blocked')`,
+  `DROP INDEX IF EXISTS one_booking_per_slot`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS one_paid_booking_per_slot ON bookings(date, slot)
+    WHERE status IN ('payment_submitted', 'confirmed', 'collected', 'blocked')`,
   `CREATE INDEX IF NOT EXISTS bookings_by_date ON bookings(date, slot)`,
   `CREATE INDEX IF NOT EXISTS bookings_by_status ON bookings(status)`,
   `CREATE TABLE IF NOT EXISTS payment_proofs (booking_id TEXT PRIMARY KEY, mime TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL)`,
@@ -188,6 +190,10 @@ async function createBooking(env, req) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !isBookable(date, slot)) return bad("That slot is no longer available. Please pick another.", 409);
 
   await expireHolds(env);
+  const taken = await env.DB.prepare(
+    `SELECT 1 FROM bookings WHERE date=?1 AND slot=?2 AND status IN (${ACTIVE.map((_, i) => "?" + (i + 3)).join(",")}) LIMIT 1`
+  ).bind(date, slot, ...ACTIVE).first();
+  if (taken) return bad("Sorry, that slot has just been booked. Please pick another.", 409);
   const id = "DSL-" + randId(6), token = randId(24, "abcdefghijklmnopqrstuvwxyz0123456789");
   const now = isoNow(), expires = new Date(Date.now() + HOLD_MIN * 60000).toISOString();
   try {
@@ -235,18 +241,50 @@ async function submitPayment(env, req, id, ctx) {
     if (utr) await env.DB.prepare("UPDATE bookings SET utr=?1, updated_at=?2 WHERE id=?3").bind(utr, now, id).run();
     return json({ ok: true, status: row.status, id, dateLabel: prettyDate(row.date), slotLabel: slotLabel(row.slot) });
   }
+  // Save the payment proof first, so it is never lost even if the slot was taken meanwhile.
+  await saveProof();
+  if (utr) await env.DB.prepare("UPDATE bookings SET utr=?1, updated_at=?2 WHERE id=?3").bind(utr, now, id).run();
   try {
-    // Accept late payment as long as nobody else has taken the slot in the meantime.
     const r = await env.DB.prepare(
-      "UPDATE bookings SET status='payment_submitted', utr=?1, paid_at=?2, updated_at=?2 WHERE id=?3 AND status IN ('pending','expired')"
-    ).bind(utr || null, now, id).run();
+      "UPDATE bookings SET status='payment_submitted', paid_at=?1, updated_at=?1 WHERE id=?2 AND status IN ('pending','expired')"
+    ).bind(now, id).run();
     if (!r.meta.changes) return bad("Could not update this booking.", 409);
   } catch (e) {
-    if (/UNIQUE/i.test(String(e))) return bad("Your payment hold expired and the slot was taken. Please call 8368143677 and we'll rebook you.", 409);
+    if (/UNIQUE/i.test(String(e))) return slotTaken(row);
     throw e;
   }
-  await saveProof();
   return json({ ok: true, status: "payment_submitted", id, date: row.date, dateLabel: prettyDate(row.date), slotLabel: slotLabel(row.slot) });
+}
+
+function slotTaken(row) {
+  return json({
+    error: `Sorry, ${slotLabel(row.slot)} on ${prettyDate(row.date)} was just booked by someone else. Your payment is saved. Please pick another slot.`,
+    code: "slot_taken", id: row.id, date: row.date,
+  }, 409);
+}
+
+// Customer has paid but their slot was taken: move the booking to a new free slot.
+async function reslot(env, req, id) {
+  let b;
+  try { b = await req.json(); } catch { return bad("Invalid request"); }
+  const date = clean(b.date, 10), slot = clean(b.slot, 5);
+  const row = await env.DB.prepare("SELECT * FROM bookings WHERE id=?1").bind(id).first();
+  if (!row || !safeEqual(row.token, b.token)) return bad("Booking not found.", 404);
+  if (!["pending", "expired"].includes(row.status)) return bad("This booking is already confirmed.", 409);
+  const proof = await env.DB.prepare("SELECT 1 FROM payment_proofs WHERE booking_id=?1").bind(id).first();
+  if (!proof && !row.utr) return bad("Please upload your payment screenshot first.", 400);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !isBookable(date, slot)) return bad("That slot is not available. Please pick another.", 409);
+  const now = isoNow();
+  try {
+    const r = await env.DB.prepare(
+      "UPDATE bookings SET date=?1, slot=?2, status='payment_submitted', paid_at=?3, updated_at=?3 WHERE id=?4 AND status IN ('pending','expired')"
+    ).bind(date, slot, now, id).run();
+    if (!r.meta.changes) return bad("Could not update this booking.", 409);
+  } catch (e) {
+    if (/UNIQUE/i.test(String(e))) return slotTaken({ ...row, date, slot });
+    throw e;
+  }
+  return json({ ok: true, status: "payment_submitted", id, date, dateLabel: prettyDate(date), slot, slotLabel: slotLabel(slot) });
 }
 
 // ---- admin API ----
@@ -268,6 +306,48 @@ async function adminList(env, url) {
      ORDER BY date, slot, created_at`
   ).bind(from, to).all();
   return json({ from, to, slots: SLOTS.map((s) => ({ time: s, label: slotLabel(s) })), bookings: results });
+}
+
+// Phone / walk-in booking created by the admin. No lead-time limit; still one paid booking per slot.
+async function adminCreate(env, req) {
+  let b;
+  try { b = await req.json(); } catch { return bad("Invalid request"); }
+  const name = clean(b.name, 80), address = clean(b.address, 300), pincode = clean(b.pincode, 6);
+  const city = clean(b.city, 60), state = clean(b.state, 40), date = clean(b.date, 10), slot = clean(b.slot, 5);
+  const phone = normPhone(b.phone);
+  const status = ["confirmed", "payment_submitted", "pending"].includes(b.status) ? b.status : "confirmed";
+  if (name.length < 2) return bad("Enter the patient's name.");
+  if (!phone) return bad("Enter a valid 10-digit mobile number.");
+  if (address.length < 4) return bad("Enter the collection address.");
+  if (!/^\d{6}$/.test(pincode)) return bad("Enter a valid 6-digit pincode.");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !SLOTS.includes(slot)) return bad("Pick a date and slot.");
+  const id = "DSL-" + randId(6), token = randId(24, "abcdefghijklmnopqrstuvwxyz0123456789"), now = isoNow();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO bookings (id, token, date, slot, name, phone, address, pincode, city, state, cycle, notes, amount, status, source, created_at, paid_at, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 'admin', ?15, ?16, ?15)`
+    ).bind(id, token, date, slot, name, phone, address, pincode, city, state, clean(b.cycle, 60), clean(b.notes, 300),
+      amount(env), status, now, status === "pending" ? null : now).run();
+  } catch (e) {
+    if (/UNIQUE/i.test(String(e))) return bad("That slot already has a booking.", 409);
+    throw e;
+  }
+  return json({ ok: true, id }, 201);
+}
+
+// Move a booking to another slot (reschedule).
+async function adminMove(env, req, id) {
+  const { date, slot } = await req.json().catch(() => ({}));
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || "") || !SLOTS.includes(slot)) return bad("Pick a date and slot.");
+  try {
+    const r = await env.DB.prepare("UPDATE bookings SET date=?1, slot=?2, updated_at=?3 WHERE id=?4 AND status NOT IN ('blocked','cancelled')")
+      .bind(date, slot, isoNow(), id).run();
+    if (!r.meta.changes) return bad("Booking not found", 404);
+  } catch (e) {
+    if (/UNIQUE/i.test(String(e))) return bad("That slot already has a booking.", 409);
+    throw e;
+  }
+  return json({ ok: true });
 }
 
 async function adminScreenshot(env, id) {
@@ -346,6 +426,8 @@ export default {
         if (p === "/api/bookings" && req.method === "POST") return createBooking(env, req);
         let m = p.match(/^\/api\/bookings\/(DSL-[A-Z0-9]{6})\/paid$/);
         if (m && req.method === "POST") return submitPayment(env, req, m[1], ctx);
+        m = p.match(/^\/api\/bookings\/(DSL-[A-Z0-9]{6})\/reslot$/);
+        if (m && req.method === "POST") return reslot(env, req, m[1]);
 
         if (p.startsWith("/api/admin/")) {
           if (!String(env.ADMIN_PASSWORD || "").trim()) return bad("Admin password is not set up yet. In Cloudflare add ADMIN_PASSWORD as a Secret.", 503);
@@ -353,8 +435,11 @@ export default {
           if (p === "/api/admin/bookings" && req.method === "GET") return adminList(env, url);
           if (p === "/api/admin/export.csv" && req.method === "GET") return adminCsv(env, url);
           if (p === "/api/admin/block" && req.method === "POST") return adminBlock(env, req);
+          if (p === "/api/admin/bookings" && req.method === "POST") return adminCreate(env, req);
           m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/screenshot$/);
           if (m && req.method === "GET") return adminScreenshot(env, m[1]);
+          m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/move$/);
+          if (m && req.method === "POST") return adminMove(env, req, m[1]);
           m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/status$/);
           if (m && req.method === "POST") return adminSetStatus(env, req, m[1]);
         }

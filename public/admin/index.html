@@ -6,66 +6,8 @@
 <meta name="robots" content="noindex, nofollow">
 <title>Bookings Admin · Dr. Sarwan Diagnostic Labs</title>
 <link rel="icon" href="/assets/logo.png">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=Figtree:wght@400;500;600;700&display=swap">
-<style>
-*,*::before,*::after{box-sizing:border-box}
-body{margin:0;background:#f4f7fa;color:#1b2a4e;font-family:Figtree,system-ui,sans-serif;font-size:15px}
-header{background:#fff;border-bottom:1px solid #e1e8ee;position:sticky;top:0;z-index:5}
-.wrap{max-width:1180px;margin:0 auto;padding:0 16px}
-.bar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;padding:10px 0}
-h1{font-family:Archivo,sans-serif;font-size:20px;margin:0}
-button,select,input{font:inherit}
-.btn{border:0;border-radius:999px;background:#1f6977;color:#fff;font-weight:700;padding:10px 16px;min-height:42px;cursor:pointer}
-.btn.ghost{background:#fff;color:#1f6977;border:1.5px solid #1f6977}
-.btn.sm{padding:6px 12px;min-height:34px;font-size:13.5px}
-.btn.warn{background:#fff;color:#b23f28;border:1.5px solid #e2b3a8}
-.btn:disabled{opacity:.5;cursor:default}
-.card{background:#fff;border-radius:16px;border:1px solid #e1e8ee;padding:18px;margin-top:16px}
-.days{display:flex;gap:8px;overflow-x:auto;padding:4px 0 8px}
-.day{flex:none;border:1.5px solid #c7d4de;background:#fff;color:#1b2a4e;border-radius:12px;padding:6px 10px;cursor:pointer;text-align:center;min-width:70px}
-.day b{display:block;font-family:Archivo,sans-serif;font-size:18px}
-.day small{display:block;color:#5a6880}
-.day[aria-pressed="true"]{background:#1b2a4e;border-color:#1b2a4e;color:#fff}
-.day[aria-pressed="true"] small{color:#c9d6e6}
-.count{display:inline-block;margin-top:3px;font-size:11.5px;font-weight:700;border-radius:999px;padding:1px 7px;background:#e6f3f1;color:#1f6977}
-.day[aria-pressed="true"] .count{background:#2e4372;color:#fff}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
-.stat{background:#fff;border:1px solid #e1e8ee;border-radius:14px;padding:14px}
-.stat b{display:block;font-family:Archivo,sans-serif;font-size:26px}
-.stat span{color:#5a6880;font-size:13.5px}
-.slots{display:flex;flex-direction:column;gap:8px}
-.slot{display:grid;grid-template-columns:140px 1fr;gap:12px;align-items:start;border:1px solid #e1e8ee;border-radius:12px;padding:12px}
-.slot .t{font-family:Archivo,sans-serif;font-weight:700}
-.free{color:#5a6880;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.who{display:flex;flex-direction:column;gap:4px}
-.who .n{font-weight:700;font-size:16px}
-.who a{color:#1f6977}
-.acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
-.pill{display:inline-block;border-radius:999px;padding:2px 10px;font-size:12.5px;font-weight:700;margin-left:6px;vertical-align:middle}
-.st-pending{background:#fff4d6;color:#8a5a00}
-.st-payment_submitted{background:#ffe3d9;color:#a33a1f}
-.st-confirmed{background:#dff3ea;color:#17694a}
-.st-collected{background:#e1e9f7;color:#2a4a8a}
-.st-cancelled,.st-expired{background:#eef1f4;color:#5a6880}
-.st-blocked{background:#2b2f36;color:#fff}
-.meta{color:#5a6880;font-size:13.5px}
-#login{max-width:380px;margin:12vh auto;background:#fff;border:1px solid #e1e8ee;border-radius:18px;padding:28px}
-#login input{width:100%;padding:12px 14px;border:1px solid #c7d4de;border-radius:12px;margin:10px 0 14px;font-size:16px}
-.err{color:#b23f28;font-weight:600;min-height:1em}
-.toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:#1b2a4e;color:#fff;padding:10px 16px;border-radius:12px;font-weight:600;display:none;z-index:10}
-.legend{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
-.inp{font:inherit;font-size:14px;padding:8px 10px;border:1px solid #c7d4de;border-radius:10px;background:#fff;color:#1b2a4e;min-height:38px}
-.tbl-wrap{overflow-x:auto;margin-top:14px;border:1px solid #e1e8ee;border-radius:12px}
-.tbl{width:100%;border-collapse:collapse;font-size:14px;min-width:980px}
-.tbl th{text-align:left;background:#f4f7fa;color:#3b4a68;font-weight:700;font-size:12.5px;text-transform:uppercase;letter-spacing:.4px;padding:10px 12px;border-bottom:1px solid #e1e8ee;white-space:nowrap}
-.tbl td{padding:10px 12px;border-bottom:1px solid #eef2f5;vertical-align:top}
-.tbl tr:last-child td{border-bottom:0}
-.tbl .num{text-align:right;white-space:nowrap}
-.tbl td.addr{max-width:280px}
-.tbl .st{font:inherit;font-size:13px;font-weight:700;border-radius:999px;padding:4px 8px;border:1px solid transparent;cursor:pointer}
-.tbl small{display:block;color:#5a6880;font-size:12px}.tbl a{color:#1f6977}
-@media (max-width:640px){.slot{grid-template-columns:1fr}}
-</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800;900&family=Figtree:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/admin/admin.css">
 </head>
 <body>
 
@@ -81,21 +23,35 @@ button,select,input{font:inherit}
 </div>
 
 <div id="app" hidden>
-<header><div class="wrap bar">
-<div style="display:flex;align-items:center;gap:12px"><img src="/assets/logo.png" alt="" style="height:36px"><h1>Home collection bookings</h1></div>
-<div style="display:flex;gap:8px;flex-wrap:wrap">
+<header class="top">
+<div class="top-l">
+<img src="/assets/logo.png" alt="Dr. Sarwan Diagnostic Labs" class="top-logo">
+<nav class="tabs" aria-label="Admin sections">
+<button type="button" class="tab" data-tab="bookings" aria-current="page">Bookings</button>
+<button type="button" class="tab" data-tab="calendar">Calendar</button>
+</nav>
+</div>
+<div class="top-r">
+<button class="btn sm" data-act="add">+ Add booking</button>
 <button class="btn ghost sm" id="refresh">Refresh</button>
-<button class="btn ghost sm" id="csv">Export CSV</button>
+<button class="btn ghost sm hide-sm" id="csv">Export CSV</button>
 <button class="btn ghost sm" id="logout">Sign out</button>
 </div>
-</div></header>
+</header>
 
-<main class="wrap" style="padding-bottom:40px">
+<!-- ================= BOOKINGS TAB ================= -->
+<main id="view-bookings" class="wrap" style="padding-bottom:40px">
 <div class="stats" style="margin-top:16px" id="stats"></div>
 
 <div class="card">
+<h2 class="h2" style="margin:0 0 6px">Needs your attention</h2>
+<p class="meta" style="margin:0 0 10px">Payments submitted by customers. Open the screenshot, check the payment in your Paytm for Business app, then confirm.</p>
+<div id="attention" class="list"></div>
+</div>
+
+<div class="card">
 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
-<h2 style="font-family:Archivo,sans-serif;font-size:18px;margin:0">All bookings</h2>
+<h2 class="h2" style="margin:0">All bookings</h2>
 <div style="display:flex;gap:8px;flex-wrap:wrap">
 <label class="meta" for="fStatus" style="align-self:center">Status</label>
 <select id="fStatus" class="inp"><option value="active">All active</option><option value="payment_submitted">Paid – verify</option><option value="pending">Awaiting payment</option><option value="confirmed">Confirmed</option><option value="collected">Collected</option><option value="cancelled">Cancelled</option><option value="expired">Expired (unpaid)</option><option value="all">Everything</option></select>
@@ -109,178 +65,104 @@ button,select,input{font:inherit}
 </table></div>
 <p class="meta" id="tblCount" style="margin:10px 0 0"></p>
 </div>
-
-<div class="card">
-<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-<h2 style="font-family:Archivo,sans-serif;font-size:18px;margin:0" id="dayTitle">Schedule</h2>
-<label class="meta"><input type="checkbox" id="showPast"> Show past 14 days</label>
-</div>
-<div class="days" id="days" role="group" aria-label="Select day"></div>
-<div class="slots" id="slots"></div>
-<div class="legend meta">
-<span class="pill st-payment_submitted">Paid – verify</span>
-<span class="pill st-pending">Awaiting payment</span>
-<span class="pill st-confirmed">Confirmed</span>
-<span class="pill st-collected">Collected</span>
-<span class="pill st-blocked">Blocked</span>
-</div>
-</div>
-
-<div class="card">
-<h2 style="font-family:Archivo,sans-serif;font-size:18px;margin:0 0 6px">Needs your attention</h2>
-<p class="meta" style="margin:0 0 10px">Payments submitted by customers. Open the screenshot, check the payment in your Paytm for Business app, then confirm.</p>
-<div id="attention" class="slots"></div>
-</div>
 </main>
+
+<!-- ================= CALENDAR TAB ================= -->
+<section id="view-calendar" hidden>
+<div class="cal-bar">
+<div class="cal-nav">
+<button type="button" class="ibtn" data-act="nav" data-dir="-1" aria-label="Previous">‹</button>
+<button type="button" class="ibtn wide" data-act="today">Today</button>
+<button type="button" class="ibtn" data-act="nav" data-dir="1" aria-label="Next">›</button>
+<h1 id="calTitle" class="cal-title"></h1>
 </div>
+<div class="cal-tools">
+<div class="legend hide-sm">
+<span><i style="background:#e2603f"></i>Paid – verify</span>
+<span><i style="background:#e9a23b"></i>Awaiting payment</span>
+<span><i style="background:#1f8a6a"></i>Confirmed</span>
+<span><i style="background:#4c6fd8"></i>Collected</span>
+</div>
+<div class="seg" role="group" aria-label="Calendar view">
+<button type="button" data-act="view" data-view="day">Day</button>
+<button type="button" data-act="view" data-view="week" class="hide-sm">Week</button>
+<button type="button" data-act="view" data-view="month">Month</button>
+</div>
+</div>
+</div>
+
+<div class="cal-body">
+<aside class="rail">
+<section class="panel">
+<div class="mm-head"><b id="mmTitle"></b><span><button type="button" class="ibtn xs" data-act="mm" data-dir="-1" aria-label="Previous month">‹</button><button type="button" class="ibtn xs" data-act="mm" data-dir="1" aria-label="Next month">›</button></span></div>
+<div class="mm-grid mm-dow"><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span></div>
+<div class="mm-grid" id="mmGrid"></div>
+</section>
+<section class="panel">
+<b class="panel-t" id="railStatsTitle">This week</b>
+<div class="rail-stats" id="railStats"></div>
+</section>
+<section class="panel">
+<b class="panel-t">Show</b>
+<div id="filters"></div>
+</section>
+</aside>
+
+<div class="cal-main" id="calMain"></div>
+
+<aside class="side" id="side"></aside>
+</div>
+</section>
+</div>
+
 <div class="toast" id="toast" role="status"></div>
-<dialog id="shotDlg" style="border:0;border-radius:16px;padding:0;max-width:min(92vw,520px);width:100%;box-shadow:0 20px 50px rgba(0,0,0,.3)">
-<div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #e1e8ee"><b id="shotTitle" style="font-family:Archivo,sans-serif">Payment screenshot</b><button class="btn ghost sm" id="shotClose">Close</button></div>
+
+<!-- message (confirmation / run sheet) -->
+<dialog id="msgDlg" class="dlg" aria-labelledby="msgTitle">
+<div class="dlg-h"><b id="msgTitle">Booking confirmed ✓</b><div class="meta" id="msgSub"></div></div>
+<div class="dlg-b"><label for="msgText" class="meta" style="display:block;margin-bottom:6px">Message (you can edit before copying)</label>
+<textarea id="msgText" rows="16" class="ta"></textarea></div>
+<div class="dlg-f">
+<button class="btn" id="msgCopy" style="flex:1">Copy message</button>
+<a class="btn wa" id="msgWa" target="_blank" rel="noopener" style="flex:1">Open WhatsApp</a>
+<button class="btn ghost" data-close="msgDlg">Done</button>
+</div>
+</dialog>
+
+<!-- payment screenshot -->
+<dialog id="shotDlg" class="dlg" style="max-width:min(92vw,520px)">
+<div class="dlg-h row"><b id="shotTitle">Payment screenshot</b><button class="btn ghost sm" data-close="shotDlg">Close</button></div>
 <div style="max-height:80vh;overflow:auto;background:#f4f7fa;text-align:center"><img id="shotImg" alt="Payment screenshot" style="max-width:100%;display:block;margin:0 auto"></div>
 </dialog>
 
-<script>
-(function(){
-const $=s=>document.querySelector(s);
-let KEY=sessionStorage.getItem('dsl_admin')||'';
-let data=null, sel=null;
-const STATUS_TXT={pending:'Awaiting payment',payment_submitted:'Paid – verify',confirmed:'Confirmed',collected:'Collected',cancelled:'Cancelled',expired:'Expired',blocked:'Blocked'};
-const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const ist=()=>new Date(Date.now()+330*60000).toISOString().slice(0,10);
-const addDays=(d,n)=>{const x=new Date(d+'T00:00:00Z');x.setUTCDate(x.getUTCDate()+n);return x.toISOString().slice(0,10)};
-const fmt=(d,o)=>new Date(d+'T00:00:00Z').toLocaleDateString('en-IN',{timeZone:'UTC',...o});
-function toast(m){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(t._t);t._t=setTimeout(()=>t.style.display='none',2600)}
-async function api(path,opts={}){
-  const r=await fetch(path,{...opts,headers:{'content-type':'application/json','x-admin-key':KEY,...(opts.headers||{})}});
-  if(r.status===401||r.status===503){const j=await r.json().catch(()=>({}));logout();throw new Error(j.error||'Wrong password')}
-  const j=await r.json().catch(()=>({}));
-  if(!r.ok) throw new Error(j.error||'Request failed');
-  return j;
-}
-function logout(){KEY='';sessionStorage.removeItem('dsl_admin');$('#app').hidden=true;$('#login').hidden=false}
-$('#logout').onclick=logout;
-$('#loginForm').onsubmit=async e=>{e.preventDefault();KEY=$('#pw').value.trim();$('#loginErr').textContent='';
-  try{await load();sessionStorage.setItem('dsl_admin',KEY);$('#login').hidden=true;$('#app').hidden=false}catch(err){$('#loginErr').textContent=err.message}};
+<!-- booking details (day / month / phone) -->
+<dialog id="detailDlg" class="dlg" style="max-width:min(94vw,420px)">
+<div id="detailBody"></div>
+<div class="dlg-f" style="padding-top:0"><button class="btn ghost" data-close="detailDlg" style="flex:1">Close</button></div>
+</dialog>
 
-async function load(){
-  const today=ist();
-  data=await api(`/api/admin/bookings?from=${addDays(today,-90)}&to=${addDays(today,14)}&all=1`);
-  if(!sel||sel<addDays(today,-14)||sel>data.to) sel=today;
-  render();
-}
-function active(b){return !['cancelled','expired'].includes(b.status)}
-function render(){
-  const today=ist();
-  const bookings=data.bookings.filter(b=>b.status!=='blocked');
-  const up=bookings.filter(b=>b.date>=today&&active(b));
-  const toVerify=bookings.filter(b=>b.status==='payment_submitted');
-  const confirmedUp=up.filter(b=>['confirmed','collected'].includes(b.status));
-  $('#stats').innerHTML=[
-    [toVerify.length,'Payments to verify'],
-    [up.filter(b=>b.date===today).length,'Today'],
-    [up.filter(b=>b.date===addDays(today,1)).length,'Tomorrow'],
-    [up.length,'Upcoming (14 days)'],
-    ['Rs. '+confirmedUp.reduce((a,b)=>a+(b.amount||0),0).toLocaleString('en-IN'),'Confirmed revenue (upcoming)'],
-  ].map(([v,l])=>`<div class="stat"><b>${v}</b><span>${l}</span></div>`).join('');
-  // days
-  const dFrom=$('#showPast').checked?addDays(today,-14):today;
-  const days=[];for(let d=dFrom;d<=data.to;d=addDays(d,1))days.push(d);
-  $('#days').innerHTML=days.map(d=>{const n=data.bookings.filter(b=>b.date===d&&active(b)&&b.status!=='blocked').length;
-    return `<button class="day" data-d="${d}" aria-pressed="${d===sel}"><small>${fmt(d,{weekday:'short'})}</small><b>${fmt(d,{day:'numeric'})}</b><small>${fmt(d,{month:'short'})}</small>${n?`<span class="count">${n} booked</span>`:''}</button>`}).join('');
-  document.querySelectorAll('.day').forEach(b=>b.onclick=()=>{sel=b.dataset.d;render()});
-  $('#dayTitle').textContent='Schedule · '+fmt(sel,{weekday:'long',day:'numeric',month:'long'});
-  // slots
-  $('#slots').innerHTML=data.slots.map(s=>{
-    const all=data.bookings.filter(b=>b.date===sel&&b.slot===s.time);
-    const cur=all.find(active);
-    const old=all.filter(b=>!active(b));
-    let body;
-    if(!cur) body=`<div class="free">Free <button class="btn warn sm" data-block="${s.time}">Block slot</button></div>`;
-    else if(cur.status==='blocked') body=`<div class="free"><span class="pill st-blocked" style="margin:0">Blocked</span><button class="btn ghost sm" data-unblock="${s.time}">Unblock</button></div>`;
-    else body=card(cur);
-    const hist=old.length?`<details class="meta" style="margin-top:6px"><summary>${old.length} cancelled/expired</summary>${old.map(b=>`<div>${esc(b.name)} · ${esc(b.phone)} · <span class="pill st-${b.status}">${STATUS_TXT[b.status]}</span>${b.utr?` · UTR ${esc(b.utr)} <button class="btn ghost sm" data-id="${b.id}" data-st="confirmed">Restore & confirm</button>`:''}</div>`).join('')}</details>`:'';
-    return `<div class="slot"><div class="t">${esc(s.label)}</div><div>${body}${hist}</div></div>`}).join('');
-  $('#attention').innerHTML=toVerify.length?toVerify.map(b=>`<div class="slot"><div class="t">${fmt(b.date,{day:'numeric',month:'short'})}<br><span class="meta">${esc(data.slots.find(s=>s.time===b.slot)?.label||b.slot)}</span></div><div>${card(b)}</div></div>`).join(''):'<p class="meta" style="margin:0">Nothing to verify right now.</p>';
-  renderTable();
-  document.querySelectorAll('[data-st]').forEach(b=>b.onclick=()=>setStatus(b.dataset.id,b.dataset.st));
-  bindShots();
-  document.querySelectorAll('[data-block]').forEach(b=>b.onclick=()=>block(b.dataset.block,true));
-  document.querySelectorAll('[data-unblock]').forEach(b=>b.onclick=()=>block(b.dataset.unblock,false));
-}
+<!-- add booking / reschedule -->
+<dialog id="formDlg" class="dlg" style="max-width:min(94vw,560px)">
+<form id="bkForm" novalidate>
+<div class="dlg-h"><b id="formTitle">Add booking</b><div class="meta" id="formSub">For phone or walk-in bookings</div></div>
+<div class="dlg-b fgrid">
+<div class="fld wide add-only"><label for="fName">Patient's full name</label><input id="fName" name="name" class="inp" autocomplete="off"></div>
+<div class="fld add-only"><label for="fPhone">Mobile</label><input id="fPhone" name="phone" class="inp" inputmode="numeric" autocomplete="off"></div>
+<div class="fld add-only"><label for="fStatusNew">Payment</label><select id="fStatusNew" name="status" class="inp"><option value="confirmed">Paid – confirmed</option><option value="payment_submitted">Paid – to verify</option><option value="pending">Not paid yet</option></select></div>
+<div class="fld wide add-only"><label for="fAddr">Address</label><input id="fAddr" name="address" class="inp" placeholder="House / flat, street, area" autocomplete="off"></div>
+<div class="fld add-only"><label for="fPin">Pincode</label><input id="fPin" name="pincode" class="inp" inputmode="numeric" maxlength="6" autocomplete="off"></div>
+<div class="fld add-only"><label for="fCity">City</label><input id="fCity" name="city" class="inp" autocomplete="off"></div>
+<div class="fld add-only"><label for="fState">State</label><input id="fState" name="state" class="inp" autocomplete="off"></div>
+<div class="fld add-only"><label for="fCycle">Cycle</label><select id="fCycle" name="cycle" class="inp"><option>Day 2–5 of my period</option><option>Another day of my cycle</option><option>My cycles are irregular</option><option>I'm on hormonal contraception</option><option>Not applicable</option></select></div>
+<div class="fld"><label for="fDate">Date</label><input id="fDate" name="date" type="date" class="inp"></div>
+<div class="fld"><label for="fSlot">Slot</label><select id="fSlot" name="slot" class="inp"></select></div>
+<div class="fld wide add-only"><label for="fNotes">Notes (optional)</label><input id="fNotes" name="notes" class="inp" autocomplete="off"></div>
+</div>
+<p class="err" id="formErr" style="padding:0 18px;margin:0"></p>
+<div class="dlg-f"><button class="btn" id="formSave" style="flex:1">Save booking</button><button type="button" class="btn ghost" data-close="formDlg">Cancel</button></div>
+</form>
+</dialog>
 
-const ST_COLORS={pending:['#fff4d6','#8a5a00'],payment_submitted:['#ffe3d9','#a33a1f'],confirmed:['#dff3ea','#17694a'],collected:['#e1e9f7','#2a4a8a'],cancelled:['#eef1f4','#5a6880'],expired:['#eef1f4','#5a6880']};
-function renderTable(){
-  if(!data) return;
-  const today=ist(), st=$('#fStatus').value, when=$('#fWhen').value, q=$('#fSearch').value.trim().toLowerCase();
-  let rows=data.bookings.filter(b=>b.status!=='blocked');
-  if(st==='active') rows=rows.filter(active); else if(st!=='all') rows=rows.filter(b=>b.status===st);
-  if(when==='upcoming') rows=rows.filter(b=>b.date>=today); else if(when==='past') rows=rows.filter(b=>b.date<today);
-  if(q) rows=rows.filter(b=>[b.name,b.phone,b.address,b.city,b.state,b.pincode,b.id,b.utr].join(' ').toLowerCase().includes(q));
-  rows.sort((a,b)=>when==='past'?(b.date+b.slot).localeCompare(a.date+a.slot):(a.date+a.slot).localeCompare(b.date+b.slot));
-  const label=t=>(data.slots.find(s=>s.time===t)||{}).label||t;
-  $('#tbody').innerHTML=rows.length?rows.map(b=>{
-    const [bg,fg]=ST_COLORS[b.status]||['#eef1f4','#5a6880'];
-    const opts=['pending','payment_submitted','confirmed','collected','cancelled','expired'].filter(x=>x===b.status||['confirmed','collected','cancelled'].includes(x));
-    return `<tr>
-<td style="white-space:nowrap"><b>${fmt(b.date,{weekday:'short',day:'numeric',month:'short'})}</b><small>${esc(label(b.slot))}</small><small>${esc(b.id)}</small></td>
-<td><b>${esc(b.name)}</b>${b.cycle?`<small>${esc(b.cycle)}</small>`:''}</td>
-<td style="white-space:nowrap"><a href="tel:+91${esc(b.phone)}">${esc(b.phone)}</a><small><a href="https://wa.me/91${esc(b.phone)}" target="_blank" rel="noopener">WhatsApp</a></small></td>
-<td class="addr">${esc(b.address)}<small>PIN ${esc(b.pincode)} · <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([b.address,b.city,b.state,b.pincode].filter(Boolean).join(', '))}" target="_blank" rel="noopener">Map</a></small>${b.notes?`<small>Note: ${esc(b.notes)}</small>`:''}</td>
-<td>${esc(b.city||'–')}</td>
-<td>${esc(b.state||'–')}</td>
-<td class="num"><b>Rs. ${Number(b.amount||0).toLocaleString('en-IN')}</b>${b.utr?`<small>UTR ${esc(b.utr)}</small>`:''}${b.has_proof?`<button class="btn ghost sm" style="margin-top:6px" data-shot="${b.id}">View screenshot</button>`:''}</td>
-<td><select class="st" data-sel="${b.id}" aria-label="Status for ${esc(b.name)}" style="background:${bg};color:${fg}">${opts.map(o=>`<option value="${o}" ${o===b.status?'selected':''} ${o===b.status?'':''}>${STATUS_TXT[o]}</option>`).join('')}</select></td>
-</tr>`}).join(''):'<tr><td colspan="8" class="meta" style="padding:18px">No bookings match.</td></tr>';
-  $('#tblCount').textContent=`${rows.length} booking${rows.length===1?'':'s'} · Rs. ${rows.filter(b=>['payment_submitted','confirmed','collected'].includes(b.status)).reduce((a,b)=>a+(b.amount||0),0).toLocaleString('en-IN')} paid / submitted`;
-  bindShots();
-  document.querySelectorAll('[data-sel]').forEach(sel=>sel.onchange=async()=>{
-    const prev=data.bookings.find(b=>b.id===sel.dataset.sel).status;
-    if(['pending','payment_submitted','expired'].includes(sel.value)&&sel.value!==prev){sel.value=prev;return}
-    if(sel.value==='cancelled'&&!confirm('Cancel this booking and free the slot?')){sel.value=prev;return}
-    try{await api(`/api/admin/bookings/${sel.dataset.sel}/status`,{method:'POST',body:JSON.stringify({status:sel.value})});toast('Status updated');await load()}catch(e){toast(e.message);sel.value=prev}
-  });
-}
-
-async function viewShot(id){
-  try{
-    const r=await fetch(`/api/admin/bookings/${id}/screenshot`,{headers:{'x-admin-key':KEY}});
-    if(!r.ok) throw new Error('Screenshot not found');
-    const u=URL.createObjectURL(await r.blob());
-    const im=$('#shotImg'); if(im.dataset.u) URL.revokeObjectURL(im.dataset.u); im.src=u; im.dataset.u=u;
-    const b=data.bookings.find(x=>x.id===id); $('#shotTitle').textContent=`Payment screenshot · ${b?b.name:''} · ${id}`;
-    $('#shotDlg').showModal();
-  }catch(e){toast(e.message)}
-}
-function bindShots(){document.querySelectorAll('[data-shot]').forEach(b=>b.onclick=()=>viewShot(b.dataset.shot))}
-function card(b){
-  const wa=`https://wa.me/91${b.phone}?text=`+encodeURIComponent(`Hi ${b.name}, your Dr. Sarwan Diagnostic Labs home test (Ref ${b.id}) is confirmed for ${fmt(b.date,{weekday:'short',day:'numeric',month:'short'})}, ${data.slots.find(s=>s.time===b.slot)?.label||b.slot}. Please fast for 10–12 hours before collection (water is fine).`);
-  const acts=[];
-  if(['pending','payment_submitted'].includes(b.status)) acts.push(`<button class="btn sm" data-id="${b.id}" data-st="confirmed">Payment received – Confirm</button>`);
-  if(b.status==='confirmed') acts.push(`<button class="btn sm" data-id="${b.id}" data-st="collected">Mark sample collected</button>`);
-  if(b.status!=='cancelled') acts.push(`<button class="btn warn sm" data-id="${b.id}" data-st="cancelled">Cancel & free slot</button>`);
-  return `<div class="who"><div><span class="n">${esc(b.name)}</span><span class="pill st-${b.status}">${STATUS_TXT[b.status]||b.status}</span></div>
-  <div><a href="tel:+91${esc(b.phone)}">+91 ${esc(b.phone)}</a> · <a href="${wa}" target="_blank" rel="noopener">WhatsApp confirmation</a></div>
-  <div class="meta">${esc(b.address)}${b.city?`, ${esc(b.city)}`:''}${b.state?`, ${esc(b.state)}`:''} – ${esc(b.pincode)} · <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([b.address,b.city,b.state,b.pincode].filter(Boolean).join(', '))}" target="_blank" rel="noopener">Map</a></div>
-  <div class="meta">Ref ${esc(b.id)} · Rs. ${b.amount}${b.utr?` · UTR <b>${esc(b.utr)}</b>`:''}${b.has_proof?` · <button class="btn ghost sm" data-shot="${b.id}">View screenshot</button>`:''}${b.cycle?` · ${esc(b.cycle)}`:''}${b.notes?` · Note: ${esc(b.notes)}`:''}</div>
-  <div class="acts">${acts.join('')}</div></div>`;
-}
-async function setStatus(id,st){
-  if(st==='cancelled'&&!confirm('Cancel this booking and free the slot?'))return;
-  try{await api(`/api/admin/bookings/${id}/status`,{method:'POST',body:JSON.stringify({status:st})});toast('Updated');await load()}catch(e){toast(e.message)}
-}
-async function block(slot,on){
-  try{await api('/api/admin/block',{method:'POST',body:JSON.stringify({date:sel,slot,block:on})});toast(on?'Slot blocked':'Slot unblocked');await load()}catch(e){toast(e.message)}
-}
-$('#shotClose').onclick=()=>$('#shotDlg').close();
-$('#shotDlg').addEventListener('click',e=>{if(e.target.id==='shotDlg')$('#shotDlg').close()});
-$('#refresh').onclick=()=>load().then(()=>toast('Refreshed'));
-$('#showPast').onchange=render;
-['fStatus','fWhen'].forEach(id=>$('#'+id).onchange=renderTable);$('#fSearch').oninput=renderTable;
-$('#csv').onclick=async()=>{try{const r=await fetch('/api/admin/export.csv',{headers:{'x-admin-key':KEY}});if(!r.ok)throw new Error('Export failed');
-  const u=URL.createObjectURL(await r.blob());const a=document.createElement('a');a.href=u;a.download=`bookings_${ist()}.csv`;a.click();URL.revokeObjectURL(u)}catch(e){toast(e.message)}};
-setInterval(()=>{if(KEY&&!document.hidden)load().catch(()=>{})},60000);
-if(KEY){load().then(()=>{$('#app').hidden=false}).catch(()=>logout())}else{$('#login').hidden=false}
-})();
-</script>
+<script src="/admin/admin.js"></script>
 </body>
 </html>

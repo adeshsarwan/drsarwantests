@@ -49,7 +49,7 @@ details[open] .faq-plus{transform:rotate(45deg)}
 .bk-pay{display:flex;flex-wrap:wrap;gap:20px;align-items:center}
 .bk-qr{flex:none;width:180px;height:180px;border:1px solid #dfe8ef;border-radius:16px;overflow:hidden;background:#fff;display:flex;align-items:center;justify-content:center}
 .bk-qr svg{width:100%;height:100%}
-.bk-timer{margin:10px 0 0;font-size:14px;color:#b23f28}
+.bk-timer{margin:12px 0 0;font-size:13.5px;line-height:1.4;color:#8a5a00;background:#fff8e6;border-radius:10px;padding:8px 12px}
 .bk-file{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden}.bk-upload{position:relative;display:block;border:2px dashed #9fc3cc;border-radius:16px;background:#f6fbfc;padding:18px;cursor:pointer;text-align:center;color:#1f6977}.bk-upload:focus-within{outline:3px solid #9fd3dc;outline-offset:2px}.bk-upload b{display:block;font-family:Archivo,sans-serif;font-size:17px;margin-top:4px}.bk-upload small{display:block;color:#5a6880;font-size:13px;margin-top:2px}#bk-upload-done{display:flex;align-items:center;gap:14px;text-align:left}#bk-upload-done[hidden]{display:none}#bk-shot-preview{width:64px;height:96px;object-fit:cover;border-radius:8px;border:1px solid #c7d4de;background:#fff}.bk-upload.has{border-style:solid;border-color:#1f6977;background:#eef8f6}
 [hidden]{display:none !important}.bk-ac{position:relative}.bk-ac-list{position:absolute;left:0;right:0;top:100%;z-index:20;margin:4px 0 0;padding:6px;list-style:none;background:#fff;border:1px solid #c7d4de;border-radius:12px;box-shadow:0 10px 24px rgba(20,40,70,.15);max-height:280px;overflow:auto}.bk-ac-list li{padding:10px 12px;border-radius:8px;cursor:pointer;font-size:15px;line-height:1.3}.bk-ac-list li small{display:block;color:#5a6880;font-size:13px}.bk-ac-list li[aria-selected="true"],.bk-ac-list li:hover{background:#eef6f9}
 @media (max-width:760px){.bk-qr{width:150px;height:150px}}
@@ -286,7 +286,8 @@ details[open] .faq-plus{transform:rotate(45deg)}
 <div id="booker" style="flex: 1 1 min(100%, 520px); min-width: 0; background: #ffffff; color: #1b2a4e; border-radius: 24px; padding: 28px">
 
 <div data-step="1">
-<p class="bk-kicker">Step 1 of 3 · Choose your collection slot</p>
+<div id="bk-reslot" hidden role="alert" style="background: #fff1ec; border: 1.5px solid #f2b8a6; border-radius: 14px; padding: 12px 14px; margin-bottom: 16px"><b style="display: block; color: #a33a1f; font-family: Archivo, sans-serif; font-size: 16px">That slot was just taken</b><span id="bk-reslot-text" style="display: block; font-size: 14.5px; margin-top: 4px; color: #4a2a20"></span><span style="display: block; font-size: 14px; margin-top: 6px; font-weight: 700; color: #17694a">✓ Your payment is saved. Pick any free slot below, with no need to pay again.</span></div>
+<p class="bk-kicker" id="bk-step1-kicker">Step 1 of 3 · Choose your collection slot</p>
 <h3 class="bk-h">Pick a date</h3>
 <div id="bk-dates" class="bk-chips" role="group" aria-label="Collection date"><span class="bk-muted">Loading dates…</span></div>
 <h3 class="bk-h" style="margin-top: 22px">Pick a 30-minute slot <span class="bk-muted" style="font-weight: 500; font-size: 14px">(6 AM – 11 AM, fasting)</span></h3>
@@ -311,7 +312,7 @@ details[open] .faq-plus{transform:rotate(45deg)}
 </div>
 <p id="bk-err2" class="bk-err" role="alert"></p>
 <button type="submit" class="bk-btn" id="bk-continue">Continue to payment · Rs. <span class="bk-amt">1899</span></button>
-<p class="bk-note">Your slot is held for <span class="bk-hold">15</span> minutes while you pay.</p>
+<p class="bk-note">Your slot is confirmed as soon as you pay and upload the payment screenshot.</p>
 </form>
 
 <div data-step="3" hidden>
@@ -326,7 +327,7 @@ details[open] .faq-plus{transform:rotate(45deg)}
 <a id="bk-upi-link" class="bk-btn bk-btn-alt" href="#" hidden>Pay with UPI app</a>
 <button type="button" id="bk-save-qr" class="bk-link" style="display: inline-block; margin-top: 10px; padding-left: 0">Save QR to Photos</button><span class="bk-muted" style="font-size: 13px"> · or long-press the QR → Save to Photos, then “Scan from gallery” in your UPI app</span>
 <p style="margin: 12px 0 0; font-size: 14px; color: #3b4a68">UPI ID: <strong id="bk-upi-id" style="word-break: break-all"></strong> <button type="button" class="bk-link" id="bk-copy">Copy</button></p>
-<p class="bk-timer">Slot held for <strong id="bk-countdown">15:00</strong></p>
+<p class="bk-timer">Pay soon: the slot is confirmed only after you upload the screenshot. If someone else gets it first, your payment is saved and you can pick another slot.</p>
 </div>
 </div>
 <form id="bk-paid-form" novalidate style="margin-top: 20px; border-top: 1px solid #e1e8ee; padding-top: 18px">

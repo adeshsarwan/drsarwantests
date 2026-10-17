@@ -20,10 +20,10 @@ CREATE TABLE IF NOT EXISTS bookings (
   updated_at    TEXT NOT NULL
 );
 
--- Only one booking can hold a slot at a time. Expired / cancelled rows do not count.
-CREATE UNIQUE INDEX IF NOT EXISTS one_booking_per_slot
+-- Only one PAID booking can hold a slot. Unpaid (pending), expired and cancelled rows do not count.
+CREATE UNIQUE INDEX IF NOT EXISTS one_paid_booking_per_slot
   ON bookings(date, slot)
-  WHERE status IN ('pending', 'payment_submitted', 'confirmed', 'collected', 'blocked');
+  WHERE status IN ('payment_submitted', 'confirmed', 'collected', 'blocked');
 
 CREATE INDEX IF NOT EXISTS bookings_by_date ON bookings(date, slot);
 CREATE INDEX IF NOT EXISTS bookings_by_status ON bookings(status);
