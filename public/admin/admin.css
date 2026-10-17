@@ -49,6 +49,9 @@ a{color:var(--teal)}
 .st-confirmed{background:#dff3ea;color:#17694a}
 .st-collected{background:#e1e9f7;color:#2a4a8a}
 .st-cancelled,.st-expired{background:#eef1f4;color:var(--muted)}
+.st-report_ready{background:#f1e8fb;color:#5b2d8a}
+.st-completed{background:#e9edf2;color:#3b4a68}
+.st-no_show{background:#fbe4e6;color:#9b1c31}
 .st-blocked{background:#2b2f36;color:#fff}
 .meta{color:var(--muted);font-size:13.5px}
 .tbl-wrap{overflow-x:auto;margin-top:14px;border:1px solid var(--line);border-radius:12px}
@@ -244,3 +247,52 @@ a{color:var(--teal)}
 
 .run-btn{display:none;width:100%;margin:0 0 12px}
 @media (max-width:1179px){.run-btn{display:block}}
+
+/* workflow */
+.btn.wa{background:#1fa855;color:#fff}
+.btn.purple{background:#7a46b8;color:#fff}
+.btn.dark{background:var(--ink);color:#fff}
+.btn:disabled{opacity:.45;cursor:default}
+.wa-pref{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--muted)}
+.wa-pref .inp{min-height:34px;padding:4px 8px;font-size:13px}
+.track{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:4px;margin-top:12px}
+.track span{display:flex;flex-direction:column;gap:4px;font-size:10.5px;font-weight:700;color:#a3b0bf;text-align:center;line-height:1.15}
+.track span i{height:5px;border-radius:3px;background:#e3e9ee}
+.track span.done{color:#17694a}.track span.done i{background:#1f8a6a}
+.track span.now{color:var(--ink)}.track span.now i{background:var(--ink)}
+.track span.bad{color:#9b1c31}.track span.bad i{background:#c2334d}
+.wa-list{display:flex;flex-direction:column;gap:6px}
+.wa-btn{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:#fff;border:1.5px solid #cfe9d9;border-radius:12px;padding:9px 12px;cursor:pointer;color:var(--ink);font:inherit}
+.wa-btn:hover{background:#f3fbf6;border-color:#1fa855}
+.wa-btn .ic{width:26px;height:26px;border-radius:50%;background:#1fa855;color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;flex:none}
+.wa-btn b{font-size:13.5px;display:block}
+.wa-btn small{display:block;font-size:11.5px;color:var(--muted)}
+.wa-btn.sug{border-color:#1fa855;background:#effaf3}
+.wa-btn .ok{margin-left:auto;font-size:11px;font-weight:800;color:#17694a;white-space:nowrap}
+.kv{display:flex;align-items:center;gap:10px;justify-content:space-between;border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.kv .v{font-family:Archivo,sans-serif;font-weight:800;font-size:17px;letter-spacing:.5px}
+.fee{background:#fbe4e6;color:#9b1c31;border-radius:12px;padding:10px 12px;font-size:13px;font-weight:600}
+.fee-box{flex-direction:column;background:#fbe4e6;border-radius:12px;padding:10px 12px;color:#9b1c31}
+.fee-box input{width:18px;height:18px;vertical-align:-3px}
+.next{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.next .btn{min-height:34px;padding:6px 12px;font-size:13px}
+.tbl tr.row{cursor:pointer}
+.tbl tr.row:hover td{background:#fafcfd}
+.tbl .lnk{background:none;border:0;padding:0;font:inherit;font-weight:700;color:var(--ink);cursor:pointer;text-align:left}
+.tbl .lnk:hover{color:var(--teal);text-decoration:underline}
+.vial{display:inline-block;font-size:11.5px;font-weight:800;letter-spacing:.4px;background:#eef2f7;color:#3b4a68;border-radius:6px;padding:1px 6px;margin-top:3px}
+.att-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 12px}
+.att-tabs button{border:1.5px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font-weight:700;font-size:13px;cursor:pointer;color:#3b4a68}
+.att-tabs button b{margin-left:4px}
+.att-tabs button[aria-selected="true"]{background:var(--ink);border-color:var(--ink);color:#fff}
+.att-tabs button.zero{opacity:.55}
+.drop{display:flex;flex-direction:column;align-items:center;gap:4px;border:2px dashed #b9cbd6;border-radius:14px;padding:18px;cursor:pointer;background:#f8fbfc}
+.drop.over{border-color:var(--teal);background:#eef6f9}
+.rep-t{width:100%;border-collapse:collapse;margin-top:12px;font-size:13.5px}
+.rep-t td,.rep-t th{padding:8px;border-bottom:1px solid var(--line2);text-align:left;vertical-align:middle}
+.rep-t th{font-size:12px;color:var(--muted);text-transform:uppercase}
+.rep-t select{max-width:260px}
+.m-ok{color:#17694a;font-weight:700}.m-no{color:#a33a1f;font-weight:700}
+.dt-sec{display:flex;flex-direction:column;gap:8px}
+@media (max-width:640px){.track span{font-size:9.5px}.rep-t select{max-width:150px}}
+.tbl td.num .btn{display:flex;margin:6px 0 0 auto}

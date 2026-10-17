@@ -33,6 +33,9 @@
 </div>
 <div class="top-r">
 <button class="btn sm" data-act="add">+ Add booking</button>
+<button class="btn ghost sm" data-act="reports">Upload reports</button>
+<label class="wa-pref hide-sm" title="Where the WhatsApp buttons open">WhatsApp
+<select id="waPref" class="inp"><option value="app">Desktop app</option><option value="web">WhatsApp Web</option></select></label>
 <button class="btn ghost sm" id="refresh">Refresh</button>
 <button class="btn ghost sm hide-sm" id="csv">Export CSV</button>
 <button class="btn ghost sm" id="logout">Sign out</button>
@@ -45,7 +48,7 @@
 
 <div class="card">
 <h2 class="h2" style="margin:0 0 6px">Needs your attention</h2>
-<p class="meta" style="margin:0 0 10px">Payments submitted by customers. Open the screenshot, check the payment in your Paytm for Business app, then confirm.</p>
+<div class="att-tabs" id="attTabs" role="tablist"></div>
 <div id="attention" class="list"></div>
 </div>
 
@@ -54,7 +57,7 @@
 <h2 class="h2" style="margin:0">All bookings</h2>
 <div style="display:flex;gap:8px;flex-wrap:wrap">
 <label class="meta" for="fStatus" style="align-self:center">Status</label>
-<select id="fStatus" class="inp"><option value="active">All active</option><option value="payment_submitted">Paid – verify</option><option value="pending">Awaiting payment</option><option value="confirmed">Confirmed</option><option value="collected">Collected</option><option value="cancelled">Cancelled</option><option value="expired">Expired (unpaid)</option><option value="all">Everything</option></select>
+<select id="fStatus" class="inp"><option value="active">All active</option><option value="payment_submitted">Paid – verify</option><option value="pending">Awaiting payment</option><option value="confirmed">Confirmed</option><option value="collected">Collected – report pending</option><option value="report_ready">Report ready – to send</option><option value="completed">Completed</option><option value="no_show">Patient not available</option><option value="cancelled">Cancelled</option><option value="expired">Expired (unpaid)</option><option value="all">Everything</option></select>
 <select id="fWhen" class="inp" aria-label="Date range"><option value="upcoming">Upcoming</option><option value="past">Past</option><option value="any">All dates</option></select>
 <input id="fSearch" class="inp" type="search" placeholder="Search name, phone, PIN…" aria-label="Search bookings">
 </div>
@@ -82,6 +85,9 @@
 <span><i style="background:#e9a23b"></i>Awaiting payment</span>
 <span><i style="background:#1f8a6a"></i>Confirmed</span>
 <span><i style="background:#4c6fd8"></i>Collected</span>
+<span><i style="background:#8a55c9"></i>Report ready</span>
+<span><i style="background:#6b7686"></i>Completed</span>
+<span><i style="background:#c2334d"></i>Not available</span>
 </div>
 <div class="seg" role="group" aria-label="Calendar view">
 <button type="button" data-act="view" data-view="day">Day</button>
@@ -123,9 +129,9 @@
 <div class="dlg-b"><label for="msgText" class="meta" style="display:block;margin-bottom:6px">Message (you can edit before copying)</label>
 <textarea id="msgText" rows="16" class="ta"></textarea></div>
 <div class="dlg-f">
-<button class="btn" id="msgCopy" style="flex:1">Copy message</button>
-<a class="btn wa" id="msgWa" target="_blank" rel="noopener" style="flex:1">Open WhatsApp</a>
-<button class="btn ghost" data-close="msgDlg">Done</button>
+<button class="btn wa" id="msgSend" style="flex:1.4">Send on WhatsApp</button>
+<button class="btn ghost" id="msgCopy" style="flex:1">Copy</button>
+<button class="btn ghost" data-close="msgDlg">Close</button>
 </div>
 </dialog>
 
@@ -157,11 +163,34 @@
 <div class="fld"><label for="fDate">Date</label><input id="fDate" name="date" type="date" class="inp"></div>
 <div class="fld"><label for="fSlot">Slot</label><select id="fSlot" name="slot" class="inp"></select></div>
 <div class="fld wide add-only"><label for="fNotes">Notes (optional)</label><input id="fNotes" name="notes" class="inp" autocomplete="off"></div>
+<label class="fld wide fee-only fee-box" hidden><span><input type="checkbox" id="fFee" name="feePaid"> <b id="fFeeLbl">₹300 visit fee received</b></span><span class="meta">The patient missed the last visit. Rebook only after the fee is paid.</span></label>
 </div>
 <p class="err" id="formErr" style="padding:0 18px;margin:0"></p>
 <div class="dlg-f"><button class="btn" id="formSave" style="flex:1">Save booking</button><button type="button" class="btn ghost" data-close="formDlg">Cancel</button></div>
 </form>
 </dialog>
+
+<!-- sample collected: vial no. -->
+<dialog id="vialDlg" class="dlg" style="max-width:min(94vw,420px)">
+<form id="vialForm" novalidate>
+<div class="dlg-h"><b>Sample collected</b><div class="meta" id="vialSub"></div></div>
+<div class="dlg-b"><div class="fld"><label for="vialNo">Vial number</label><input id="vialNo" class="inp" autocomplete="off" placeholder="As written on the tube / requisition" style="text-transform:uppercase;font-size:18px;letter-spacing:1px"></div>
+<p class="meta" style="margin:8px 0 0">Ask the collection centre to name each report PDF with this vial number, e.g. <b id="vialEg">AB1234.pdf</b>, so reports match automatically.</p></div>
+<p class="err" id="vialErr" style="padding:0 18px;margin:0"></p>
+<div class="dlg-f"><button class="btn blue" id="vialSave" style="flex:1">Save &amp; mark collected</button><button type="button" class="btn ghost" data-close="vialDlg">Cancel</button></div>
+</form>
+</dialog>
+
+<!-- upload reports (bulk, matched by vial no. in file name) -->
+<dialog id="repDlg" class="dlg" style="max-width:min(96vw,760px)">
+<div class="dlg-h"><b>Upload reports</b><div class="meta">Pick the PDFs from the collection centre. Each file is matched to a patient by the vial number in its file name. Check the matches, then upload.</div></div>
+<div class="dlg-b">
+<label class="drop" id="repDrop"><input type="file" id="repFiles" accept="application/pdf,.pdf" multiple hidden><b>Choose PDF files</b><span class="meta">or drop them here</span></label>
+<div id="repList"></div>
+</div>
+<div class="dlg-f"><button class="btn" id="repUpload" style="flex:1" disabled>Upload</button><button type="button" class="btn ghost" data-close="repDlg">Close</button></div>
+</dialog>
+<input type="file" id="oneReport" accept="application/pdf,.pdf" hidden>
 
 <script src="/admin/admin.js"></script>
 </body>

@@ -10,8 +10,12 @@ const HOLD_MIN = 120;             // unpaid bookings are marked expired after th
 const IST_OFFSET_MIN = 330;       // UTC+05:30
 
 // Statuses that occupy a slot. An unpaid ("pending") booking does NOT hold the slot.
-const ACTIVE = ["payment_submitted", "confirmed", "collected", "blocked"];
-const ADMIN_SETTABLE = ["payment_submitted", "confirmed", "collected", "cancelled"];
+// Workflow: pending → payment_submitted → confirmed → collected (vial no.) → report_ready → completed
+//           confirmed → no_show ("reached, patient unavailable": visit fee due before rebooking)
+const ACTIVE = ["payment_submitted", "confirmed", "collected", "report_ready", "completed", "no_show", "blocked"];
+const ADMIN_SETTABLE = ["payment_submitted", "confirmed", "collected", "report_ready", "completed", "no_show", "cancelled"];
+const MAX_REPORT_BYTES = 10 * 1024 * 1024;
+const REPORT_CHUNK = 1_500_000; // base64 chars per row (D1 rows max ~2 MB)
 
 export const SLOTS = (() => {
   const out = [];
@@ -86,6 +90,7 @@ function safeEqual(a, b) {
   return diff === 0;
 }
 function amount(env) { return parseInt(env.PRICE_INR || "1899", 10); }
+function visitFee(env) { return parseInt(env.VISIT_FEE_INR || "300", 10); }
 
 // Create tables automatically on first use (same as migrations/0001_bookings.sql).
 const SCHEMA = [
@@ -94,20 +99,33 @@ const SCHEMA = [
     amount INTEGER NOT NULL, status TEXT NOT NULL, utr TEXT, source TEXT, created_at TEXT NOT NULL, expires_at TEXT,
     paid_at TEXT, updated_at TEXT NOT NULL)`,
   `DROP INDEX IF EXISTS one_booking_per_slot`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS one_paid_booking_per_slot ON bookings(date, slot)
-    WHERE status IN ('payment_submitted', 'confirmed', 'collected', 'blocked')`,
+  `DROP INDEX IF EXISTS one_paid_booking_per_slot`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS slot_holder_v3 ON bookings(date, slot)
+    WHERE status IN ('payment_submitted', 'confirmed', 'collected', 'report_ready', 'completed', 'no_show', 'blocked')`,
   `CREATE INDEX IF NOT EXISTS bookings_by_date ON bookings(date, slot)`,
   `CREATE INDEX IF NOT EXISTS bookings_by_status ON bookings(status)`,
   `CREATE TABLE IF NOT EXISTS payment_proofs (booking_id TEXT PRIMARY KEY, mime TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS report_chunks (booking_id TEXT NOT NULL, idx INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (booking_id, idx))`,
+  `CREATE TABLE IF NOT EXISTS msg_log (id INTEGER PRIMARY KEY AUTOINCREMENT, booking_id TEXT NOT NULL, kind TEXT NOT NULL, at TEXT NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS msg_log_by_booking ON msg_log(booking_id)`,
 ];
 let schemaReady = null;
-const UPGRADES = ["ALTER TABLE bookings ADD COLUMN city TEXT", "ALTER TABLE bookings ADD COLUMN state TEXT"];
+const NEW_COLS = { city: "TEXT", state: "TEXT", vial_no: "TEXT", collected_at: "TEXT", report_name: "TEXT", report_size: "INTEGER",
+  report_token: "TEXT", report_at: "TEXT", completed_at: "TEXT", fee_due: "INTEGER", fee_paid_at: "TEXT", missed_slot: "TEXT" };
 function ensureSchema(env) {
   if (!schemaReady) {
     schemaReady = (async () => {
+      // add any missing columns first (older databases), then tables / indexes
+      const info = await env.DB.prepare("PRAGMA table_info(bookings)").all().catch(() => ({ results: [] }));
+      const have = new Set((info.results || []).map((c) => c.name));
+      if (have.size) for (const [c, t] of Object.entries(NEW_COLS)) {
+        if (!have.has(c)) {
+          try { await env.DB.prepare(`ALTER TABLE bookings ADD COLUMN ${c} ${t}`).run(); } catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
+        }
+      }
       await env.DB.batch(SCHEMA.map((q) => env.DB.prepare(q)));
-      for (const q of UPGRADES) {
-        try { await env.DB.prepare(q).run(); } catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
+      if (!have.size) for (const [c, t] of Object.entries(NEW_COLS)) {
+        try { await env.DB.prepare(`ALTER TABLE bookings ADD COLUMN ${c} ${t}`).run(); } catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
       }
     })().catch((e) => { schemaReady = null; throw e; });
   }
@@ -170,6 +188,7 @@ function getConfig(env) {
     upiQr: env.UPI_QR_STRING || "",
     mapsKey: env.GOOGLE_MAPS_KEY || "",
     holdMinutes: HOLD_MIN,
+    visitFee: visitFee(env),
     dates,
   });
 }
@@ -235,7 +254,7 @@ async function submitPayment(env, req, id, ctx) {
       "INSERT INTO payment_proofs (booking_id, mime, data, created_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(booking_id) DO UPDATE SET mime=excluded.mime, data=excluded.data, created_at=excluded.created_at"
     ).bind(id, shot.mime, shot.data, now).run();
   };
-  if (["payment_submitted", "confirmed", "collected"].includes(row.status)) {
+  if (["payment_submitted", "confirmed", "collected", "report_ready", "completed", "no_show"].includes(row.status)) {
     // already submitted: allow adding / replacing the screenshot or UTR
     await saveProof();
     if (utr) await env.DB.prepare("UPDATE bookings SET utr=?1, updated_at=?2 WHERE id=?3").bind(utr, now, id).run();
@@ -301,7 +320,9 @@ async function adminList(env, url) {
   const includeInactive = url.searchParams.get("all") === "1";
   const { results } = await env.DB.prepare(
     `SELECT id, date, slot, name, phone, address, pincode, city, state, cycle, notes, amount, status, utr, source, created_at, paid_at, updated_at,
-       EXISTS(SELECT 1 FROM payment_proofs p WHERE p.booking_id = bookings.id) AS has_proof
+       vial_no, collected_at, report_name, report_size, report_token, report_at, completed_at, fee_due, fee_paid_at, missed_slot,
+       EXISTS(SELECT 1 FROM payment_proofs p WHERE p.booking_id = bookings.id) AS has_proof,
+       (SELECT group_concat(kind || '@' || at, ',') FROM msg_log l WHERE l.booking_id = bookings.id) AS msgs
      FROM bookings WHERE date BETWEEN ?1 AND ?2 ${includeInactive ? "" : "AND status NOT IN ('expired')"}
      ORDER BY date, slot, created_at`
   ).bind(from, to).all();
@@ -337,11 +358,22 @@ async function adminCreate(env, req) {
 
 // Move a booking to another slot (reschedule).
 async function adminMove(env, req, id) {
-  const { date, slot } = await req.json().catch(() => ({}));
+  const { date, slot, feePaid } = await req.json().catch(() => ({}));
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date || "") || !SLOTS.includes(slot)) return bad("Pick a date and slot.");
+  const row = await env.DB.prepare("SELECT status FROM bookings WHERE id=?1").bind(id).first();
+  if (!row || ["blocked", "cancelled"].includes(row.status)) return bad("Booking not found", 404);
+  if (["collected", "report_ready", "completed"].includes(row.status)) return bad("The sample is already collected, so this booking can't be moved.", 409);
+  const now = isoNow();
   try {
-    const r = await env.DB.prepare("UPDATE bookings SET date=?1, slot=?2, updated_at=?3 WHERE id=?4 AND status NOT IN ('blocked','cancelled')")
-      .bind(date, slot, isoNow(), id).run();
+    let r;
+    if (row.status === "no_show") {
+      if (feePaid !== true) return bad(`Tick "visit fee received" first. The patient missed the last visit.`, 400);
+      r = await env.DB.prepare("UPDATE bookings SET date=?1, slot=?2, status='confirmed', fee_paid_at=?3, updated_at=?3 WHERE id=?4 AND status='no_show'")
+        .bind(date, slot, now, id).run();
+    } else {
+      r = await env.DB.prepare("UPDATE bookings SET date=?1, slot=?2, updated_at=?3 WHERE id=?4 AND status NOT IN ('blocked','cancelled')")
+        .bind(date, slot, now, id).run();
+    }
     if (!r.meta.changes) return bad("Booking not found", 404);
   } catch (e) {
     if (/UNIQUE/i.test(String(e))) return bad("That slot already has a booking.", 409);
@@ -358,17 +390,116 @@ async function adminScreenshot(env, id) {
 }
 
 async function adminSetStatus(env, req, id) {
-  const { status } = await req.json().catch(() => ({}));
+  const body = await req.json().catch(() => ({}));
+  const status = body.status;
   if (!ADMIN_SETTABLE.includes(status)) return bad("Invalid status");
+  const row = await env.DB.prepare("SELECT * FROM bookings WHERE id=?1 AND status != 'blocked'").bind(id).first();
+  if (!row) return bad("Booking not found", 404);
+  const now = isoNow();
+  const set = { status, updated_at: now };
+  if (status === "collected") {
+    const vial = clean(body.vial_no, 40).toUpperCase();
+    if (!vial) return bad("Enter the vial number written on the sample.");
+    if (!body.force) {
+      const dup = await env.DB.prepare("SELECT id, name FROM bookings WHERE vial_no=?1 AND id!=?2 LIMIT 1").bind(vial, id).first();
+      if (dup) return json({ error: `Vial ${vial} is already used for ${dup.name} (${dup.id}). Check the number.`, code: "dup_vial" }, 409);
+    }
+    set.vial_no = vial;
+    set.collected_at = row.collected_at || now;
+  }
+  if (status === "report_ready" && !row.report_name) return bad("Upload the report PDF first.");
+  if (status === "completed") set.completed_at = now;
+  if (status === "no_show") {
+    set.fee_due = visitFee(env);
+    set.fee_paid_at = null;
+    set.missed_slot = `${row.date} ${row.slot}`;
+  }
+  const cols = Object.keys(set);
   try {
-    const r = await env.DB.prepare("UPDATE bookings SET status=?1, updated_at=?2 WHERE id=?3 AND status != 'blocked'")
-      .bind(status, isoNow(), id).run();
+    const r = await env.DB.prepare(`UPDATE bookings SET ${cols.map((c, i) => `${c}=?${i + 1}`).join(", ")} WHERE id=?${cols.length + 1}`)
+      .bind(...cols.map((c) => set[c]), id).run();
     if (!r.meta.changes) return bad("Booking not found", 404);
   } catch (e) {
     if (/UNIQUE/i.test(String(e))) return bad("That slot is already taken by another booking.", 409);
     throw e;
   }
   return json({ ok: true });
+}
+
+// ---- reports (PDF stored in D1 as base64 chunks) ----
+function toB64(bytes) {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+async function adminUploadReport(env, req, id) {
+  const row = await env.DB.prepare("SELECT * FROM bookings WHERE id=?1 AND status != 'blocked'").bind(id).first();
+  if (!row) return bad("Booking not found", 404);
+  if (!["collected", "report_ready", "completed"].includes(row.status)) return bad("Mark the sample as collected (with vial no.) before uploading the report.", 409);
+  const buf = new Uint8Array(await req.arrayBuffer());
+  if (!buf.length) return bad("Empty file");
+  if (buf.length > MAX_REPORT_BYTES) return bad("Report is larger than 10 MB.");
+  if (String.fromCharCode(...buf.subarray(0, 5)) !== "%PDF-") return bad("Please upload the report as a PDF.");
+  let name = "report.pdf";
+  try { name = clean(decodeURIComponent(req.headers.get("x-filename") || "report.pdf"), 120) || name; } catch {}
+  const b64 = toB64(buf);
+  const now = isoNow();
+  const token = row.report_token || randId(32, "abcdefghijklmnopqrstuvwxyz0123456789");
+  const stmts = [env.DB.prepare("DELETE FROM report_chunks WHERE booking_id=?1").bind(id)];
+  for (let i = 0, n = 0; i < b64.length; i += REPORT_CHUNK, n++)
+    stmts.push(env.DB.prepare("INSERT INTO report_chunks (booking_id, idx, data) VALUES (?1, ?2, ?3)").bind(id, n, b64.slice(i, i + REPORT_CHUNK)));
+  stmts.push(env.DB.prepare("UPDATE bookings SET report_name=?1, report_size=?2, report_token=?3, report_at=?4, status='report_ready', completed_at=NULL, updated_at=?4 WHERE id=?5")
+    .bind(name, buf.length, token, now, id));
+  await env.DB.batch(stmts);
+  return json({ ok: true, token });
+}
+async function reportResponse(env, row, inline) {
+  const { results } = await env.DB.prepare("SELECT data FROM report_chunks WHERE booking_id=?1 ORDER BY idx").bind(row.id).all();
+  if (!results.length) return bad("Report not found", 404);
+  const bin = Uint8Array.from(atob(results.map((r) => r.data).join("")), (c) => c.charCodeAt(0));
+  const fname = `Report_${String(row.name).replace(/[^A-Za-z0-9]+/g, "_")}_${row.id}.pdf`;
+  return new Response(bin, { headers: { "content-type": "application/pdf", "content-disposition": `${inline ? "inline" : "attachment"}; filename="${fname}"`,
+    "cache-control": "private, no-store", "x-content-type-options": "nosniff", "x-robots-tag": "noindex" } });
+}
+async function adminReport(env, id) {
+  const row = await env.DB.prepare("SELECT id, name FROM bookings WHERE id=?1").bind(id).first();
+  return row ? reportResponse(env, row, true) : bad("Booking not found", 404);
+}
+async function publicReport(env, token) {
+  const row = await env.DB.prepare("SELECT id, name FROM bookings WHERE report_token=?1 AND status IN ('report_ready','completed')").bind(token).first();
+  if (!row) return new Response("This report link is not valid. Please WhatsApp us on 8368143677.", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
+  return reportResponse(env, row, true);
+}
+
+async function adminVial(env, req, id) {
+  const body = await req.json().catch(() => ({}));
+  const vial = clean(body.vial_no, 40).toUpperCase();
+  if (!vial) return bad("Enter the vial number.");
+  if (!body.force) {
+    const dup = await env.DB.prepare("SELECT id, name FROM bookings WHERE vial_no=?1 AND id!=?2 LIMIT 1").bind(vial, id).first();
+    if (dup) return json({ error: `Vial ${vial} is already used for ${dup.name} (${dup.id}). Check the number.`, code: "dup_vial" }, 409);
+  }
+  const r = await env.DB.prepare("UPDATE bookings SET vial_no=?1, updated_at=?2 WHERE id=?3 AND status IN ('collected','report_ready','completed')").bind(vial, isoNow(), id).run();
+  if (!r.meta.changes) return bad("Mark the sample as collected first.", 409);
+  return json({ ok: true });
+}
+
+// Admin opened WhatsApp with a message. Sending the report completes the job.
+const MSG_KINDS = ["pay", "confirm", "reminder", "slots", "missed", "collected", "report", "chat"];
+async function adminSent(env, req, id) {
+  const { kind } = await req.json().catch(() => ({}));
+  if (!MSG_KINDS.includes(kind)) return bad("Invalid message type");
+  const row = await env.DB.prepare("SELECT status FROM bookings WHERE id=?1").bind(id).first();
+  if (!row) return bad("Booking not found", 404);
+  const now = isoNow();
+  const stmts = [env.DB.prepare("INSERT INTO msg_log (booking_id, kind, at) VALUES (?1, ?2, ?3)").bind(id, kind, now)];
+  let completed = false;
+  if (kind === "report" && row.status === "report_ready") {
+    stmts.push(env.DB.prepare("UPDATE bookings SET status='completed', completed_at=?1, updated_at=?1 WHERE id=?2").bind(now, id));
+    completed = true;
+  }
+  await env.DB.batch(stmts);
+  return json({ ok: true, completed });
 }
 
 async function adminBlock(env, req) {
@@ -397,9 +528,9 @@ async function adminCsv(env, url) {
   const from = url.searchParams.get("from") || addDays(today, -30);
   const to = url.searchParams.get("to") || addDays(today, BOOK_DAYS_AHEAD);
   const { results } = await env.DB.prepare(
-    "SELECT id,date,slot,status,name,phone,address,pincode,city,state,cycle,notes,amount,utr,CASE WHEN EXISTS(SELECT 1 FROM payment_proofs p WHERE p.booking_id=bookings.id) THEN 'yes' ELSE 'no' END AS screenshot,source,created_at,paid_at FROM bookings WHERE date BETWEEN ?1 AND ?2 AND status!='blocked' ORDER BY date, slot"
+    "SELECT id,date,slot,status,name,phone,address,pincode,city,state,cycle,notes,amount,utr,vial_no,collected_at,report_at,completed_at,fee_due,fee_paid_at,CASE WHEN EXISTS(SELECT 1 FROM payment_proofs p WHERE p.booking_id=bookings.id) THEN 'yes' ELSE 'no' END AS screenshot,source,created_at,paid_at FROM bookings WHERE date BETWEEN ?1 AND ?2 AND status!='blocked' ORDER BY date, slot"
   ).bind(from, to).all();
-  const cols = ["id", "date", "slot", "status", "name", "phone", "address", "pincode", "city", "state", "cycle", "notes", "amount", "utr", "screenshot", "source", "created_at", "paid_at"];
+  const cols = ["id", "date", "slot", "status", "name", "phone", "address", "pincode", "city", "state", "cycle", "notes", "amount", "utr", "vial_no", "collected_at", "report_at", "completed_at", "fee_due", "fee_paid_at", "screenshot", "source", "created_at", "paid_at"];
   const esc = (v) => {
     let s = String(v ?? "");
     if (/^[=+\-@]/.test(s)) s = "'" + s; // avoid spreadsheet formula injection
@@ -424,6 +555,8 @@ export default {
         let pm = p.match(/^\/api\/pincode\/(\d{6})$/);
         if (pm && req.method === "GET") return pincodeLookup(pm[1], ctx);
         if (p === "/api/bookings" && req.method === "POST") return createBooking(env, req);
+        let rt = p.match(/^\/api\/report\/([a-z0-9]{32})$/);
+        if (rt && req.method === "GET") return publicReport(env, rt[1]);
         let m = p.match(/^\/api\/bookings\/(DSL-[A-Z0-9]{6})\/paid$/);
         if (m && req.method === "POST") return submitPayment(env, req, m[1], ctx);
         m = p.match(/^\/api\/bookings\/(DSL-[A-Z0-9]{6})\/reslot$/);
@@ -440,6 +573,13 @@ export default {
           if (m && req.method === "GET") return adminScreenshot(env, m[1]);
           m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/move$/);
           if (m && req.method === "POST") return adminMove(env, req, m[1]);
+          m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/report$/);
+          if (m && req.method === "POST") return adminUploadReport(env, req, m[1]);
+          if (m && req.method === "GET") return adminReport(env, m[1]);
+          m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/vial$/);
+          if (m && req.method === "POST") return adminVial(env, req, m[1]);
+          m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/sent$/);
+          if (m && req.method === "POST") return adminSent(env, req, m[1]);
           m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/status$/);
           if (m && req.method === "POST") return adminSetStatus(env, req, m[1]);
         }
