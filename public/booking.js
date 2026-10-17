@@ -30,6 +30,7 @@
     }
     root.querySelectorAll('.bk-amt').forEach((el) => (el.textContent = state.cfg.amount));
     root.querySelectorAll('.bk-hold').forEach((el) => (el.textContent = state.cfg.holdMinutes));
+    if (state.cfg.mapsKey) initPlaces(state.cfg.mapsKey);
     const box = $('#bk-dates');
     box.innerHTML = '';
     if (!state.cfg.dates.length) { box.innerHTML = '<span class="bk-muted">No dates open right now. Please call 8368143677.</span>'; return; }
@@ -75,6 +76,9 @@
     const f = ev.target, err = $('#bk-err2'), btn = $('#bk-continue');
     err.textContent = '';
     const data = Object.fromEntries(new FormData(f).entries());
+    data.address = [data.house, data.area].map((x) => (x || '').trim()).filter(Boolean).join(', ');
+    delete data.house; delete data.area;
+    if (!(data.city || '').trim() || !(data.state || '').trim()) { err.textContent = 'Please enter your city and state.'; $(data.city ? '#bk-state' : '#bk-city').focus(); return; }
     if (!/^[6-9]\d{9}$/.test((data.phone || '').replace(/\D/g, '').slice(-10))) { err.textContent = 'Please enter a valid 10-digit mobile number.'; $('#bk-phone').focus(); return; }
     if (!/^\d{6}$/.test(data.pincode || '')) { err.textContent = 'Please enter a valid 6-digit pincode.'; $('#bk-pin').focus(); return; }
     btn.disabled = true; btn.dataset.t = btn.textContent; btn.textContent = 'Reserving your slot…';
@@ -98,8 +102,22 @@
     } else {
       const fixed = !!b.upiQr;
       const link = fixed ? b.upiQr : `upi://pay?pa=${upiId.replace(/[^A-Za-z0-9.@_-]/g, "")}&pn=${encodeURIComponent(b.upiName)}&am=${b.amount}.00&cu=INR&tn=${encodeURIComponent('Home test ' + b.id)}`;
-      $('#bk-upi-link').href = link;
       $('#bk-amount-note').hidden = !fixed;
+      const ua = navigator.userAgent || '';
+      const isIOS = /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+      const isAndroid = /Android/i.test(ua);
+      const q = link.slice(link.indexOf('?') + 1);
+      const schemes = { gpay: `gpay://upi/pay?${q}`, phonepe: `phonepe://pay?${q}`, paytm: `paytmmp://pay?${q}`, other: `upi://pay?${q}` };
+      if (isIOS) {
+        // iPhone has no UPI app chooser, so offer each app directly.
+        document.querySelectorAll('.bk-app').forEach((a) => { a.href = schemes[a.dataset.app]; });
+        $('#bk-apps').hidden = false;
+        $('#bk-pay-hint').textContent = 'Tap your UPI app to pay, or scan the QR from another phone.';
+      } else if (isAndroid) {
+        $('#bk-upi-link').href = link;
+        $('#bk-upi-link').hidden = false;
+        $('#bk-pay-hint').textContent = 'Tap the button and choose your UPI app, or scan the QR.';
+      }
       $('#bk-upi-id').textContent = upiId;
       if (fixed) {
         $('#bk-qr').innerHTML = '<img src="/assets/upi-qr.svg" alt="" width="180" height="180" style="width:100%;height:100%;display:block">';
@@ -144,7 +162,7 @@
         `Slot: ${b.dateLabel}, ${b.slotLabel}`,
         `Name: ${f.name || ''}`,
         `Mobile: ${f.phone || ''}`,
-        `Address: ${f.address || ''}, ${f.pincode || ''}`,
+        `Address: ${f.address || ''}, ${f.city || ''}, ${f.state || ''} - ${f.pincode || ''}`,
         f.cycle ? `Cycle: ${f.cycle}` : '',
         `Amount paid: Rs. ${b.amount}`,
         `UPI UTR: ${utr}`,
@@ -155,6 +173,107 @@
     } catch (e) { err.textContent = e.message; }
     finally { btn.disabled = false; btn.textContent = btn.dataset.t; }
   });
+
+
+  // ---- PIN code → city / state ----
+  const pinEl = $('#bk-pin'), cityEl = $('#bk-city'), stateEl = $('#bk-state'), pinMsg = $('#bk-pin-msg');
+  const auto = { city: '', state: '' };
+  async function lookupPin(pin) {
+    pinMsg.textContent = 'Looking up…';
+    try {
+      const r = await api('/api/pincode/' + pin);
+      if (pinEl.value !== pin) return;
+      if (r.found) {
+        // only overwrite fields the user hasn't typed themselves
+        if (!cityEl.value || cityEl.value === auto.city) { cityEl.value = r.city; auto.city = r.city; }
+        if (!stateEl.value || stateEl.value === auto.state) { stateEl.value = r.state; auto.state = r.state; }
+        pinMsg.textContent = r.areas && r.areas.length ? r.areas.slice(0, 3).join(', ') + (r.areas.length > 3 ? '…' : '') : '';
+      } else pinMsg.textContent = 'PIN not found. Please check it, or type city and state.';
+    } catch (e) { pinMsg.textContent = ''; }
+  }
+  pinEl.addEventListener('input', () => {
+    pinEl.value = pinEl.value.replace(/\D/g, '').slice(0, 6);
+    if (pinEl.value.length === 6) lookupPin(pinEl.value); else pinMsg.textContent = '';
+  });
+
+  // ---- Google Maps address suggestions (only if a key is configured) ----
+  const areaEl = $('#bk-area'), list = $('#bk-ac-list');
+  let places = null, session = null, items = [], active = -1, timer = null, reqNo = 0;
+  function loadMaps(key) {
+    return new Promise((resolve, reject) => {
+      if (window.google && google.maps && google.maps.importLibrary) return resolve();
+      window.__dslMapsReady = resolve;
+      const sc = document.createElement('script');
+      sc.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&loading=async&callback=__dslMapsReady&region=IN&language=en`;
+      sc.async = true; sc.onerror = reject; document.head.appendChild(sc);
+    });
+  }
+  async function initPlaces(key) {
+    try {
+      await loadMaps(key);
+      places = await google.maps.importLibrary('places');
+      session = new places.AutocompleteSessionToken();
+      $('#bk-ac-note').hidden = false;
+    } catch (e) { places = null; }
+  }
+  function closeList() { list.hidden = true; list.innerHTML = ''; items = []; active = -1; areaEl.setAttribute('aria-expanded', 'false'); }
+  function render() {
+    list.innerHTML = '';
+    items.forEach((s, i) => {
+      const p = s.placePrediction;
+      const li = document.createElement('li');
+      li.id = 'bk-ac-' + i; li.setAttribute('role', 'option'); li.setAttribute('aria-selected', String(i === active));
+      const main = document.createElement('span'); main.textContent = p.mainText ? p.mainText.text : p.text.text;
+      const sub = document.createElement('small'); sub.textContent = p.secondaryText ? p.secondaryText.text : '';
+      li.append(main, sub);
+      li.addEventListener('mousedown', (e) => { e.preventDefault(); choose(i); });
+      list.appendChild(li);
+    });
+    list.hidden = !items.length; areaEl.setAttribute('aria-expanded', String(!!items.length));
+    if (active >= 0) areaEl.setAttribute('aria-activedescendant', 'bk-ac-' + active); else areaEl.removeAttribute('aria-activedescendant');
+  }
+  async function suggest() {
+    const q = areaEl.value.trim();
+    if (!places || q.length < 3) return closeList();
+    const my = ++reqNo;
+    try {
+      const { suggestions } = await places.AutocompleteSuggestion.fetchAutocompleteSuggestions({
+        input: q, includedRegionCodes: ['in'], sessionToken: session, language: 'en-IN', region: 'in',
+      });
+      if (my !== reqNo) return;
+      items = (suggestions || []).filter((s) => s.placePrediction).slice(0, 5); active = -1; render();
+    } catch (e) { closeList(); }
+  }
+  async function choose(i) {
+    const pred = items[i] && items[i].placePrediction;
+    closeList();
+    if (!pred) return;
+    areaEl.value = pred.text.text.replace(/,?\s*India$/, '');
+    try {
+      const place = pred.toPlace();
+      await place.fetchFields({ fields: ['addressComponents', 'formattedAddress'] });
+      session = new places.AutocompleteSessionToken(); // new session after each selection
+      const get = (t) => { const c = (place.addressComponents || []).find((x) => x.types.includes(t)); return c ? c.longText : ''; };
+      const pin = get('postal_code'), city = get('locality') || get('administrative_area_level_3') || get('administrative_area_level_2'), st = get('administrative_area_level_1');
+      // keep the area text short: drop city / state / PIN / country from the end
+      let area = (place.formattedAddress || areaEl.value).replace(/,?\s*India$/, '');
+      [pin, st, city].forEach((x) => { if (x) area = area.replace(new RegExp(',?\\s*' + x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\s+\\d{6})?\\s*$', 'i'), ''); });
+      area = area.replace(/,?\s*\d{6}\s*$/, '').trim();
+      if (area) areaEl.value = area;
+      if (city) { cityEl.value = city; auto.city = city; }
+      if (st) { stateEl.value = st; auto.state = st; }
+      if (pin) { pinEl.value = pin; pinMsg.textContent = ''; } else if (!pinEl.value) pinEl.focus();
+    } catch (e) {}
+  }
+  areaEl.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(suggest, 250); });
+  areaEl.addEventListener('keydown', (e) => {
+    if (list.hidden) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); active = (active + 1) % items.length; render(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); active = (active - 1 + items.length) % items.length; render(); }
+    else if (e.key === 'Enter' && active >= 0) { e.preventDefault(); choose(active); }
+    else if (e.key === 'Escape') closeList();
+  });
+  areaEl.addEventListener('blur', () => setTimeout(closeList, 150));
 
   const bar = document.querySelector('.bookbar'), sec = document.getElementById('book');
   if (bar && sec && 'IntersectionObserver' in window) {

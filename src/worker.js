@@ -89,7 +89,7 @@ function amount(env) { return parseInt(env.PRICE_INR || "1899", 10); }
 // Create tables automatically on first use (same as migrations/0001_bookings.sql).
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS bookings (id TEXT PRIMARY KEY, token TEXT NOT NULL, date TEXT NOT NULL, slot TEXT NOT NULL,
-    name TEXT NOT NULL, phone TEXT NOT NULL, address TEXT NOT NULL, pincode TEXT NOT NULL, cycle TEXT, notes TEXT,
+    name TEXT NOT NULL, phone TEXT NOT NULL, address TEXT NOT NULL, pincode TEXT NOT NULL, city TEXT, state TEXT, cycle TEXT, notes TEXT,
     amount INTEGER NOT NULL, status TEXT NOT NULL, utr TEXT, source TEXT, created_at TEXT NOT NULL, expires_at TEXT,
     paid_at TEXT, updated_at TEXT NOT NULL)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS one_booking_per_slot ON bookings(date, slot)
@@ -98,9 +98,15 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS bookings_by_status ON bookings(status)`,
 ];
 let schemaReady = null;
+const UPGRADES = ["ALTER TABLE bookings ADD COLUMN city TEXT", "ALTER TABLE bookings ADD COLUMN state TEXT"];
 function ensureSchema(env) {
   if (!schemaReady) {
-    schemaReady = env.DB.batch(SCHEMA.map((q) => env.DB.prepare(q))).catch((e) => { schemaReady = null; throw e; });
+    schemaReady = (async () => {
+      await env.DB.batch(SCHEMA.map((q) => env.DB.prepare(q)));
+      for (const q of UPGRADES) {
+        try { await env.DB.prepare(q).run(); } catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
+      }
+    })().catch((e) => { schemaReady = null; throw e; });
   }
   return schemaReady;
 }
@@ -108,6 +114,28 @@ function ensureSchema(env) {
 async function expireHolds(env) {
   await env.DB.prepare("UPDATE bookings SET status='expired', updated_at=?1 WHERE status='pending' AND expires_at < ?1")
     .bind(isoNow()).run();
+}
+
+// ---- PIN code → city / state (India Post data via api.postalpincode.in, cached 30 days) ----
+async function pincodeLookup(pin, ctx) {
+  const cache = caches.default;
+  const key = new Request(`https://pincode.cache/${pin}`);
+  const hit = await cache.match(key);
+  if (hit) return hit;
+  let out = { pincode: pin, found: false };
+  try {
+    const r = await fetch(`https://api.postalpincode.in/pincode/${pin}`, { cf: { cacheTtl: 86400 } });
+    const j = await r.json();
+    const offices = (j && j[0] && j[0].PostOffice) || [];
+    if (offices.length) {
+      const o = offices[0];
+      out = { pincode: pin, found: true, city: o.District || o.Block || "", state: o.State || "",
+        areas: [...new Set(offices.map((x) => x.Name))].slice(0, 25) };
+    }
+  } catch (e) { console.log("pincode lookup failed", String(e)); }
+  const res = json(out, 200, { "cache-control": "public, max-age=2592000" });
+  if (out.found && ctx && ctx.waitUntil) ctx.waitUntil(cache.put(key, res.clone()));
+  return res;
 }
 
 // ---- public API ----
@@ -137,6 +165,7 @@ function getConfig(env) {
     upiId: env.UPI_ID || "",
     upiName: env.UPI_NAME || "Dr. Sarwan Diagnostic Labs",
     upiQr: env.UPI_QR_STRING || "",
+    mapsKey: env.GOOGLE_MAPS_KEY || "",
     holdMinutes: HOLD_MIN,
     dates,
   });
@@ -147,11 +176,14 @@ async function createBooking(env, req) {
   try { b = await req.json(); } catch { return bad("Invalid request"); }
   if (b.website) return json({ ok: true }); // honeypot: silently ignore bots
   const name = clean(b.name, 80), address = clean(b.address, 300), pincode = clean(b.pincode, 6);
+  const city = clean(b.city, 60), state = clean(b.state, 40);
   const phone = normPhone(b.phone), date = clean(b.date, 10), slot = clean(b.slot, 5);
   if (name.length < 2) return bad("Please enter the patient's name.");
   if (!phone) return bad("Please enter a valid 10-digit mobile number.");
   if (address.length < 8) return bad("Please enter the full address for sample collection.");
   if (!/^\d{6}$/.test(pincode)) return bad("Please enter a valid 6-digit pincode.");
+  if (city.length < 2) return bad("Please enter your city / town.");
+  if (state.length < 2) return bad("Please enter your state.");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !isBookable(date, slot)) return bad("That slot is no longer available. Please pick another.", 409);
 
   await expireHolds(env);
@@ -159,10 +191,10 @@ async function createBooking(env, req) {
   const now = isoNow(), expires = new Date(Date.now() + HOLD_MIN * 60000).toISOString();
   try {
     await env.DB.prepare(
-      `INSERT INTO bookings (id, token, date, slot, name, phone, address, pincode, cycle, notes, amount, status, source, created_at, expires_at, updated_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'pending', ?12, ?13, ?14, ?13)`
+      `INSERT INTO bookings (id, token, date, slot, name, phone, address, pincode, city, state, cycle, notes, amount, status, source, created_at, expires_at, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?15, ?16, ?9, ?10, ?11, 'pending', ?12, ?13, ?14, ?13)`
     ).bind(id, token, date, slot, name, phone, address, pincode, clean(b.cycle, 60), clean(b.notes, 300),
-      amount(env), clean(b.source, 300), now, expires).run();
+      amount(env), clean(b.source, 300), now, expires, city, state).run();
   } catch (e) {
     if (/UNIQUE/i.test(String(e))) return bad("Sorry, someone just booked that slot. Please pick another.", 409);
     throw e;
@@ -207,7 +239,7 @@ async function adminList(env, url) {
   const to = url.searchParams.get("to") || addDays(today, BOOK_DAYS_AHEAD);
   const includeInactive = url.searchParams.get("all") === "1";
   const { results } = await env.DB.prepare(
-    `SELECT id, date, slot, name, phone, address, pincode, cycle, notes, amount, status, utr, source, created_at, paid_at, updated_at
+    `SELECT id, date, slot, name, phone, address, pincode, city, state, cycle, notes, amount, status, utr, source, created_at, paid_at, updated_at
      FROM bookings WHERE date BETWEEN ?1 AND ?2 ${includeInactive ? "" : "AND status NOT IN ('expired')"}
      ORDER BY date, slot, created_at`
   ).bind(from, to).all();
@@ -254,9 +286,9 @@ async function adminCsv(env, url) {
   const from = url.searchParams.get("from") || addDays(today, -30);
   const to = url.searchParams.get("to") || addDays(today, BOOK_DAYS_AHEAD);
   const { results } = await env.DB.prepare(
-    "SELECT id,date,slot,status,name,phone,address,pincode,cycle,notes,amount,utr,source,created_at,paid_at FROM bookings WHERE date BETWEEN ?1 AND ?2 AND status!='blocked' ORDER BY date, slot"
+    "SELECT id,date,slot,status,name,phone,address,pincode,city,state,cycle,notes,amount,utr,source,created_at,paid_at FROM bookings WHERE date BETWEEN ?1 AND ?2 AND status!='blocked' ORDER BY date, slot"
   ).bind(from, to).all();
-  const cols = ["id", "date", "slot", "status", "name", "phone", "address", "pincode", "cycle", "notes", "amount", "utr", "source", "created_at", "paid_at"];
+  const cols = ["id", "date", "slot", "status", "name", "phone", "address", "pincode", "city", "state", "cycle", "notes", "amount", "utr", "source", "created_at", "paid_at"];
   const esc = (v) => {
     let s = String(v ?? "");
     if (/^[=+\-@]/.test(s)) s = "'" + s; // avoid spreadsheet formula injection
@@ -278,6 +310,8 @@ export default {
         await ensureSchema(env);
         if (p === "/api/config" && req.method === "GET") return getConfig(env);
         if (p === "/api/slots" && req.method === "GET") return getSlots(env, url);
+        let pm = p.match(/^\/api\/pincode\/(\d{6})$/);
+        if (pm && req.method === "GET") return pincodeLookup(pm[1], ctx);
         if (p === "/api/bookings" && req.method === "POST") return createBooking(env, req);
         let m = p.match(/^\/api\/bookings\/(DSL-[A-Z0-9]{6})\/paid$/);
         if (m && req.method === "POST") return submitPayment(env, req, m[1], ctx);

@@ -29,6 +29,19 @@ If a hold expires without payment, the slot is released automatically.
    - `ADMIN_PASSWORD` (type *Secret*) – password for https://drsarwantests.com/admin/
    (Secrets can only be added after the first deploy that includes `src/worker.js`.)
 
+## Address suggestions (Google Maps)
+City and state fill in automatically from the PIN code (India Post data, no key needed).
+For Google address suggestions while typing the area:
+1. Google Cloud Console → create a project → enable **Maps JavaScript API** and **Places API (New)**
+   (billing must be enabled on the project).
+2. Credentials → Create API key → restrict it: *Websites* `drsarwantests.com/*` and
+   `www.drsarwantests.com/*`; *APIs* Maps JavaScript API + Places API (New).
+3. Put the key in `GOOGLE_MAPS_KEY` in `wrangler.jsonc`, commit and push.
+
+## Paying on iPhone vs Android
+Android shows the system "choose UPI app" menu. iPhone has no menu, so the page shows separate
+Google Pay / PhonePe / Paytm / Other buttons, plus **Save QR image** for "scan from gallery".
+
 ## WhatsApp
 After paying, the customer taps **Send booking on WhatsApp**: WhatsApp opens with their booking
 details (ref, slot, name, mobile, address, UTR) already filled in, addressed to 8368143677.

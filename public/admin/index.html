@@ -181,7 +181,7 @@ function card(b){
   if(b.status!=='cancelled') acts.push(`<button class="btn warn sm" data-id="${b.id}" data-st="cancelled">Cancel & free slot</button>`);
   return `<div class="who"><div><span class="n">${esc(b.name)}</span><span class="pill st-${b.status}">${STATUS_TXT[b.status]||b.status}</span></div>
   <div><a href="tel:+91${esc(b.phone)}">+91 ${esc(b.phone)}</a> · <a href="${wa}" target="_blank" rel="noopener">WhatsApp confirmation</a></div>
-  <div class="meta">${esc(b.address)}, ${esc(b.pincode)}</div>
+  <div class="meta">${esc(b.address)}${b.city?`, ${esc(b.city)}`:''}${b.state?`, ${esc(b.state)}`:''} – ${esc(b.pincode)} · <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([b.address,b.city,b.state,b.pincode].filter(Boolean).join(', '))}" target="_blank" rel="noopener">Map</a></div>
   <div class="meta">Ref ${esc(b.id)} · Rs. ${b.amount}${b.utr?` · UTR <b>${esc(b.utr)}</b>`:''}${b.cycle?` · ${esc(b.cycle)}`:''}${b.notes?` · Note: ${esc(b.notes)}`:''}</div>
   <div class="acts">${acts.join('')}</div></div>`;
 }
