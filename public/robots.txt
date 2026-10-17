@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://drsarwantests.com/sitemap.xml
