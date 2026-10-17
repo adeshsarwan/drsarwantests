@@ -50,7 +50,6 @@ details[open] .faq-plus{transform:rotate(45deg)}
 .bk-qr{flex:none;width:180px;height:180px;border:1px solid #dfe8ef;border-radius:16px;overflow:hidden;background:#fff;display:flex;align-items:center;justify-content:center}
 .bk-qr svg{width:100%;height:100%}
 .bk-timer{margin:10px 0 0;font-size:14px;color:#b23f28}
-.bk-apps{display:grid;grid-template-columns:1fr 1fr;gap:8px}.bk-app{display:flex;align-items:center;justify-content:center;min-height:48px;border-radius:12px;border:1.5px solid #1f6977;color:#1f6977;font-weight:800;text-decoration:none;font-family:Archivo,sans-serif;font-size:15.5px;background:#fff}.bk-app:active{background:#e6f3f1}
 [hidden]{display:none !important}.bk-ac{position:relative}.bk-ac-list{position:absolute;left:0;right:0;top:100%;z-index:20;margin:4px 0 0;padding:6px;list-style:none;background:#fff;border:1px solid #c7d4de;border-radius:12px;box-shadow:0 10px 24px rgba(20,40,70,.15);max-height:280px;overflow:auto}.bk-ac-list li{padding:10px 12px;border-radius:8px;cursor:pointer;font-size:15px;line-height:1.3}.bk-ac-list li small{display:block;color:#5a6880;font-size:13px}.bk-ac-list li[aria-selected="true"],.bk-ac-list li:hover{background:#eef6f9}
 @media (max-width:760px){.bk-qr{width:150px;height:150px}}
 </style>
@@ -324,12 +323,6 @@ details[open] .faq-plus{transform:rotate(45deg)}
 <p id="bk-amount-note" hidden style="margin: 8px 0 0; background: #fff4d6; color: #6b4700; border-radius: 10px; padding: 8px 12px; font-weight: 700; font-size: 15px">Enter amount Rs. <span class="bk-amt">1899</span> in your UPI app</p>
 <p id="bk-pay-hint" style="margin: 8px 0 12px; color: #3b4a68; font-size: 15px">Scan this QR with any UPI app on your phone.</p>
 <a id="bk-upi-link" class="bk-btn bk-btn-alt" href="#" hidden>Pay with UPI app</a>
-<div id="bk-apps" class="bk-apps" hidden>
-<a class="bk-app" data-app="gpay" href="#">Google Pay</a>
-<a class="bk-app" data-app="phonepe" href="#">PhonePe</a>
-<a class="bk-app" data-app="paytm" href="#">Paytm</a>
-<a class="bk-app" data-app="other" href="#">Other UPI app</a>
-</div>
 <a id="bk-save-qr" class="bk-link" href="/assets/upi-qr.png" download="DrSarwan-UPI-QR.png" style="display: inline-block; margin-top: 10px">Save QR image</a><span class="bk-muted" style="font-size: 13px"> · then use “Scan from gallery” in your UPI app</span>
 <p style="margin: 12px 0 0; font-size: 14px; color: #3b4a68">UPI ID: <strong id="bk-upi-id" style="word-break: break-all"></strong> <button type="button" class="bk-link" id="bk-copy">Copy</button></p>
 <p class="bk-timer">Slot held for <strong id="bk-countdown">15:00</strong></p>

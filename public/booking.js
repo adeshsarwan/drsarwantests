@@ -103,20 +103,11 @@
       const fixed = !!b.upiQr;
       const link = fixed ? b.upiQr : `upi://pay?pa=${upiId.replace(/[^A-Za-z0-9.@_-]/g, "")}&pn=${encodeURIComponent(b.upiName)}&am=${b.amount}.00&cu=INR&tn=${encodeURIComponent('Home test ' + b.id)}`;
       $('#bk-amount-note').hidden = !fixed;
-      const ua = navigator.userAgent || '';
-      const isIOS = /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
-      const isAndroid = /Android/i.test(ua);
-      const q = link.slice(link.indexOf('?') + 1);
-      const schemes = { gpay: `gpay://upi/pay?${q}`, phonepe: `phonepe://pay?${q}`, paytm: `paytmmp://pay?${q}`, other: `upi://pay?${q}` };
-      if (isIOS) {
-        // iPhone has no UPI app chooser, so offer each app directly.
-        document.querySelectorAll('.bk-app').forEach((a) => { a.href = schemes[a.dataset.app]; });
-        $('#bk-apps').hidden = false;
-        $('#bk-pay-hint').textContent = 'Tap your UPI app to pay, or scan the QR from another phone.';
-      } else if (isAndroid) {
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '') || navigator.maxTouchPoints > 1;
+      if (isMobile) {
         $('#bk-upi-link').href = link;
         $('#bk-upi-link').hidden = false;
-        $('#bk-pay-hint').textContent = 'Tap the button and choose your UPI app, or scan the QR.';
+        $('#bk-pay-hint').textContent = 'Tap the button to open your UPI app, or scan the QR.';
       }
       $('#bk-upi-id').textContent = upiId;
       if (fixed) {
