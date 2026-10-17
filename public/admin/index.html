@@ -54,6 +54,16 @@ button,select,input{font:inherit}
 .err{color:#b23f28;font-weight:600;min-height:1em}
 .toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:#1b2a4e;color:#fff;padding:10px 16px;border-radius:12px;font-weight:600;display:none;z-index:10}
 .legend{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.inp{font:inherit;font-size:14px;padding:8px 10px;border:1px solid #c7d4de;border-radius:10px;background:#fff;color:#1b2a4e;min-height:38px}
+.tbl-wrap{overflow-x:auto;margin-top:14px;border:1px solid #e1e8ee;border-radius:12px}
+.tbl{width:100%;border-collapse:collapse;font-size:14px;min-width:980px}
+.tbl th{text-align:left;background:#f4f7fa;color:#3b4a68;font-weight:700;font-size:12.5px;text-transform:uppercase;letter-spacing:.4px;padding:10px 12px;border-bottom:1px solid #e1e8ee;white-space:nowrap}
+.tbl td{padding:10px 12px;border-bottom:1px solid #eef2f5;vertical-align:top}
+.tbl tr:last-child td{border-bottom:0}
+.tbl .num{text-align:right;white-space:nowrap}
+.tbl td.addr{max-width:280px}
+.tbl .st{font:inherit;font-size:13px;font-weight:700;border-radius:999px;padding:4px 8px;border:1px solid transparent;cursor:pointer}
+.tbl small{display:block;color:#5a6880;font-size:12px}.tbl a{color:#1f6977}
 @media (max-width:640px){.slot{grid-template-columns:1fr}}
 </style>
 </head>
@@ -82,6 +92,23 @@ button,select,input{font:inherit}
 
 <main class="wrap" style="padding-bottom:40px">
 <div class="stats" style="margin-top:16px" id="stats"></div>
+
+<div class="card">
+<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+<h2 style="font-family:Archivo,sans-serif;font-size:18px;margin:0">All bookings</h2>
+<div style="display:flex;gap:8px;flex-wrap:wrap">
+<label class="meta" for="fStatus" style="align-self:center">Status</label>
+<select id="fStatus" class="inp"><option value="active">All active</option><option value="payment_submitted">Paid – verify</option><option value="pending">Awaiting payment</option><option value="confirmed">Confirmed</option><option value="collected">Collected</option><option value="cancelled">Cancelled</option><option value="expired">Expired (unpaid)</option><option value="all">Everything</option></select>
+<select id="fWhen" class="inp" aria-label="Date range"><option value="upcoming">Upcoming</option><option value="past">Past</option><option value="any">All dates</option></select>
+<input id="fSearch" class="inp" type="search" placeholder="Search name, phone, PIN…" aria-label="Search bookings">
+</div>
+</div>
+<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>Slot</th><th>Name</th><th>Phone</th><th>Address</th><th>City</th><th>State</th><th class="num">Amount</th><th>Status</th></tr></thead>
+<tbody id="tbody"></tbody>
+</table></div>
+<p class="meta" id="tblCount" style="margin:10px 0 0"></p>
+</div>
 
 <div class="card">
 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
@@ -121,20 +148,20 @@ const fmt=(d,o)=>new Date(d+'T00:00:00Z').toLocaleDateString('en-IN',{timeZone:'
 function toast(m){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(t._t);t._t=setTimeout(()=>t.style.display='none',2600)}
 async function api(path,opts={}){
   const r=await fetch(path,{...opts,headers:{'content-type':'application/json','x-admin-key':KEY,...(opts.headers||{})}});
-  if(r.status===401){logout();throw new Error('Wrong password')}
+  if(r.status===401||r.status===503){const j=await r.json().catch(()=>({}));logout();throw new Error(j.error||'Wrong password')}
   const j=await r.json().catch(()=>({}));
   if(!r.ok) throw new Error(j.error||'Request failed');
   return j;
 }
 function logout(){KEY='';sessionStorage.removeItem('dsl_admin');$('#app').hidden=true;$('#login').hidden=false}
 $('#logout').onclick=logout;
-$('#loginForm').onsubmit=async e=>{e.preventDefault();KEY=$('#pw').value;$('#loginErr').textContent='';
+$('#loginForm').onsubmit=async e=>{e.preventDefault();KEY=$('#pw').value.trim();$('#loginErr').textContent='';
   try{await load();sessionStorage.setItem('dsl_admin',KEY);$('#login').hidden=true;$('#app').hidden=false}catch(err){$('#loginErr').textContent=err.message}};
 
 async function load(){
-  const today=ist(), from=$('#showPast')&&$('#showPast').checked?addDays(today,-14):today;
-  data=await api(`/api/admin/bookings?from=${from}&to=${addDays(today,14)}&all=1`);
-  if(!sel||sel<data.from||sel>data.to) sel=today;
+  const today=ist();
+  data=await api(`/api/admin/bookings?from=${addDays(today,-90)}&to=${addDays(today,14)}&all=1`);
+  if(!sel||sel<addDays(today,-14)||sel>data.to) sel=today;
   render();
 }
 function active(b){return !['cancelled','expired'].includes(b.status)}
@@ -152,7 +179,8 @@ function render(){
     ['Rs. '+confirmedUp.reduce((a,b)=>a+(b.amount||0),0).toLocaleString('en-IN'),'Confirmed revenue (upcoming)'],
   ].map(([v,l])=>`<div class="stat"><b>${v}</b><span>${l}</span></div>`).join('');
   // days
-  const days=[];for(let d=data.from;d<=data.to;d=addDays(d,1))days.push(d);
+  const dFrom=$('#showPast').checked?addDays(today,-14):today;
+  const days=[];for(let d=dFrom;d<=data.to;d=addDays(d,1))days.push(d);
   $('#days').innerHTML=days.map(d=>{const n=data.bookings.filter(b=>b.date===d&&active(b)&&b.status!=='blocked').length;
     return `<button class="day" data-d="${d}" aria-pressed="${d===sel}"><small>${fmt(d,{weekday:'short'})}</small><b>${fmt(d,{day:'numeric'})}</b><small>${fmt(d,{month:'short'})}</small>${n?`<span class="count">${n} booked</span>`:''}</button>`}).join('');
   document.querySelectorAll('.day').forEach(b=>b.onclick=()=>{sel=b.dataset.d;render()});
@@ -169,9 +197,42 @@ function render(){
     const hist=old.length?`<details class="meta" style="margin-top:6px"><summary>${old.length} cancelled/expired</summary>${old.map(b=>`<div>${esc(b.name)} · ${esc(b.phone)} · <span class="pill st-${b.status}">${STATUS_TXT[b.status]}</span>${b.utr?` · UTR ${esc(b.utr)} <button class="btn ghost sm" data-id="${b.id}" data-st="confirmed">Restore & confirm</button>`:''}</div>`).join('')}</details>`:'';
     return `<div class="slot"><div class="t">${esc(s.label)}</div><div>${body}${hist}</div></div>`}).join('');
   $('#attention').innerHTML=toVerify.length?toVerify.map(b=>`<div class="slot"><div class="t">${fmt(b.date,{day:'numeric',month:'short'})}<br><span class="meta">${esc(data.slots.find(s=>s.time===b.slot)?.label||b.slot)}</span></div><div>${card(b)}</div></div>`).join(''):'<p class="meta" style="margin:0">Nothing to verify right now.</p>';
+  renderTable();
   document.querySelectorAll('[data-st]').forEach(b=>b.onclick=()=>setStatus(b.dataset.id,b.dataset.st));
   document.querySelectorAll('[data-block]').forEach(b=>b.onclick=()=>block(b.dataset.block,true));
   document.querySelectorAll('[data-unblock]').forEach(b=>b.onclick=()=>block(b.dataset.unblock,false));
+}
+
+const ST_COLORS={pending:['#fff4d6','#8a5a00'],payment_submitted:['#ffe3d9','#a33a1f'],confirmed:['#dff3ea','#17694a'],collected:['#e1e9f7','#2a4a8a'],cancelled:['#eef1f4','#5a6880'],expired:['#eef1f4','#5a6880']};
+function renderTable(){
+  if(!data) return;
+  const today=ist(), st=$('#fStatus').value, when=$('#fWhen').value, q=$('#fSearch').value.trim().toLowerCase();
+  let rows=data.bookings.filter(b=>b.status!=='blocked');
+  if(st==='active') rows=rows.filter(active); else if(st!=='all') rows=rows.filter(b=>b.status===st);
+  if(when==='upcoming') rows=rows.filter(b=>b.date>=today); else if(when==='past') rows=rows.filter(b=>b.date<today);
+  if(q) rows=rows.filter(b=>[b.name,b.phone,b.address,b.city,b.state,b.pincode,b.id,b.utr].join(' ').toLowerCase().includes(q));
+  rows.sort((a,b)=>when==='past'?(b.date+b.slot).localeCompare(a.date+a.slot):(a.date+a.slot).localeCompare(b.date+b.slot));
+  const label=t=>(data.slots.find(s=>s.time===t)||{}).label||t;
+  $('#tbody').innerHTML=rows.length?rows.map(b=>{
+    const [bg,fg]=ST_COLORS[b.status]||['#eef1f4','#5a6880'];
+    const opts=['pending','payment_submitted','confirmed','collected','cancelled','expired'].filter(x=>x===b.status||['confirmed','collected','cancelled'].includes(x));
+    return `<tr>
+<td style="white-space:nowrap"><b>${fmt(b.date,{weekday:'short',day:'numeric',month:'short'})}</b><small>${esc(label(b.slot))}</small><small>${esc(b.id)}</small></td>
+<td><b>${esc(b.name)}</b>${b.cycle?`<small>${esc(b.cycle)}</small>`:''}</td>
+<td style="white-space:nowrap"><a href="tel:+91${esc(b.phone)}">${esc(b.phone)}</a><small><a href="https://wa.me/91${esc(b.phone)}" target="_blank" rel="noopener">WhatsApp</a></small></td>
+<td class="addr">${esc(b.address)}<small>PIN ${esc(b.pincode)} · <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([b.address,b.city,b.state,b.pincode].filter(Boolean).join(', '))}" target="_blank" rel="noopener">Map</a></small>${b.notes?`<small>Note: ${esc(b.notes)}</small>`:''}</td>
+<td>${esc(b.city||'–')}</td>
+<td>${esc(b.state||'–')}</td>
+<td class="num"><b>Rs. ${Number(b.amount||0).toLocaleString('en-IN')}</b>${b.utr?`<small>UTR ${esc(b.utr)}</small>`:''}</td>
+<td><select class="st" data-sel="${b.id}" aria-label="Status for ${esc(b.name)}" style="background:${bg};color:${fg}">${opts.map(o=>`<option value="${o}" ${o===b.status?'selected':''} ${o===b.status?'':''}>${STATUS_TXT[o]}</option>`).join('')}</select></td>
+</tr>`}).join(''):'<tr><td colspan="8" class="meta" style="padding:18px">No bookings match.</td></tr>';
+  $('#tblCount').textContent=`${rows.length} booking${rows.length===1?'':'s'} · Rs. ${rows.filter(b=>['payment_submitted','confirmed','collected'].includes(b.status)).reduce((a,b)=>a+(b.amount||0),0).toLocaleString('en-IN')} paid / submitted`;
+  document.querySelectorAll('[data-sel]').forEach(sel=>sel.onchange=async()=>{
+    const prev=data.bookings.find(b=>b.id===sel.dataset.sel).status;
+    if(['pending','payment_submitted','expired'].includes(sel.value)&&sel.value!==prev){sel.value=prev;return}
+    if(sel.value==='cancelled'&&!confirm('Cancel this booking and free the slot?')){sel.value=prev;return}
+    try{await api(`/api/admin/bookings/${sel.dataset.sel}/status`,{method:'POST',body:JSON.stringify({status:sel.value})});toast('Status updated');await load()}catch(e){toast(e.message);sel.value=prev}
+  });
 }
 function card(b){
   const wa=`https://wa.me/91${b.phone}?text=`+encodeURIComponent(`Hi ${b.name}, your Dr. Sarwan Diagnostic Labs home test (Ref ${b.id}) is confirmed for ${fmt(b.date,{weekday:'short',day:'numeric',month:'short'})}, ${data.slots.find(s=>s.time===b.slot)?.label||b.slot}. Please fast for 10–12 hours before collection (water is fine).`);
@@ -193,7 +254,8 @@ async function block(slot,on){
   try{await api('/api/admin/block',{method:'POST',body:JSON.stringify({date:sel,slot,block:on})});toast(on?'Slot blocked':'Slot unblocked');await load()}catch(e){toast(e.message)}
 }
 $('#refresh').onclick=()=>load().then(()=>toast('Refreshed'));
-$('#showPast').onchange=load;
+$('#showPast').onchange=render;
+['fStatus','fWhen'].forEach(id=>$('#'+id).onchange=renderTable);$('#fSearch').oninput=renderTable;
 $('#csv').onclick=async()=>{try{const r=await fetch('/api/admin/export.csv',{headers:{'x-admin-key':KEY}});if(!r.ok)throw new Error('Export failed');
   const u=URL.createObjectURL(await r.blob());const a=document.createElement('a');a.href=u;a.download=`bookings_${ist()}.csv`;a.click();URL.revokeObjectURL(u)}catch(e){toast(e.message)}};
 setInterval(()=>{if(KEY&&!document.hidden)load().catch(()=>{})},60000);

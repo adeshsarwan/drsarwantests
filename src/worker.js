@@ -229,7 +229,8 @@ async function submitPayment(env, req, id, ctx) {
 
 // ---- admin API ----
 function isAdmin(env, req) {
-  return !!env.ADMIN_PASSWORD && safeEqual(req.headers.get("x-admin-key"), env.ADMIN_PASSWORD);
+  const want = String(env.ADMIN_PASSWORD || "").trim();
+  return !!want && safeEqual(String(req.headers.get("x-admin-key") || "").trim(), want);
 }
 
 async function adminList(env, url) {
@@ -317,7 +318,8 @@ export default {
         if (m && req.method === "POST") return submitPayment(env, req, m[1], ctx);
 
         if (p.startsWith("/api/admin/")) {
-          if (!isAdmin(env, req)) return bad("Unauthorized", 401);
+          if (!String(env.ADMIN_PASSWORD || "").trim()) return bad("Admin password is not set up yet. In Cloudflare add ADMIN_PASSWORD as a Secret.", 503);
+          if (!isAdmin(env, req)) return bad("Wrong password", 401);
           if (p === "/api/admin/bookings" && req.method === "GET") return adminList(env, url);
           if (p === "/api/admin/export.csv" && req.method === "GET") return adminCsv(env, url);
           if (p === "/api/admin/block" && req.method === "POST") return adminBlock(env, req);
