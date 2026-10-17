@@ -110,52 +110,6 @@ async function expireHolds(env) {
     .bind(isoNow()).run();
 }
 
-// ---- WhatsApp alert to the lab ----
-export function adminMessage(b) {
-  return [
-    "🩸 *New home test booking – payment submitted*",
-    `Ref: ${b.id}`,
-    `Slot: ${prettyDate(b.date)} · ${slotLabel(b.slot)}`,
-    `Name: ${b.name}`,
-    `Mobile: +91 ${b.phone}`,
-    `Address: ${b.address}, ${b.pincode}`,
-    b.cycle ? `Cycle: ${b.cycle}` : null,
-    `Amount: Rs. ${b.amount}`,
-    `UPI UTR: ${b.utr}`,
-    "",
-    "Please verify the payment in your UPI app, then mark it Confirmed in the admin page.",
-  ].filter((x) => x !== null).join("\n");
-}
-
-async function notifyAdmin(env, text) {
-  const to = String(env.WA_ADMIN_PHONE || "").replace(/\D/g, "");
-  const tasks = [];
-  if (to && env.WA_CLOUD_TOKEN && env.WA_CLOUD_PHONE_ID) {
-    // Meta WhatsApp Cloud API. Free-form text only delivers inside a 24h customer-service window;
-    // for reliable delivery set WA_CLOUD_TEMPLATE to an approved template with one {{1}} body parameter.
-    const body = env.WA_CLOUD_TEMPLATE
-      ? { messaging_product: "whatsapp", to, type: "template",
-          template: { name: env.WA_CLOUD_TEMPLATE, language: { code: env.WA_CLOUD_TEMPLATE_LANG || "en" },
-            components: [{ type: "body", parameters: [{ type: "text", text: text.replace(/\n+/g, " | ").slice(0, 1000) }] }] } }
-      : { messaging_product: "whatsapp", to, type: "text", text: { body: text } };
-    tasks.push(fetch(`https://graph.facebook.com/v21.0/${env.WA_CLOUD_PHONE_ID}/messages`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${env.WA_CLOUD_TOKEN}`, "content-type": "application/json" },
-      body: JSON.stringify(body),
-    }));
-  } else if (to && env.CALLMEBOT_APIKEY) {
-    // CallMeBot: free alerts to your own WhatsApp number (see README for the one-time activation).
-    const u = `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent("+" + to)}&text=${encodeURIComponent(text)}&apikey=${encodeURIComponent(env.CALLMEBOT_APIKEY)}`;
-    tasks.push(fetch(u));
-  }
-  const results = await Promise.allSettled(tasks);
-  for (const r of results) {
-    if (r.status === "rejected") console.log("whatsapp notify failed", String(r.reason));
-    else if (!r.value.ok) console.log("whatsapp notify http", r.value.status, (await r.value.text()).slice(0, 300));
-  }
-  return tasks.length > 0;
-}
-
 // ---- public API ----
 async function getSlots(env, url) {
   const date = url.searchParams.get("date") || "";
@@ -238,9 +192,6 @@ async function submitPayment(env, req, id, ctx) {
     if (/UNIQUE/i.test(String(e))) return bad("Your payment hold expired and the slot was taken. Please call 8368143677 with your UTR and we'll rebook you.", 409);
     throw e;
   }
-  const booking = { ...row, utr, status: "payment_submitted" };
-  const p = notifyAdmin(env, adminMessage(booking));
-  if (ctx && ctx.waitUntil) ctx.waitUntil(p); else await p;
   return json({ ok: true, status: "payment_submitted", id, date: row.date, dateLabel: prettyDate(row.date), slotLabel: slotLabel(row.slot) });
 }
 
@@ -316,11 +267,6 @@ async function adminCsv(env, url) {
     "content-disposition": `attachment; filename="bookings_${from}_to_${to}.csv"`, "cache-control": "no-store" } });
 }
 
-async function adminTestWhatsApp(env) {
-  const sent = await notifyAdmin(env, "✅ Test alert from drsarwantests.com booking system.");
-  return sent ? json({ ok: true }) : bad("WhatsApp is not configured yet (set WA_ADMIN_PHONE and CALLMEBOT_APIKEY).", 400);
-}
-
 // ---- router ----
 export default {
   async fetch(req, env, ctx) {
@@ -341,7 +287,6 @@ export default {
           if (p === "/api/admin/bookings" && req.method === "GET") return adminList(env, url);
           if (p === "/api/admin/export.csv" && req.method === "GET") return adminCsv(env, url);
           if (p === "/api/admin/block" && req.method === "POST") return adminBlock(env, req);
-          if (p === "/api/admin/test-whatsapp" && req.method === "POST") return adminTestWhatsApp(env);
           m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/status$/);
           if (m && req.method === "POST") return adminSetStatus(env, req, m[1]);
         }

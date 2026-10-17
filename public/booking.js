@@ -79,6 +79,7 @@
     if (!/^\d{6}$/.test(data.pincode || '')) { err.textContent = 'Please enter a valid 6-digit pincode.'; $('#bk-pin').focus(); return; }
     btn.disabled = true; btn.dataset.t = btn.textContent; btn.textContent = 'Reserving your slot…';
     try {
+      state.form = data;
       state.booking = await api('/api/bookings', { method: 'POST', body: JSON.stringify({ ...data, date: state.date, slot: state.slot, source }) });
       if (window.gtag) gtag('event', 'begin_checkout', { value: state.booking.amount, currency: 'INR' });
       startPayment();
@@ -136,7 +137,19 @@
       clearInterval(state.timer);
       $('#bk-done-ref').textContent = b.id;
       $('#bk-done-slot').textContent = `${r.dateLabel || b.dateLabel} · ${r.slotLabel || b.slotLabel}`;
-      $('#bk-done-wa').href = 'https://wa.me/918368143677?text=' + encodeURIComponent(`Hi, I booked a home test. Ref ${b.id}, ${b.dateLabel} ${b.slotLabel}. UTR ${utr}.`);
+      const f = state.form || {};
+      const msg = [
+        'Hi Dr. Sarwan Diagnostic Labs, I have booked the Hormone & Fertility Panel home test and paid.',
+        `Booking Ref: ${b.id}`,
+        `Slot: ${b.dateLabel}, ${b.slotLabel}`,
+        `Name: ${f.name || ''}`,
+        `Mobile: ${f.phone || ''}`,
+        `Address: ${f.address || ''}, ${f.pincode || ''}`,
+        f.cycle ? `Cycle: ${f.cycle}` : '',
+        `Amount paid: Rs. ${b.amount}`,
+        `UPI UTR: ${utr}`,
+      ].filter(Boolean).join('\n');
+      $('#bk-done-wa').href = 'https://wa.me/918368143677?text=' + encodeURIComponent(msg);
       if (window.gtag) gtag('event', 'purchase', { transaction_id: b.id, value: b.amount, currency: 'INR' });
       show(4);
     } catch (e) { err.textContent = e.message; }

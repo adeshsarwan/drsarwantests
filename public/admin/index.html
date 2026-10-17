@@ -76,7 +76,6 @@ button,select,input{font:inherit}
 <div style="display:flex;gap:8px;flex-wrap:wrap">
 <button class="btn ghost sm" id="refresh">Refresh</button>
 <button class="btn ghost sm" id="csv">Export CSV</button>
-<button class="btn ghost sm" id="testWa">Test WhatsApp alert</button>
 <button class="btn ghost sm" id="logout">Sign out</button>
 </div>
 </div></header>
@@ -195,7 +194,6 @@ async function block(slot,on){
 }
 $('#refresh').onclick=()=>load().then(()=>toast('Refreshed'));
 $('#showPast').onchange=load;
-$('#testWa').onclick=async()=>{try{await api('/api/admin/test-whatsapp',{method:'POST'});toast('Test alert sent')}catch(e){toast(e.message)}};
 $('#csv').onclick=async()=>{try{const r=await fetch('/api/admin/export.csv',{headers:{'x-admin-key':KEY}});if(!r.ok)throw new Error('Export failed');
   const u=URL.createObjectURL(await r.blob());const a=document.createElement('a');a.href=u;a.download=`bookings_${ist()}.csv`;a.click();URL.revokeObjectURL(u)}catch(e){toast(e.message)}};
 setInterval(()=>{if(KEY&&!document.hidden)load().catch(()=>{})},60000);
