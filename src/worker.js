@@ -96,6 +96,7 @@ const SCHEMA = [
     WHERE status IN ('pending', 'payment_submitted', 'confirmed', 'collected', 'blocked')`,
   `CREATE INDEX IF NOT EXISTS bookings_by_date ON bookings(date, slot)`,
   `CREATE INDEX IF NOT EXISTS bookings_by_status ON bookings(status)`,
+  `CREATE TABLE IF NOT EXISTS payment_proofs (booking_id TEXT PRIMARY KEY, mime TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL)`,
 ];
 let schemaReady = null;
 const UPGRADES = ["ALTER TABLE bookings ADD COLUMN city TEXT", "ALTER TABLE bookings ADD COLUMN state TEXT"];
@@ -203,27 +204,48 @@ async function createBooking(env, req) {
     upiId: env.UPI_ID || "", upiName: env.UPI_NAME || "Dr. Sarwan Diagnostic Labs", upiQr: env.UPI_QR_STRING || "" }, 201);
 }
 
+const MAX_SHOT_CHARS = 1_400_000; // ~1 MB image after base64; the browser compresses before upload
+
 async function submitPayment(env, req, id, ctx) {
   let b;
   try { b = await req.json(); } catch { return bad("Invalid request"); }
   const utr = String(b.utr || "").replace(/\s/g, "");
-  if (!/^[A-Za-z0-9]{10,22}$/.test(utr)) return bad("Please enter the 12-digit UPI transaction ID (UTR) from your payment app.");
+  if (utr && !/^[A-Za-z0-9]{10,22}$/.test(utr)) return bad("That doesn't look like a UPI transaction ID. You can leave it empty and just upload the screenshot.");
+  let shot = null;
+  if (b.screenshot) {
+    const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(b.screenshot));
+    if (!m) return bad("Please upload the screenshot as an image (JPG or PNG).");
+    if (m[2].length > MAX_SHOT_CHARS) return bad("That image is too large. Please upload a screenshot instead of a photo.");
+    shot = { mime: m[1], data: m[2] };
+  }
+  if (!shot && !utr) return bad("Please upload your payment screenshot.");
   const row = await env.DB.prepare("SELECT * FROM bookings WHERE id=?1").bind(id).first();
   if (!row || !safeEqual(row.token, b.token)) return bad("Booking not found.", 404);
-  if (["payment_submitted", "confirmed", "collected"].includes(row.status)) return json({ ok: true, status: row.status, already: true });
   if (row.status === "cancelled") return bad("This booking was cancelled. Please make a new booking.", 409);
 
   const now = isoNow();
+  const saveProof = async () => {
+    if (shot) await env.DB.prepare(
+      "INSERT INTO payment_proofs (booking_id, mime, data, created_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(booking_id) DO UPDATE SET mime=excluded.mime, data=excluded.data, created_at=excluded.created_at"
+    ).bind(id, shot.mime, shot.data, now).run();
+  };
+  if (["payment_submitted", "confirmed", "collected"].includes(row.status)) {
+    // already submitted: allow adding / replacing the screenshot or UTR
+    await saveProof();
+    if (utr) await env.DB.prepare("UPDATE bookings SET utr=?1, updated_at=?2 WHERE id=?3").bind(utr, now, id).run();
+    return json({ ok: true, status: row.status, id, dateLabel: prettyDate(row.date), slotLabel: slotLabel(row.slot) });
+  }
   try {
     // Accept late payment as long as nobody else has taken the slot in the meantime.
     const r = await env.DB.prepare(
       "UPDATE bookings SET status='payment_submitted', utr=?1, paid_at=?2, updated_at=?2 WHERE id=?3 AND status IN ('pending','expired')"
-    ).bind(utr, now, id).run();
+    ).bind(utr || null, now, id).run();
     if (!r.meta.changes) return bad("Could not update this booking.", 409);
   } catch (e) {
-    if (/UNIQUE/i.test(String(e))) return bad("Your payment hold expired and the slot was taken. Please call 8368143677 with your UTR and we'll rebook you.", 409);
+    if (/UNIQUE/i.test(String(e))) return bad("Your payment hold expired and the slot was taken. Please call 8368143677 and we'll rebook you.", 409);
     throw e;
   }
+  await saveProof();
   return json({ ok: true, status: "payment_submitted", id, date: row.date, dateLabel: prettyDate(row.date), slotLabel: slotLabel(row.slot) });
 }
 
@@ -240,11 +262,19 @@ async function adminList(env, url) {
   const to = url.searchParams.get("to") || addDays(today, BOOK_DAYS_AHEAD);
   const includeInactive = url.searchParams.get("all") === "1";
   const { results } = await env.DB.prepare(
-    `SELECT id, date, slot, name, phone, address, pincode, city, state, cycle, notes, amount, status, utr, source, created_at, paid_at, updated_at
+    `SELECT id, date, slot, name, phone, address, pincode, city, state, cycle, notes, amount, status, utr, source, created_at, paid_at, updated_at,
+       EXISTS(SELECT 1 FROM payment_proofs p WHERE p.booking_id = bookings.id) AS has_proof
      FROM bookings WHERE date BETWEEN ?1 AND ?2 ${includeInactive ? "" : "AND status NOT IN ('expired')"}
      ORDER BY date, slot, created_at`
   ).bind(from, to).all();
   return json({ from, to, slots: SLOTS.map((s) => ({ time: s, label: slotLabel(s) })), bookings: results });
+}
+
+async function adminScreenshot(env, id) {
+  const p = await env.DB.prepare("SELECT mime, data FROM payment_proofs WHERE booking_id=?1").bind(id).first();
+  if (!p) return bad("No screenshot for this booking", 404);
+  const bin = Uint8Array.from(atob(p.data), (c) => c.charCodeAt(0));
+  return new Response(bin, { headers: { "content-type": p.mime, "cache-control": "private, no-store", "x-content-type-options": "nosniff" } });
 }
 
 async function adminSetStatus(env, req, id) {
@@ -287,9 +317,9 @@ async function adminCsv(env, url) {
   const from = url.searchParams.get("from") || addDays(today, -30);
   const to = url.searchParams.get("to") || addDays(today, BOOK_DAYS_AHEAD);
   const { results } = await env.DB.prepare(
-    "SELECT id,date,slot,status,name,phone,address,pincode,city,state,cycle,notes,amount,utr,source,created_at,paid_at FROM bookings WHERE date BETWEEN ?1 AND ?2 AND status!='blocked' ORDER BY date, slot"
+    "SELECT id,date,slot,status,name,phone,address,pincode,city,state,cycle,notes,amount,utr,CASE WHEN EXISTS(SELECT 1 FROM payment_proofs p WHERE p.booking_id=bookings.id) THEN 'yes' ELSE 'no' END AS screenshot,source,created_at,paid_at FROM bookings WHERE date BETWEEN ?1 AND ?2 AND status!='blocked' ORDER BY date, slot"
   ).bind(from, to).all();
-  const cols = ["id", "date", "slot", "status", "name", "phone", "address", "pincode", "city", "state", "cycle", "notes", "amount", "utr", "source", "created_at", "paid_at"];
+  const cols = ["id", "date", "slot", "status", "name", "phone", "address", "pincode", "city", "state", "cycle", "notes", "amount", "utr", "screenshot", "source", "created_at", "paid_at"];
   const esc = (v) => {
     let s = String(v ?? "");
     if (/^[=+\-@]/.test(s)) s = "'" + s; // avoid spreadsheet formula injection
@@ -323,6 +353,8 @@ export default {
           if (p === "/api/admin/bookings" && req.method === "GET") return adminList(env, url);
           if (p === "/api/admin/export.csv" && req.method === "GET") return adminCsv(env, url);
           if (p === "/api/admin/block" && req.method === "POST") return adminBlock(env, req);
+          m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/screenshot$/);
+          if (m && req.method === "GET") return adminScreenshot(env, m[1]);
           m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/status$/);
           if (m && req.method === "POST") return adminSetStatus(env, req, m[1]);
         }

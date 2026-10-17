@@ -128,12 +128,16 @@ button,select,input{font:inherit}
 
 <div class="card">
 <h2 style="font-family:Archivo,sans-serif;font-size:18px;margin:0 0 6px">Needs your attention</h2>
-<p class="meta" style="margin:0 0 10px">Payments submitted by customers. Check the UTR in your Paytm / bank app, then confirm.</p>
+<p class="meta" style="margin:0 0 10px">Payments submitted by customers. Open the screenshot, check the payment in your Paytm for Business app, then confirm.</p>
 <div id="attention" class="slots"></div>
 </div>
 </main>
 </div>
 <div class="toast" id="toast" role="status"></div>
+<dialog id="shotDlg" style="border:0;border-radius:16px;padding:0;max-width:min(92vw,520px);width:100%;box-shadow:0 20px 50px rgba(0,0,0,.3)">
+<div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #e1e8ee"><b id="shotTitle" style="font-family:Archivo,sans-serif">Payment screenshot</b><button class="btn ghost sm" id="shotClose">Close</button></div>
+<div style="max-height:80vh;overflow:auto;background:#f4f7fa;text-align:center"><img id="shotImg" alt="Payment screenshot" style="max-width:100%;display:block;margin:0 auto"></div>
+</dialog>
 
 <script>
 (function(){
@@ -199,6 +203,7 @@ function render(){
   $('#attention').innerHTML=toVerify.length?toVerify.map(b=>`<div class="slot"><div class="t">${fmt(b.date,{day:'numeric',month:'short'})}<br><span class="meta">${esc(data.slots.find(s=>s.time===b.slot)?.label||b.slot)}</span></div><div>${card(b)}</div></div>`).join(''):'<p class="meta" style="margin:0">Nothing to verify right now.</p>';
   renderTable();
   document.querySelectorAll('[data-st]').forEach(b=>b.onclick=()=>setStatus(b.dataset.id,b.dataset.st));
+  bindShots();
   document.querySelectorAll('[data-block]').forEach(b=>b.onclick=()=>block(b.dataset.block,true));
   document.querySelectorAll('[data-unblock]').forEach(b=>b.onclick=()=>block(b.dataset.unblock,false));
 }
@@ -223,10 +228,11 @@ function renderTable(){
 <td class="addr">${esc(b.address)}<small>PIN ${esc(b.pincode)} · <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([b.address,b.city,b.state,b.pincode].filter(Boolean).join(', '))}" target="_blank" rel="noopener">Map</a></small>${b.notes?`<small>Note: ${esc(b.notes)}</small>`:''}</td>
 <td>${esc(b.city||'–')}</td>
 <td>${esc(b.state||'–')}</td>
-<td class="num"><b>Rs. ${Number(b.amount||0).toLocaleString('en-IN')}</b>${b.utr?`<small>UTR ${esc(b.utr)}</small>`:''}</td>
+<td class="num"><b>Rs. ${Number(b.amount||0).toLocaleString('en-IN')}</b>${b.utr?`<small>UTR ${esc(b.utr)}</small>`:''}${b.has_proof?`<button class="btn ghost sm" style="margin-top:6px" data-shot="${b.id}">View screenshot</button>`:''}</td>
 <td><select class="st" data-sel="${b.id}" aria-label="Status for ${esc(b.name)}" style="background:${bg};color:${fg}">${opts.map(o=>`<option value="${o}" ${o===b.status?'selected':''} ${o===b.status?'':''}>${STATUS_TXT[o]}</option>`).join('')}</select></td>
 </tr>`}).join(''):'<tr><td colspan="8" class="meta" style="padding:18px">No bookings match.</td></tr>';
   $('#tblCount').textContent=`${rows.length} booking${rows.length===1?'':'s'} · Rs. ${rows.filter(b=>['payment_submitted','confirmed','collected'].includes(b.status)).reduce((a,b)=>a+(b.amount||0),0).toLocaleString('en-IN')} paid / submitted`;
+  bindShots();
   document.querySelectorAll('[data-sel]').forEach(sel=>sel.onchange=async()=>{
     const prev=data.bookings.find(b=>b.id===sel.dataset.sel).status;
     if(['pending','payment_submitted','expired'].includes(sel.value)&&sel.value!==prev){sel.value=prev;return}
@@ -234,6 +240,18 @@ function renderTable(){
     try{await api(`/api/admin/bookings/${sel.dataset.sel}/status`,{method:'POST',body:JSON.stringify({status:sel.value})});toast('Status updated');await load()}catch(e){toast(e.message);sel.value=prev}
   });
 }
+
+async function viewShot(id){
+  try{
+    const r=await fetch(`/api/admin/bookings/${id}/screenshot`,{headers:{'x-admin-key':KEY}});
+    if(!r.ok) throw new Error('Screenshot not found');
+    const u=URL.createObjectURL(await r.blob());
+    const im=$('#shotImg'); if(im.dataset.u) URL.revokeObjectURL(im.dataset.u); im.src=u; im.dataset.u=u;
+    const b=data.bookings.find(x=>x.id===id); $('#shotTitle').textContent=`Payment screenshot · ${b?b.name:''} · ${id}`;
+    $('#shotDlg').showModal();
+  }catch(e){toast(e.message)}
+}
+function bindShots(){document.querySelectorAll('[data-shot]').forEach(b=>b.onclick=()=>viewShot(b.dataset.shot))}
 function card(b){
   const wa=`https://wa.me/91${b.phone}?text=`+encodeURIComponent(`Hi ${b.name}, your Dr. Sarwan Diagnostic Labs home test (Ref ${b.id}) is confirmed for ${fmt(b.date,{weekday:'short',day:'numeric',month:'short'})}, ${data.slots.find(s=>s.time===b.slot)?.label||b.slot}. Please fast for 10–12 hours before collection (water is fine).`);
   const acts=[];
@@ -243,7 +261,7 @@ function card(b){
   return `<div class="who"><div><span class="n">${esc(b.name)}</span><span class="pill st-${b.status}">${STATUS_TXT[b.status]||b.status}</span></div>
   <div><a href="tel:+91${esc(b.phone)}">+91 ${esc(b.phone)}</a> · <a href="${wa}" target="_blank" rel="noopener">WhatsApp confirmation</a></div>
   <div class="meta">${esc(b.address)}${b.city?`, ${esc(b.city)}`:''}${b.state?`, ${esc(b.state)}`:''} – ${esc(b.pincode)} · <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([b.address,b.city,b.state,b.pincode].filter(Boolean).join(', '))}" target="_blank" rel="noopener">Map</a></div>
-  <div class="meta">Ref ${esc(b.id)} · Rs. ${b.amount}${b.utr?` · UTR <b>${esc(b.utr)}</b>`:''}${b.cycle?` · ${esc(b.cycle)}`:''}${b.notes?` · Note: ${esc(b.notes)}`:''}</div>
+  <div class="meta">Ref ${esc(b.id)} · Rs. ${b.amount}${b.utr?` · UTR <b>${esc(b.utr)}</b>`:''}${b.has_proof?` · <button class="btn ghost sm" data-shot="${b.id}">View screenshot</button>`:''}${b.cycle?` · ${esc(b.cycle)}`:''}${b.notes?` · Note: ${esc(b.notes)}`:''}</div>
   <div class="acts">${acts.join('')}</div></div>`;
 }
 async function setStatus(id,st){
@@ -253,6 +271,8 @@ async function setStatus(id,st){
 async function block(slot,on){
   try{await api('/api/admin/block',{method:'POST',body:JSON.stringify({date:sel,slot,block:on})});toast(on?'Slot blocked':'Slot unblocked');await load()}catch(e){toast(e.message)}
 }
+$('#shotClose').onclick=()=>$('#shotDlg').close();
+$('#shotDlg').addEventListener('click',e=>{if(e.target.id==='shotDlg')$('#shotDlg').close()});
 $('#refresh').onclick=()=>load().then(()=>toast('Refreshed'));
 $('#showPast').onchange=render;
 ['fStatus','fWhen'].forEach(id=>$('#'+id).onchange=renderTable);$('#fSearch').oninput=renderTable;

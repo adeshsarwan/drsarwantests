@@ -50,6 +50,7 @@ details[open] .faq-plus{transform:rotate(45deg)}
 .bk-qr{flex:none;width:180px;height:180px;border:1px solid #dfe8ef;border-radius:16px;overflow:hidden;background:#fff;display:flex;align-items:center;justify-content:center}
 .bk-qr svg{width:100%;height:100%}
 .bk-timer{margin:10px 0 0;font-size:14px;color:#b23f28}
+.bk-file{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden}.bk-upload{position:relative;display:block;border:2px dashed #9fc3cc;border-radius:16px;background:#f6fbfc;padding:18px;cursor:pointer;text-align:center;color:#1f6977}.bk-upload:focus-within{outline:3px solid #9fd3dc;outline-offset:2px}.bk-upload b{display:block;font-family:Archivo,sans-serif;font-size:17px;margin-top:4px}.bk-upload small{display:block;color:#5a6880;font-size:13px;margin-top:2px}#bk-upload-done{display:flex;align-items:center;gap:14px;text-align:left}#bk-upload-done[hidden]{display:none}#bk-shot-preview{width:64px;height:96px;object-fit:cover;border-radius:8px;border:1px solid #c7d4de;background:#fff}.bk-upload.has{border-style:solid;border-color:#1f6977;background:#eef8f6}
 [hidden]{display:none !important}.bk-ac{position:relative}.bk-ac-list{position:absolute;left:0;right:0;top:100%;z-index:20;margin:4px 0 0;padding:6px;list-style:none;background:#fff;border:1px solid #c7d4de;border-radius:12px;box-shadow:0 10px 24px rgba(20,40,70,.15);max-height:280px;overflow:auto}.bk-ac-list li{padding:10px 12px;border-radius:8px;cursor:pointer;font-size:15px;line-height:1.3}.bk-ac-list li small{display:block;color:#5a6880;font-size:13px}.bk-ac-list li[aria-selected="true"],.bk-ac-list li:hover{background:#eef6f9}
 @media (max-width:760px){.bk-qr{width:150px;height:150px}}
 </style>
@@ -323,17 +324,26 @@ details[open] .faq-plus{transform:rotate(45deg)}
 <p id="bk-amount-note" hidden style="margin: 8px 0 0; background: #fff4d6; color: #6b4700; border-radius: 10px; padding: 8px 12px; font-weight: 700; font-size: 15px">Enter amount Rs. <span class="bk-amt">1899</span> in your UPI app</p>
 <p id="bk-pay-hint" style="margin: 8px 0 12px; color: #3b4a68; font-size: 15px">Scan this QR with any UPI app on your phone.</p>
 <a id="bk-upi-link" class="bk-btn bk-btn-alt" href="#" hidden>Pay with UPI app</a>
-<a id="bk-save-qr" class="bk-link" href="/assets/upi-qr.png" download="DrSarwan-UPI-QR.png" style="display: inline-block; margin-top: 10px">Save QR image</a><span class="bk-muted" style="font-size: 13px"> · then use “Scan from gallery” in your UPI app</span>
+<button type="button" id="bk-save-qr" class="bk-link" style="display: inline-block; margin-top: 10px; padding-left: 0">Save QR to Photos</button><span class="bk-muted" style="font-size: 13px"> · or long-press the QR → Save to Photos, then “Scan from gallery” in your UPI app</span>
 <p style="margin: 12px 0 0; font-size: 14px; color: #3b4a68">UPI ID: <strong id="bk-upi-id" style="word-break: break-all"></strong> <button type="button" class="bk-link" id="bk-copy">Copy</button></p>
 <p class="bk-timer">Slot held for <strong id="bk-countdown">15:00</strong></p>
 </div>
 </div>
-<form id="bk-paid-form" novalidate style="margin-top: 18px">
-<div class="bk-field"><label for="bk-utr">After paying, enter the 12-digit UPI transaction ID (UTR / reference no.)</label><input id="bk-utr" name="utr" inputmode="numeric" autocomplete="off" required placeholder="e.g. 412345678901"></div>
+<form id="bk-paid-form" novalidate style="margin-top: 20px; border-top: 1px solid #e1e8ee; padding-top: 18px">
+<p class="bk-h" style="margin: 0 0 4px; font-size: 18px">After paying: upload your payment screenshot</p>
+<p class="bk-muted" style="margin: 0 0 12px; font-size: 14.5px">Take a screenshot of the “Payment successful” screen in your UPI app, then add it here.</p>
+<label for="bk-shot" class="bk-upload" id="bk-upload-box">
+<input id="bk-shot" type="file" accept="image/*" class="bk-file">
+<span id="bk-upload-empty"><svg aria-hidden="true" viewBox="0 0 24 24" width="30" height="30"><path d="M12 16V4m0 0l-4.5 4.5M12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><b>Upload payment screenshot</b><small>Tap to choose from Photos</small></span>
+<span id="bk-upload-done" hidden><img id="bk-shot-preview" alt="Your payment screenshot"><span><b>Screenshot added ✓</b><small>Tap to change</small></span></span>
+</label>
+<details style="margin-top: 12px"><summary class="bk-muted" style="font-size: 14px; cursor: pointer">Have the UPI transaction ID instead? (optional)</summary>
+<div class="bk-field" style="margin-top: 8px"><label for="bk-utr">UPI transaction ID / UTR</label><input id="bk-utr" name="utr" inputmode="numeric" autocomplete="off" placeholder="e.g. 412345678901"></div>
+</details>
 <p id="bk-err3" class="bk-err" role="alert"></p>
 <button type="submit" class="bk-btn" id="bk-paid-btn">I've paid · Confirm my booking</button>
 </form>
-<p class="bk-note">Can't find the UTR? It's in your UPI app's payment details. Or call/WhatsApp <a href="tel:8368143677">8368143677</a> with your booking ref.</p>
+<p class="bk-note">Trouble paying or uploading? Call/WhatsApp <a href="tel:8368143677">8368143677</a> with your booking ref.</p>
 </div>
 
 <div data-step="4" hidden>

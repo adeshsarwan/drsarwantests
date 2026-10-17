@@ -111,7 +111,7 @@
       }
       $('#bk-upi-id').textContent = upiId;
       if (fixed) {
-        $('#bk-qr').innerHTML = '<img src="/assets/upi-qr.svg" alt="" width="180" height="180" style="width:100%;height:100%;display:block">';
+        $('#bk-qr').innerHTML = '<img src="/assets/upi-qr.png" alt="Payment QR code" style="width:100%;height:100%;display:block;object-fit:contain">';
       } else if (window.qrcode) {
         const qr = qrcode(0, 'M'); qr.addData(link); qr.make();
         $('#bk-qr').innerHTML = qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
@@ -134,15 +134,42 @@
     try { await navigator.clipboard.writeText($('#bk-upi-id').textContent); $('#bk-copy').textContent = 'Copied'; } catch (e) {}
   });
 
+  // ---- payment screenshot: compress in the browser, then upload with the booking ----
+  async function compressImage(file) {
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
+      const max = 1600, scale = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * scale); c.height = Math.round(img.naturalHeight * scale);
+      const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(img, 0, 0, c.width, c.height);
+      let q = 0.75, out = c.toDataURL('image/jpeg', q);
+      while (out.length > 900000 && q > 0.35) { q -= 0.1; out = c.toDataURL('image/jpeg', q); }
+      return out;
+    } finally { URL.revokeObjectURL(url); }
+  }
+  $('#bk-shot').addEventListener('change', async (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    const err = $('#bk-err3'); err.textContent = '';
+    if (!file) return;
+    if (!/^image\//.test(file.type) && !/\.(heic|heif|jpe?g|png|webp)$/i.test(file.name)) { err.textContent = 'Please choose an image (your payment screenshot).'; return; }
+    try {
+      state.shot = await compressImage(file);
+      $('#bk-shot-preview').src = state.shot;
+      $('#bk-upload-empty').hidden = true; $('#bk-upload-done').hidden = false; $('#bk-upload-box').classList.add('has');
+    } catch (e) { state.shot = null; err.textContent = 'Could not read that image. Please try a different screenshot.'; }
+  });
+
   $('#bk-paid-form').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const err = $('#bk-err3'), btn = $('#bk-paid-btn'), utr = $('#bk-utr').value.replace(/\s/g, '');
     err.textContent = '';
-    if (!/^[A-Za-z0-9]{10,22}$/.test(utr)) { err.textContent = 'Please enter the 12-digit UPI transaction ID (UTR) from your payment app.'; $('#bk-utr').focus(); return; }
-    btn.disabled = true; btn.dataset.t = btn.textContent; btn.textContent = 'Submitting…';
+    if (!state.shot && !utr) { err.textContent = 'Please upload your payment screenshot first.'; $('#bk-upload-box').scrollIntoView({ block: 'center', behavior: 'smooth' }); return; }
+    if (utr && !/^[A-Za-z0-9]{10,22}$/.test(utr)) { err.textContent = "That transaction ID doesn't look right. You can leave it empty and just upload the screenshot."; return; }
+    btn.disabled = true; btn.dataset.t = btn.textContent; btn.textContent = 'Uploading…';
     try {
       const b = state.booking;
-      const r = await api(`/api/bookings/${b.id}/paid`, { method: 'POST', body: JSON.stringify({ token: b.token, utr }) });
+      const r = await api(`/api/bookings/${b.id}/paid`, { method: 'POST', body: JSON.stringify({ token: b.token, utr, screenshot: state.shot || undefined }) });
       clearInterval(state.timer);
       $('#bk-done-ref').textContent = b.id;
       $('#bk-done-slot').textContent = `${r.dateLabel || b.dateLabel} · ${r.slotLabel || b.slotLabel}`;
@@ -154,15 +181,28 @@
         `Name: ${f.name || ''}`,
         `Mobile: ${f.phone || ''}`,
         `Address: ${f.address || ''}, ${f.city || ''}, ${f.state || ''} - ${f.pincode || ''}`,
-        f.cycle ? `Cycle: ${f.cycle}` : '',
         `Amount paid: Rs. ${b.amount}`,
-        `UPI UTR: ${utr}`,
-      ].filter(Boolean).join('\n');
+        state.shot ? 'Payment screenshot uploaded on the website.' : `UPI UTR: ${utr}`,
+      ].join('\n');
       $('#bk-done-wa').href = 'https://wa.me/918368143677?text=' + encodeURIComponent(msg);
       if (window.gtag) gtag('event', 'purchase', { transaction_id: b.id, value: b.amount, currency: 'INR' });
       show(4);
     } catch (e) { err.textContent = e.message; }
     finally { btn.disabled = false; btn.textContent = btn.dataset.t; }
+  });
+
+  // ---- Save QR to Photos (iPhone share sheet → "Save Image"; elsewhere a normal download) ----
+  $('#bk-save-qr').addEventListener('click', async () => {
+    try {
+      const blob = await fetch('/assets/upi-qr.png').then((r) => r.blob());
+      const file = new File([blob], 'DrSarwan-UPI-QR.png', { type: 'image/png' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'Dr. Sarwan UPI QR' });
+        return;
+      }
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = file.name; a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    } catch (e) { /* user closed the share sheet */ }
   });
 
 
