@@ -413,7 +413,7 @@ ${f.length ? `<div class="dt-f">${f.join('')}</div>` : ''}`;
       [active.reduce((a, b) => a + Math.max(1, testsOf(b).length), 0), 'Total tests', 'active'],
       [list.filter((b) => AFTER_COLLECT.includes(b.status)).length, 'Total samples collected', 'collected_any'],
       [reps.length, 'Total reports'],
-      [reps.filter((r) => r.sent_at).length, 'Total reports sent', 'completed'],
+      [list.filter((b) => NEW_ST.includes(b.status)).reduce((a, b) => a + Math.max(1, testsOf(b).length), 0), 'New tests (not collected yet)', 'new'],
     ].map(card).join('');
     $('#stats2').innerHTML = [
       [money(revenue(list)), 'Total price'],
@@ -425,6 +425,7 @@ ${f.length ? `<div class="dt-f">${f.join('')}</div>` : ''}`;
     $('#verifyNote').innerHTML = ver.length ? `<div class="vnote">⚠ ${ver.length} payment${ver.length === 1 ? '' : 's'} to verify <button type="button" class="btn sm" data-filt="payment_submitted">Show</button></div>` : '';
     renderTable();
   }
+  const NEW_ST = ['payment_submitted', 'confirmed'];
   const HOLD_ST = ['payment_submitted', 'confirmed', 'collected', 'report_ready', 'completed', 'no_show'];
 
   function renderTable() {
@@ -433,6 +434,7 @@ ${f.length ? `<div class="dt-f">${f.join('')}</div>` : ''}`;
     let rows = data.bookings.filter((b) => b.status !== 'blocked' && (st === 'payment_submitted' || inPeriod(b)));
     if (st === 'active') rows = rows.filter(live);
     else if (st === 'collected_any') rows = rows.filter((b) => AFTER_COLLECT.includes(b.status));
+    else if (st === 'new') rows = rows.filter((b) => NEW_ST.includes(b.status));
     else if (st !== 'all') rows = rows.filter((b) => b.status === st);
     if (q) rows = rows.filter((b) => [b.name, b.phone, b.address, b.city, b.state, b.pincode, b.id, b.utr, b.vial_no, testNames(b)].join(' ').toLowerCase().includes(q));
     rows.sort((a, b) => (a.date + a.slot).localeCompare(b.date + b.slot));
@@ -457,7 +459,7 @@ ${f.length ? `<div class="dt-f">${f.join('')}</div>` : ''}`;
   document.addEventListener('click', (e) => {
     const c = e.target.closest('[data-filt]'); if (!c) return;
     const v = c.dataset.filt, sel = $('#fStatus');
-    if (![...sel.options].some((o) => o.value === v)) sel.insertAdjacentHTML('beforeend', `<option value="${v}">Collected (incl. reports)</option>`);
+    if (![...sel.options].some((o) => o.value === v)) sel.insertAdjacentHTML('beforeend', `<option value="${v}">${v === 'new' ? 'New – not collected yet' : 'Collected (incl. reports)'}</option>`);
     sel.value = v; renderTable(); $('.tbl-wrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 
