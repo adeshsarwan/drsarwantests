@@ -90,6 +90,13 @@ function safeEqual(a, b) {
   return diff === 0;
 }
 function amount(env) { return parseInt(env.PRICE_INR || "1899", 10); }
+async function defaultPackage(env) {
+  return await env.DB.prepare("SELECT * FROM packages WHERE active=1 ORDER BY is_default DESC, sort, id LIMIT 1").first();
+}
+async function packageById(env, id, activeOnly = true) {
+  if (!id) return null;
+  return await env.DB.prepare(`SELECT * FROM packages WHERE id=?1 ${activeOnly ? "AND active=1" : ""}`).bind(parseInt(id, 10) || 0).first();
+}
 function visitFee(env) { return parseInt(env.VISIT_FEE_INR || "300", 10); }
 
 // Create tables automatically on first use (same as migrations/0001_bookings.sql).
@@ -108,10 +115,46 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS report_chunks (booking_id TEXT NOT NULL, idx INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (booking_id, idx))`,
   `CREATE TABLE IF NOT EXISTS msg_log (id INTEGER PRIMARY KEY AUTOINCREMENT, booking_id TEXT NOT NULL, kind TEXT NOT NULL, at TEXT NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS msg_log_by_booking ON msg_log(booking_id)`,
+  `CREATE TABLE IF NOT EXISTS packages (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, tests TEXT, mrp INTEGER, price INTEGER NOT NULL,
+    margin INTEGER, target TEXT, active INTEGER NOT NULL DEFAULT 1, is_default INTEGER NOT NULL DEFAULT 0, sort INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
 ];
+
+// Tests / packages from DRSARWAN_TESTS_PACKAGES.xlsx — loaded once into an empty database.
+// [name, mrp, display price, margin, tests included]
+const SEED_PACKAGES = [
+  ["FEMALE FERTILITY", 2330, 1899, 640, "FSH, LH, PRL, AMH, T3, T4, TSH"],
+  ["FEMALE PCOS", 1899, 1899, 656, "FSH, LH, Prolactin, Progesterone, Estrogen"],
+  ["HEALTH FOR ALL", 1999, 1999, 1142, "85 tests: Vit D3, B12, Thyroid, Urine, Diabetes, CBC, ESR, Lipid, Kidney, Liver"],
+  ["NIPT (NON-INVASIVE PRENATAL TEST)", 20000, 8500, 4200, "All chromosomes"],
+  ["FATTY LIVER", null, 790, 600, "Liver Function Test"],
+  ["MALE CANCER SCREEN", null, 1385, 1300, "CA 19.9, CEA, PSA"],
+  ["COMPLETE HEALTH CHECK UP", 2999, 2999, 1043, ""],
+  ["DIABETES CHECK", 1799, 1799, 920, ""],
+  ["HYPERTENSION", 3999, 3799, 2693, "99 tests: Cortisol, hs-CRP, Lipoprotein(a), Apo B, Apo A1, Apo B/A1 ratio, RBS, CBC, LFT, Electrolytes, Kidney, Lipid, Aldosterone / Direct Renin ratio"],
+  ["HEALTH BASIC", 1299, 999, 391, "Lipid, Thyroid, Urine, Renal, Liver"],
+  ["CARDIAC PACKAGE", 1935, 1699, 770, "FBS, PPBS, KFT, Urine, Lipid"],
+  ["PREGNANCY ANTENATAL BASIC", null, 1499, 664, "CBC, Blood Group, HIV, HCV, HBsAg, VDRL"],
+  ["VIRAL MARKERS", null, 1099, 548, ""],
+  ["DOUBLE MARKER", null, 1800, 909, ""],
+  ["TRIPLE MARKER TESTS (14-22 WEEKS)", null, 1800, 966, ""],
+  ["PREGNANCY ADVANCED", null, 2434, 1287, "CBC, Blood Group, HIV, HCV, HBsAg, VDRL, HPLC"],
+  ["ALLERGY DRUG PANEL", null, 5999, 4292, ""],
+];
+async function seedPackages(env) {
+  const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM packages").first();
+  if (n && n.n > 0) return;
+  const now = isoNow();
+  await env.DB.batch(SEED_PACKAGES.map(([name, mrp, price, margin, tests], i) =>
+    env.DB.prepare("INSERT INTO packages (name, tests, mrp, price, margin, active, is_default, sort, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, ?8, ?8)")
+      .bind(name, tests, mrp, price, margin, i === 0 ? 1 : 0, (i + 1) * 10, now)));
+  // bookings made before tests existed were all for the fertility panel
+  const d = await env.DB.prepare("SELECT id, name FROM packages WHERE is_default=1").first();
+  if (d) await env.DB.prepare("UPDATE bookings SET package_id=?1, package_name=?2 WHERE package_id IS NULL AND status!='blocked'").bind(d.id, d.name).run();
+}
 let schemaReady = null;
 const NEW_COLS = { city: "TEXT", state: "TEXT", vial_no: "TEXT", collected_at: "TEXT", report_name: "TEXT", report_size: "INTEGER",
-  report_token: "TEXT", report_at: "TEXT", completed_at: "TEXT", fee_due: "INTEGER", fee_paid_at: "TEXT", missed_slot: "TEXT" };
+  report_token: "TEXT", report_at: "TEXT", completed_at: "TEXT", fee_due: "INTEGER", fee_paid_at: "TEXT", missed_slot: "TEXT", package_id: "INTEGER", package_name: "TEXT" };
 function ensureSchema(env) {
   if (!schemaReady) {
     schemaReady = (async () => {
@@ -127,6 +170,7 @@ function ensureSchema(env) {
       if (!have.size) for (const [c, t] of Object.entries(NEW_COLS)) {
         try { await env.DB.prepare(`ALTER TABLE bookings ADD COLUMN ${c} ${t}`).run(); } catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
       }
+      await seedPackages(env);
     })().catch((e) => { schemaReady = null; throw e; });
   }
   return schemaReady;
@@ -174,7 +218,8 @@ async function getSlots(env, url) {
   });
 }
 
-function getConfig(env) {
+async function getConfig(env) {
+  const pkg = await defaultPackage(env);
   const today = istParts().date;
   const dates = [];
   for (let i = 0; i <= BOOK_DAYS_AHEAD; i++) {
@@ -182,7 +227,8 @@ function getConfig(env) {
     if (SLOTS.some((s) => isBookable(d, s))) dates.push(d);
   }
   return json({
-    amount: amount(env),
+    amount: pkg ? pkg.price : amount(env),
+    test: pkg ? { id: pkg.id, name: pkg.name, tests: pkg.tests || "" } : null,
     upiId: env.UPI_ID || "",
     upiName: env.UPI_NAME || "Dr. Sarwan Diagnostic Labs",
     upiQr: env.UPI_QR_STRING || "",
@@ -213,19 +259,21 @@ async function createBooking(env, req) {
     `SELECT 1 FROM bookings WHERE date=?1 AND slot=?2 AND status IN (${ACTIVE.map((_, i) => "?" + (i + 3)).join(",")}) LIMIT 1`
   ).bind(date, slot, ...ACTIVE).first();
   if (taken) return bad("Sorry, that slot has just been booked. Please pick another.", 409);
+  const pkg = (await packageById(env, b.package_id)) || (await defaultPackage(env));
+  const price = pkg ? pkg.price : amount(env);
   const id = "DSL-" + randId(6), token = randId(24, "abcdefghijklmnopqrstuvwxyz0123456789");
   const now = isoNow(), expires = new Date(Date.now() + HOLD_MIN * 60000).toISOString();
   try {
     await env.DB.prepare(
-      `INSERT INTO bookings (id, token, date, slot, name, phone, address, pincode, city, state, cycle, notes, amount, status, source, created_at, expires_at, updated_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?15, ?16, ?9, ?10, ?11, 'pending', ?12, ?13, ?14, ?13)`
+      `INSERT INTO bookings (id, token, date, slot, name, phone, address, pincode, city, state, cycle, notes, amount, status, source, created_at, expires_at, updated_at, package_id, package_name)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?15, ?16, ?9, ?10, ?11, 'pending', ?12, ?13, ?14, ?13, ?17, ?18)`
     ).bind(id, token, date, slot, name, phone, address, pincode, clean(b.cycle, 60), clean(b.notes, 300),
-      amount(env), clean(b.source, 300), now, expires, city, state).run();
+      price, clean(b.source, 300), now, expires, city, state, pkg ? pkg.id : null, pkg ? pkg.name : null).run();
   } catch (e) {
     if (/UNIQUE/i.test(String(e))) return bad("Sorry, someone just booked that slot. Please pick another.", 409);
     throw e;
   }
-  return json({ id, token, date, dateLabel: prettyDate(date), slot, slotLabel: slotLabel(slot), amount: amount(env), expiresAt: expires,
+  return json({ id, token, date, dateLabel: prettyDate(date), slot, slotLabel: slotLabel(slot), amount: price, testName: pkg ? pkg.name : "", expiresAt: expires,
     upiId: env.UPI_ID || "", upiName: env.UPI_NAME || "Dr. Sarwan Diagnostic Labs", upiQr: env.UPI_QR_STRING || "" }, 201);
 }
 
@@ -320,7 +368,7 @@ async function adminList(env, url) {
   const includeInactive = url.searchParams.get("all") === "1";
   const { results } = await env.DB.prepare(
     `SELECT id, date, slot, name, phone, address, pincode, city, state, cycle, notes, amount, status, utr, source, created_at, paid_at, updated_at,
-       vial_no, collected_at, report_name, report_size, report_token, report_at, completed_at, fee_due, fee_paid_at, missed_slot,
+       package_id, package_name, vial_no, collected_at, report_name, report_size, report_token, report_at, completed_at, fee_due, fee_paid_at, missed_slot,
        EXISTS(SELECT 1 FROM payment_proofs p WHERE p.booking_id = bookings.id) AS has_proof,
        (SELECT group_concat(kind || '@' || at, ',') FROM msg_log l WHERE l.booking_id = bookings.id) AS msgs
      FROM bookings WHERE date BETWEEN ?1 AND ?2 ${includeInactive ? "" : "AND status NOT IN ('expired')"}
@@ -342,13 +390,17 @@ async function adminCreate(env, req) {
   if (address.length < 4) return bad("Enter the collection address.");
   if (!/^\d{6}$/.test(pincode)) return bad("Enter a valid 6-digit pincode.");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !SLOTS.includes(slot)) return bad("Pick a date and slot.");
+  const pkg = b.package_id ? await packageById(env, b.package_id, false) : await defaultPackage(env);
+  if (!pkg) return bad("Pick the test.");
+  const amt = b.amount === undefined || b.amount === "" ? pkg.price : parseInt(b.amount, 10);
+  if (!Number.isFinite(amt) || amt < 0 || amt > 1000000) return bad("Enter a valid amount.");
   const id = "DSL-" + randId(6), token = randId(24, "abcdefghijklmnopqrstuvwxyz0123456789"), now = isoNow();
   try {
     await env.DB.prepare(
-      `INSERT INTO bookings (id, token, date, slot, name, phone, address, pincode, city, state, cycle, notes, amount, status, source, created_at, paid_at, updated_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 'admin', ?15, ?16, ?15)`
+      `INSERT INTO bookings (id, token, date, slot, name, phone, address, pincode, city, state, cycle, notes, amount, status, source, created_at, paid_at, updated_at, package_id, package_name)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 'admin', ?15, ?16, ?15, ?17, ?18)`
     ).bind(id, token, date, slot, name, phone, address, pincode, city, state, clean(b.cycle, 60), clean(b.notes, 300),
-      amount(env), status, now, status === "pending" ? null : now).run();
+      amt, status, now, status === "pending" ? null : now, pkg.id, pkg.name).run();
   } catch (e) {
     if (/UNIQUE/i.test(String(e))) return bad("That slot already has a booking.", 409);
     throw e;
@@ -502,6 +554,62 @@ async function adminSent(env, req, id) {
   return json({ ok: true, completed });
 }
 
+// ---- tests / packages ----
+async function publicPackages(env) {
+  const { results } = await env.DB.prepare("SELECT id, name, tests, mrp, price, is_default FROM packages WHERE active=1 ORDER BY sort, id").all();
+  return json({ packages: results });
+}
+async function adminPackages(env) {
+  const { results } = await env.DB.prepare(
+    `SELECT p.*, (SELECT COUNT(*) FROM bookings b WHERE b.package_id = p.id AND b.status NOT IN ('cancelled','expired','blocked')) AS bookings
+     FROM packages p ORDER BY p.sort, p.id`).all();
+  return json({ packages: results });
+}
+function readPackage(b) {
+  const name = clean(b.name, 120);
+  const num = (v) => (v === null || v === undefined || String(v).trim() === "" ? null : Math.round(Number(String(v).replace(/[^\d.]/g, ""))));
+  const price = num(b.price), mrp = num(b.mrp), margin = num(b.margin);
+  if (name.length < 2) return { err: "Enter the test / package name." };
+  if (price === null || !Number.isFinite(price) || price <= 0) return { err: "Enter the price shown to patients." };
+  for (const v of [mrp, margin]) if (v !== null && (!Number.isFinite(v) || v < 0)) return { err: "MRP and margin must be numbers." };
+  return { name, tests: clean(b.tests, 1000), price, mrp, margin, target: clean(b.target, 120),
+    active: b.active === false || b.active === 0 || b.active === "0" ? 0 : 1, is_default: b.is_default ? 1 : 0 };
+}
+async function adminSavePackage(env, req, id) {
+  const p = readPackage(await req.json().catch(() => ({})));
+  if (p.err) return bad(p.err);
+  if (p.is_default && !p.active) return bad("The website test can't be hidden. Make another test the website test first.");
+  const now = isoNow();
+  const dup = await env.DB.prepare("SELECT id FROM packages WHERE lower(name)=lower(?1) AND id != ?2").bind(p.name, id || 0).first();
+  if (dup) return bad("A test with this name already exists.", 409);
+  const stmts = [];
+  if (p.is_default) stmts.push(env.DB.prepare("UPDATE packages SET is_default=0 WHERE id != ?1").bind(id || 0));
+  if (id) {
+    const cur = await env.DB.prepare("SELECT * FROM packages WHERE id=?1").bind(id).first();
+    if (!cur) return bad("Test not found", 404);
+    if (cur.is_default && !p.is_default) return bad("Pick another test as the website test instead of unticking this one.");
+    stmts.push(env.DB.prepare("UPDATE packages SET name=?1, tests=?2, mrp=?3, price=?4, margin=?5, target=?6, active=?7, is_default=?8, updated_at=?9 WHERE id=?10")
+      .bind(p.name, p.tests, p.mrp, p.price, p.margin, p.target, p.active, p.is_default, now, id));
+    await env.DB.batch(stmts);
+    return json({ ok: true, id });
+  }
+  const mx = await env.DB.prepare("SELECT COALESCE(MAX(sort), 0) AS m FROM packages").first();
+  stmts.push(env.DB.prepare("INSERT INTO packages (name, tests, mrp, price, margin, target, active, is_default, sort, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)")
+    .bind(p.name, p.tests, p.mrp, p.price, p.margin, p.target, p.active, p.is_default, (mx ? mx.m : 0) + 10, now));
+  await env.DB.batch(stmts);
+  const row = await env.DB.prepare("SELECT id FROM packages WHERE name=?1").bind(p.name).first();
+  return json({ ok: true, id: row && row.id }, 201);
+}
+async function adminDeletePackage(env, id) {
+  const cur = await env.DB.prepare("SELECT * FROM packages WHERE id=?1").bind(id).first();
+  if (!cur) return bad("Test not found", 404);
+  if (cur.is_default) return bad("This is the website test. Make another test the website test first.", 409);
+  const used = await env.DB.prepare("SELECT COUNT(*) AS n FROM bookings WHERE package_id=?1").bind(id).first();
+  if (used && used.n) return bad(`${used.n} booking(s) use this test, so it can't be deleted. Hide it instead.`, 409);
+  await env.DB.prepare("DELETE FROM packages WHERE id=?1").bind(id).run();
+  return json({ ok: true });
+}
+
 async function adminBlock(env, req) {
   const { date, slot, block } = await req.json().catch(() => ({}));
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date || "") || !SLOTS.includes(slot)) return bad("Invalid date or slot");
@@ -528,9 +636,9 @@ async function adminCsv(env, url) {
   const from = url.searchParams.get("from") || addDays(today, -30);
   const to = url.searchParams.get("to") || addDays(today, BOOK_DAYS_AHEAD);
   const { results } = await env.DB.prepare(
-    "SELECT id,date,slot,status,name,phone,address,pincode,city,state,cycle,notes,amount,utr,vial_no,collected_at,report_at,completed_at,fee_due,fee_paid_at,CASE WHEN EXISTS(SELECT 1 FROM payment_proofs p WHERE p.booking_id=bookings.id) THEN 'yes' ELSE 'no' END AS screenshot,source,created_at,paid_at FROM bookings WHERE date BETWEEN ?1 AND ?2 AND status!='blocked' ORDER BY date, slot"
+    "SELECT id,date,slot,status,package_name AS test,amount AS amount_charged,name,phone,address,pincode,city,state,cycle,notes,amount,utr,vial_no,collected_at,report_at,completed_at,fee_due,fee_paid_at,CASE WHEN EXISTS(SELECT 1 FROM payment_proofs p WHERE p.booking_id=bookings.id) THEN 'yes' ELSE 'no' END AS screenshot,source,created_at,paid_at FROM bookings WHERE date BETWEEN ?1 AND ?2 AND status!='blocked' ORDER BY date, slot"
   ).bind(from, to).all();
-  const cols = ["id", "date", "slot", "status", "name", "phone", "address", "pincode", "city", "state", "cycle", "notes", "amount", "utr", "vial_no", "collected_at", "report_at", "completed_at", "fee_due", "fee_paid_at", "screenshot", "source", "created_at", "paid_at"];
+  const cols = ["id", "date", "slot", "status", "test", "name", "phone", "address", "pincode", "city", "state", "cycle", "notes", "amount", "utr", "vial_no", "collected_at", "report_at", "completed_at", "fee_due", "fee_paid_at", "screenshot", "source", "created_at", "paid_at"];
   const esc = (v) => {
     let s = String(v ?? "");
     if (/^[=+\-@]/.test(s)) s = "'" + s; // avoid spreadsheet formula injection
@@ -551,6 +659,7 @@ export default {
         if (!env.DB) return bad("Database not configured", 503);
         await ensureSchema(env);
         if (p === "/api/config" && req.method === "GET") return getConfig(env);
+        if (p === "/api/packages" && req.method === "GET") return publicPackages(env);
         if (p === "/api/slots" && req.method === "GET") return getSlots(env, url);
         let pm = p.match(/^\/api\/pincode\/(\d{6})$/);
         if (pm && req.method === "GET") return pincodeLookup(pm[1], ctx);
@@ -569,6 +678,11 @@ export default {
           if (p === "/api/admin/export.csv" && req.method === "GET") return adminCsv(env, url);
           if (p === "/api/admin/block" && req.method === "POST") return adminBlock(env, req);
           if (p === "/api/admin/bookings" && req.method === "POST") return adminCreate(env, req);
+          if (p === "/api/admin/packages" && req.method === "GET") return adminPackages(env);
+          if (p === "/api/admin/packages" && req.method === "POST") return adminSavePackage(env, req, null);
+          m = p.match(/^\/api\/admin\/packages\/(\d{1,9})$/);
+          if (m && req.method === "POST") return adminSavePackage(env, req, Number(m[1]));
+          if (m && req.method === "DELETE") return adminDeletePackage(env, Number(m[1]));
           m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/screenshot$/);
           if (m && req.method === "GET") return adminScreenshot(env, m[1]);
           m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/move$/);

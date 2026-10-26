@@ -83,6 +83,7 @@
     filters: new Set(pref.get('filters2', ['payment_submitted', 'pending', 'confirmed', 'collected', 'report_ready', 'completed', 'no_show'])),
   };
   let tab = pref.get('tab', 'bookings');
+  let PKGS = [];
   let attTab = null;
   let detailId = null;
 
@@ -104,12 +105,15 @@
     $$('.tab').forEach((t) => (t.getAttribute('data-tab') === name ? t.setAttribute('aria-current', 'page') : t.removeAttribute('aria-current')));
     $('#view-bookings').hidden = name !== 'bookings';
     $('#view-calendar').hidden = name !== 'calendar';
+    $('#view-tests').hidden = name !== 'tests';
     if (name === 'calendar') loadCal().catch((e) => toast(e.message));
+    if (name === 'tests') loadPkgs().catch((e) => toast(e.message));
   }
   $$('.tab').forEach((t) => (t.onclick = () => showTab(t.getAttribute('data-tab'))));
 
   async function refreshAll() {
     await load();
+    loadPkgs().catch(() => {});
     if (tab === 'calendar' || cal.data) await loadCal();
     if (detailId && $('#detailDlg').open) { const b = findB(detailId); if (b) $('#detailBody').innerHTML = detailHTML(b); }
   }
@@ -121,6 +125,8 @@
     return m;
   };
   const hasPaidProof = (b) => !!(b.has_proof || b.utr);
+  const pkgOf = (b) => PKGS.find((p) => p.id === b.package_id);
+  const testLine = (b) => (b.package_name ? `<span class="test-l">🧪 ${esc(b.package_name)}</span>` : '');
 
   // The one most useful next action for a booking
   function nextStep(b, small = true) {
@@ -182,11 +188,11 @@
     const sign = '— Dr. Sarwan Diagnostic Labs · 8368143677';
     const list = (sug || []).map((s, i) => `${i + 1}) ${fmtD(s.date)}, ${slotLabel(s.slot)}`).join('\n');
     switch (kind) {
-      case 'pay': return [hi, `We received your home blood test request for *${fmtD(b.date)}, ${slotLabel(b.slot)}*, but your payment hasn't reached us yet.`, '',
+      case 'pay': return [hi, `We received your request for *${b.package_name || 'a home blood test'}* on *${fmtD(b.date)}, ${slotLabel(b.slot)}*, but your payment hasn't reached us yet.`, '',
         `Your slot is reserved only after payment. Please pay *${money(b.amount || CFG.amount)}* by UPI to *${CFG.upiId || 'our UPI ID'}* and reply here with the payment screenshot.`, '',
         'Want a different time? Just reply here.', sign].join('\n');
       case 'confirm': return confirmText(b);
-      case 'reminder': return [hi, `Reminder: our phlebotomist will visit you *${dayWord(b.date)}, ${slotLabel(b.slot)}*.`, `📍 ${fullAddr(b)}`, '',
+      case 'reminder': return [hi, `Reminder: our phlebotomist will visit you *${dayWord(b.date)}, ${slotLabel(b.slot)}*${b.package_name ? ` for your *${b.package_name}* test` : ''}.`, `📍 ${fullAddr(b)}`, '',
         'Please fast for 10–12 hours before the test (water is fine). Our phlebotomist will call you before arriving.', '', 'Need to change the time? Reply here.', sign].join('\n');
       case 'slots': return [hi, (isPast(b.date, b.slot) || OCCUPY.includes(b.status)) ? `We need to find you a new time for your home blood test.` : `The slot you picked (${fmtD(b.date)}, ${slotLabel(b.slot)}) is no longer available.`, '',
         'These slots are free:', list || '(no free slots in the next few days – please call us)', '', 'Reply with the number of the slot that suits you and we\'ll book it.', sign].join('\n');
@@ -194,7 +200,7 @@
         `To rebook, a visit fee of *${money(b.fee_due || CFG.visitFee)}* applies. Please pay it by UPI to *${CFG.upiId || 'our UPI ID'}* and send the screenshot here with the slot you want:`, list || '(please call us for a slot)', sign].join('\n');
       case 'collected': return [hi, 'Your blood sample has been collected ✅', b.vial_no ? `Vial no.: *${b.vial_no}*` : null, '',
         "We'll send your report here on WhatsApp as soon as it's ready.", sign].filter((x) => x !== null).join('\n');
-      case 'report': return [hi, 'Your test report is ready 📄', '', `Download: ${reportLink(b)}`, b.vial_no ? `Vial no.: ${b.vial_no}` : null, '',
+      case 'report': return [hi, `Your ${b.package_name ? b.package_name + ' ' : 'test '}report is ready 📄`, '', `Download: ${reportLink(b)}`, b.vial_no ? `Vial no.: ${b.vial_no}` : null, '',
         'Please share it with your doctor. Questions? Reply here or call 8368143677.', sign].filter((x) => x !== null).join('\n');
       default: return '';
     }
@@ -202,8 +208,8 @@
   function confirmText(b) {
     return [`Hi ${b.name}! 👋`, 'Your home blood test with *Dr. Sarwan Diagnostic Labs* is *confirmed* ✅', '',
       `🧾 Booking ref: ${b.id}`, `📅 Date: ${fmt(b.date, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}`, `⏰ Time: ${slotLabel(b.slot)}`,
-      `📍 Address: ${fullAddr(b)}`, `💳 Payment of ${money(b.amount)} received. Thank you!`, '',
-      'Test: Complete Hormone & Fertility Panel (FSH, LH, Prolactin, AMH, T3, T4, TSH)', '',
+      `📍 Address: ${fullAddr(b)}`, `💳 Payment of ${money(b.amount)} received. Thank you!`,
+      `🧪 Test: ${b.package_name || 'Blood test'}${pkgOf(b) && pkgOf(b).tests ? ` (${pkgOf(b).tests})` : ''}`, '',
       'Before the test:', '• Fast for 10–12 hours overnight (water is fine)', '• Our phlebotomist will call you before arriving', '',
       'Need to reschedule? Call/WhatsApp 8368143677.'].join('\n');
   }
@@ -301,6 +307,7 @@
     return `<div class="dt-h">
 <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px"><div><div class="dt-name">${esc(b.name)}</div><div class="meta" style="margin-top:2px">Ref ${esc(b.id)}</div></div>
 <span class="pill st-${b.status}" style="margin:0;flex:none">${s.label}</span></div>
+${b.package_name ? `<div class="dt-test"><span class="dt-k">Test</span><b>${esc(b.package_name)}</b>${pkgOf(b) && pkgOf(b).tests ? `<span class="meta">${esc(pkgOf(b).tests)}</span>` : ''}</div>` : ''}
 <div class="dt-when"><span>${fmtD(b.date)} · ${esc(slotLabel(b.slot))}</span>${MOVABLE.includes(b.status) ? `<button type="button" class="btn ghost sm" style="margin-left:auto" data-act="move" data-id="${b.id}">${b.status === 'no_show' ? 'Rebook' : 'Reschedule'}</button>` : ''}</div>
 ${tracker(b)}
 </div>
@@ -338,7 +345,7 @@ ${b.notes ? `<div><div class="dt-k">Notes</div><div style="margin-top:2px">${esc
 
   function card(b) {
     return `<div class="lrow"><div class="t">${fmtD(b.date)}<br><span class="meta">${esc(slotLabel(b.slot))}</span></div>
-<div class="who"><div><button type="button" class="lnk n" data-act="open" data-id="${b.id}" style="background:none;border:0;padding:0;font:inherit;font-weight:700;font-size:16px;cursor:pointer;color:var(--ink)">${esc(b.name)}</button><span class="pill st-${b.status}">${ST[b.status].label}</span>${b.vial_no ? ` <span class="vial">${esc(b.vial_no)}</span>` : ''}</div>
+<div class="who"><div><button type="button" class="lnk n" data-act="open" data-id="${b.id}" style="background:none;border:0;padding:0;font:inherit;font-weight:700;font-size:16px;cursor:pointer;color:var(--ink)">${esc(b.name)}</button><span class="pill st-${b.status}">${ST[b.status].label}</span>${b.vial_no ? ` <span class="vial">${esc(b.vial_no)}</span>` : ''}${testLine(b)}</div>
 <div class="meta"><a href="tel:+91${esc(b.phone)}">+91 ${esc(b.phone)}</a> · ${esc(b.city || '')} ${esc(b.pincode)} · ${money(b.amount)}${b.status === 'no_show' ? ` · <b style="color:#9b1c31">${money(b.fee_due || CFG.visitFee)} fee due</b>` : ''}${b.report_at ? ` · report ${when(b.report_at)}` : ''}${b.collected_at && !b.report_at ? ` · collected ${when(b.collected_at)}` : ''}</div>
 <div class="acts">${nextStep(b)}${b.has_proof && ['payment_submitted', 'pending', 'expired'].includes(b.status) ? `<button class="btn ghost sm" data-act="shot" data-id="${b.id}">View screenshot</button>` : ''}<button class="btn ghost sm" data-act="open" data-id="${b.id}">Details &amp; messages</button></div></div></div>`;
   }
@@ -377,11 +384,11 @@ ${b.notes ? `<div><div class="dt-k">Notes</div><div style="margin-top:2px">${esc
     let rows = data.bookings.filter((b) => b.status !== 'blocked');
     if (st === 'active') rows = rows.filter(live); else if (st !== 'all') rows = rows.filter((b) => b.status === st);
     if (wh === 'upcoming') rows = rows.filter((b) => b.date >= today); else if (wh === 'past') rows = rows.filter((b) => b.date < today);
-    if (q) rows = rows.filter((b) => [b.name, b.phone, b.address, b.city, b.state, b.pincode, b.id, b.utr, b.vial_no].join(' ').toLowerCase().includes(q));
+    if (q) rows = rows.filter((b) => [b.name, b.phone, b.address, b.city, b.state, b.pincode, b.id, b.utr, b.vial_no, b.package_name].join(' ').toLowerCase().includes(q));
     rows.sort((a, b) => (wh === 'past' ? (b.date + b.slot).localeCompare(a.date + a.slot) : (a.date + a.slot).localeCompare(b.date + b.slot)));
     $('#tbody').innerHTML = rows.length ? rows.map((b) => `<tr class="row" data-row="${b.id}">
 <td style="white-space:nowrap"><b>${fmt(b.date, { weekday: 'short', day: 'numeric', month: 'short' })}</b><small>${esc(slotLabel(b.slot))}</small><small>${esc(b.id)}</small></td>
-<td><button type="button" class="lnk" data-act="open" data-id="${b.id}">${esc(b.name)}</button>${b.vial_no ? `<br><span class="vial">${esc(b.vial_no)}</span>` : ''}${b.cycle ? `<small>${esc(b.cycle)}</small>` : ''}</td>
+<td><button type="button" class="lnk" data-act="open" data-id="${b.id}">${esc(b.name)}</button>${testLine(b)}${b.vial_no ? `<br><span class="vial">${esc(b.vial_no)}</span>` : ''}${b.cycle ? `<small>${esc(b.cycle)}</small>` : ''}</td>
 <td style="white-space:nowrap"><a href="tel:+91${esc(b.phone)}">${esc(b.phone)}</a><small><a href="#" data-act="wa" data-kind="chat" data-id="${b.id}">WhatsApp</a></small></td>
 <td class="addr">${esc(b.address)}<small>PIN ${esc(b.pincode)} · <a href="${mapUrl(b)}" target="_blank" rel="noopener">Map</a></small>${b.notes ? `<small>Note: ${esc(b.notes)}</small>` : ''}</td>
 <td>${esc(b.city || '–')}</td>
@@ -478,7 +485,7 @@ ${b.notes ? `<div><div class="dt-k">Notes</div><div style="margin-top:2px">${esc
     if (!b) return occ ? '' : `<button type="button" class="fr" data-act="add" data-date="${date}" data-slot="${slot}" ${past ? 'disabled' : ''} aria-label="Free slot ${esc(slotLabel(slot))}, add booking">+</button>`;
     const s = ST[b.status];
     const cls = ['bk', b.id === cal.sel ? 'sel' : '', b.status === 'pending' ? 'dash' : '', ['cancelled', 'expired'].includes(b.status) ? 'cx' : ''].join(' ');
-    return `<button type="button" class="${cls}" data-act="sel" data-id="${b.id}" style="background:${s.bg};border-left-color:${s.stripe}" aria-label="${esc(b.name)}, ${esc(slotLabel(slot))}, ${s.label}">
+    return `<button type="button" class="${cls}" data-act="sel" data-id="${b.id}" style="background:${s.bg};border-left-color:${s.stripe}" title="${esc(b.package_name || '')}" aria-label="${esc(b.name)}, ${esc(b.package_name || '')}, ${esc(slotLabel(slot))}, ${s.label}">
 <span class="nm">${esc(b.name)}</span><span class="ar">${b.vial_no ? '🧪 ' + esc(b.vial_no) : esc(b.city || '') + (b.pincode ? ' · ' + esc(b.pincode) : '')}</span><span class="tg" style="color:${s.fg}">${s.tag}${extra}${b.has_proof && b.status === 'payment_submitted' ? ' · 📎' : ''}</span></button>`;
   }
 
@@ -516,7 +523,7 @@ ${b.notes ? `<div><div class="dt-k">Notes</div><div style="margin-top:2px">${esc
       else if (oc && shown(oc)) {
         const st = ST[oc.status];
         body = `<div class="dbk" data-act="open" data-id="${oc.id}" style="border-left-color:${st.stripe};background:${['completed', 'collected'].includes(oc.status) ? '#fafbff' : '#fff'}" role="button" tabindex="0" aria-label="Open ${esc(oc.name)}">
-<div class="p1"><b>${esc(oc.name)}</b><div>+91 ${esc(oc.phone)}</div>${oc.vial_no ? `<span class="vial">${esc(oc.vial_no)}</span>` : ''}</div>
+<div class="p1"><b>${esc(oc.name)}</b><div>+91 ${esc(oc.phone)}</div>${testLine(oc)}${oc.vial_no ? `<span class="vial">${esc(oc.vial_no)}</span>` : ''}</div>
 <div class="p2">${esc(oc.address)}<br><b style="color:#1b2a4e">${esc(oc.city || '')}</b> · ${esc(oc.pincode)}</div>
 <span class="pill st-${oc.status}" style="margin:0">${st.label}</span>
 <div class="acts" style="margin:0">${oc.status === 'payment_submitted' && oc.has_proof ? `<button type="button" class="btn ghost sm" data-act="shot" data-id="${oc.id}">Screenshot</button>` : ''}${nextStep(oc)}</div></div>`;
@@ -560,7 +567,7 @@ ${n ? `<span class="cap" style="width:100%;margin:auto 0 0"><i style="width:${n 
   function runSheetHTML(date) {
     const stops = runStops(date);
     return `<div class="run-h"><div class="run-k">Phlebotomist run sheet</div><div class="run-t">${stops.length} pickup${stops.length === 1 ? '' : 's'} · ${fmtD(date)}</div><div class="meta" style="margin-top:2px">Confirmed + paid-to-verify bookings, in slot order</div></div>
-<div class="run-b">${stops.length ? stops.map((b, i) => `<div class="stop"><div style="display:flex;flex-direction:column;align-items:center"><span class="n">${i + 1}</span><span class="ln"></span></div><div class="bd"><div style="font-weight:800">${fmtT(slotMin(b.slot))} · <a href="#" data-act="open" data-id="${b.id}" style="color:inherit">${esc(b.name)}</a></div><div style="font-size:12.5px;color:#3b4a68;margin-top:2px">${esc(b.address)}, ${esc(b.city || '')} · ${esc(b.pincode)}</div><div style="font-size:12px;color:#8492a6;margin-top:2px">+91 ${esc(b.phone)}${b.status === 'payment_submitted' ? ' · payment to verify' : ''}</div></div></div>`).join('') : '<p class="meta">No confirmed pickups for this day yet.</p>'}</div>
+<div class="run-b">${stops.length ? stops.map((b, i) => `<div class="stop"><div style="display:flex;flex-direction:column;align-items:center"><span class="n">${i + 1}</span><span class="ln"></span></div><div class="bd"><div style="font-weight:800">${fmtT(slotMin(b.slot))} · <a href="#" data-act="open" data-id="${b.id}" style="color:inherit">${esc(b.name)}</a></div><div style="font-size:12.5px;color:#3b4a68;margin-top:2px">${esc(b.address)}, ${esc(b.city || '')} · ${esc(b.pincode)}</div><div style="font-size:12px;color:#8492a6;margin-top:2px">${b.package_name ? esc(b.package_name) + ' · ' : ''}+91 ${esc(b.phone)}${b.status === 'payment_submitted' ? ' · payment to verify' : ''}</div></div></div>`).join('') : '<p class="meta">No confirmed pickups for this day yet.</p>'}</div>
 <div class="dt-f">
 <button class="btn wa" data-act="run-wa" ${stops.length ? '' : 'disabled'}>Send run sheet on WhatsApp</button>
 <div style="display:flex;gap:8px"><button class="btn ghost" style="flex:1" data-act="run-map" ${stops.length ? '' : 'disabled'}>Open route in Maps</button><button class="btn ghost" style="flex:1" data-act="run-print" ${stops.length ? '' : 'disabled'}>Print</button></div>
@@ -579,7 +586,7 @@ ${n ? `<span class="cap" style="width:100%;margin:auto 0 0"><i style="width:${n 
   function runText(date) {
     const stops = runStops(date);
     return [`🩸 Home collections – ${fmt(date, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}`, `${stops.length} pickup${stops.length === 1 ? '' : 's'}`, '',
-      ...stops.flatMap((b, i) => [`${i + 1}) ${slotLabel(b.slot)} · ${b.name} · +91 ${b.phone}`, `   ${b.address}, ${b.city || ''} – ${b.pincode}`, `   Map: ${mapUrl(b)}`, b.notes ? `   Note: ${b.notes}` : null, ''].filter((x) => x !== null)),
+      ...stops.flatMap((b, i) => [`${i + 1}) ${slotLabel(b.slot)} · ${b.name} · +91 ${b.phone}`, `   Test: ${b.package_name || '-'}`, `   ${b.address}, ${b.city || ''} – ${b.pincode}`, `   Map: ${mapUrl(b)}`, b.notes ? `   Note: ${b.notes}` : null, ''].filter((x) => x !== null)),
       'Please write the vial no. against each patient and share it after collection.'].join('\n');
   }
   function runMap(date) {
@@ -595,7 +602,7 @@ ${n ? `<span class="cap" style="width:100%;margin:auto 0 0"><i style="width:${n 
     w.document.write(`<!doctype html><meta charset="utf-8"><title>Run sheet ${date}</title><style>body{font-family:system-ui,sans-serif;margin:28px;color:#111}h1{font-size:20px;margin:0 0 4px}table{width:100%;border-collapse:collapse;margin-top:16px;font-size:13px}td,th{border:1px solid #bbb;padding:8px;text-align:left;vertical-align:top}th{background:#f2f2f2}</style>
 <h1>Dr. Sarwan Diagnostic Labs – Home collections</h1><div>${esc(fmt(date, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))} · ${stops.length} pickups</div>
 <table><tr><th>#</th><th>Time</th><th>Patient</th><th>Phone</th><th>Address</th><th>Payment</th><th>Vial no.</th></tr>
-${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><td>${esc(b.name)}<br><small>${esc(b.id)}</small></td><td>+91 ${esc(b.phone)}</td><td>${esc(b.address)}, ${esc(b.city || '')} – ${esc(b.pincode)}${b.notes ? `<br><small>${esc(b.notes)}</small>` : ''}</td><td>${b.status === 'payment_submitted' ? 'To verify' : 'Paid'}</td><td style="min-width:110px"></td></tr>`).join('')}</table>`);
+${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><td>${esc(b.name)}<br><small>${esc(b.package_name || '')} · ${esc(b.id)}</small></td><td>+91 ${esc(b.phone)}</td><td>${esc(b.address)}, ${esc(b.city || '')} – ${esc(b.pincode)}${b.notes ? `<br><small>${esc(b.notes)}</small>` : ''}</td><td>${b.status === 'payment_submitted' ? 'To verify' : 'Paid'}</td><td style="min-width:110px"></td></tr>`).join('')}</table>`);
     w.document.close(); w.focus(); setTimeout(() => w.print(), 300);
   }
 
@@ -752,6 +759,60 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     if (ok) { attTab = 'send'; renderBookings(); toast(`${ok} report${ok === 1 ? '' : 's'} uploaded · send them from "Reports to send"`); }
   };
 
+  // ---------- tests / packages ----------
+  async function loadPkgs() {
+    const r = await api('/api/admin/packages');
+    PKGS = r.packages;
+    renderPkgs();
+  }
+  function renderPkgs() {
+    const q = ($('#pkgSearch').value || '').trim().toLowerCase();
+    const rows = PKGS.filter((p) => !q || (p.name + ' ' + (p.tests || '')).toLowerCase().includes(q));
+    $('#pkgBody').innerHTML = rows.length ? rows.map((p) => `<tr class="${p.active ? '' : 'off'}">
+<td><b>${esc(p.name)}</b><span class="tests">${esc(p.tests || '—')}</span></td>
+<td class="num">${p.mrp ? money(p.mrp) : '—'}</td>
+<td class="num"><b>${money(p.price)}</b></td>
+<td class="num">${p.margin != null ? money(p.margin) : '—'}</td>
+<td>${esc(p.target || '—')}</td>
+<td class="num">${p.bookings || 0}</td>
+<td>${p.is_default ? '<span class="badge web">Website test</span>' : ''}<span class="badge ${p.active ? 'on' : 'off'}">${p.active ? 'Active' : 'Hidden'}</span></td>
+<td><button type="button" class="btn ghost sm" data-act="pkg-edit" data-pid="${p.id}">Edit</button></td></tr>`).join('')
+      : '<tr><td colspan="8" class="meta" style="padding:18px">No tests match.</td></tr>';
+    $('#pkgCount').textContent = `${PKGS.filter((p) => p.active).length} active · ${PKGS.filter((p) => !p.active).length} hidden`;
+  }
+  $('#pkgSearch').oninput = renderPkgs;
+  let pkgEditing = null;
+  function openPkg(id) {
+    const p = id ? PKGS.find((x) => x.id === id) : null;
+    pkgEditing = p ? p.id : null;
+    $('#pkgForm').reset(); $('#pkgErr').textContent = '';
+    $('#pkgTitle').textContent = p ? `Edit ${p.name}` : 'Add test';
+    $('#pName').value = p ? p.name : ''; $('#pTests').value = p ? p.tests || '' : '';
+    $('#pPrice').value = p ? p.price : ''; $('#pMrp').value = p && p.mrp != null ? p.mrp : '';
+    $('#pMargin').value = p && p.margin != null ? p.margin : ''; $('#pTarget').value = p ? p.target || '' : '';
+    $('#pActive').checked = p ? !!p.active : true; $('#pDefault').checked = p ? !!p.is_default : false;
+    $('#pkgDel').hidden = !p;
+    $$('dialog[open]').forEach((d) => d.close());
+    $('#pkgDlg').showModal(); setTimeout(() => $('#pName').focus(), 50);
+  }
+  $('#pkgForm').onsubmit = async (e) => {
+    e.preventDefault(); $('#pkgErr').textContent = '';
+    const body = { name: $('#pName').value, tests: $('#pTests').value, price: $('#pPrice').value, mrp: $('#pMrp').value, margin: $('#pMargin').value, target: $('#pTarget').value, active: $('#pActive').checked, is_default: $('#pDefault').checked };
+    $('#pkgSave').disabled = true;
+    try {
+      await post(pkgEditing ? `/api/admin/packages/${pkgEditing}` : '/api/admin/packages', body);
+      $('#pkgDlg').close(); toast(pkgEditing ? 'Test updated' : 'Test added');
+      await loadPkgs();
+    } catch (err) { $('#pkgErr').textContent = err.message; }
+    finally { $('#pkgSave').disabled = false; }
+  };
+  $('#pkgDel').onclick = async () => {
+    const p = PKGS.find((x) => x.id === pkgEditing); if (!p) return;
+    if (!confirm(`Delete "${p.name}"? This can't be undone.`)) return;
+    try { await api(`/api/admin/packages/${p.id}`, { method: 'DELETE' }); $('#pkgDlg').close(); toast('Test deleted'); await loadPkgs(); }
+    catch (err) { $('#pkgErr').textContent = err.message; }
+  };
+
   // ---------- add / reschedule form ----------
   let form = { mode: 'add', id: null, fee: false };
   async function fillSlots(date, keep, ownId) {
@@ -773,17 +834,42 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     if (mode === 'add') { $('#formTitle').textContent = 'Add booking'; $('#formSub').textContent = 'For phone or walk-in bookings'; $('#formSave').textContent = 'Save booking'; }
     else { $('#formTitle').textContent = `${form.fee ? 'Rebook' : 'Reschedule'} ${ctx.name}`; $('#formSub').textContent = `Currently ${fmtD(ctx.date)} · ${slotLabel(ctx.slot)}`; $('#formSave').textContent = form.fee ? 'Rebook' : 'Move booking'; }
     const date = mode === 'move' && ctx.date < ist() ? ist() : (ctx.date || ist());
+    if (mode === 'add') fillPkgSelect();
+    if (mode === 'add' && !PKGS.length) loadPkgs().then(fillPkgSelect).catch(() => {});
     $('#fDate').value = date;
     fillSlots(date, mode === 'move' && ctx.date < ist() ? null : ctx.slot, form.id);
     $$('dialog[open]').forEach((d) => d.close());
     $('#formDlg').showModal();
     setTimeout(() => (mode === 'add' ? $('#fName') : $('#fDate')).focus(), 50);
   }
+  function fillPkgSelect() {
+    const act = PKGS.filter((p) => p.active);
+    const def = act.find((p) => p.is_default) || act[0];
+    $('#fPkg').innerHTML = act.map((p) => `<option value="${p.id}" ${def && p.id === def.id ? 'selected' : ''}>${esc(p.name)} – ${money(p.price)}</option>`).join('') || '<option value="">No tests – add one in the Tests tab</option>';
+    pkgPicked();
+  }
+  function pkgPicked() {
+    const p = PKGS.find((x) => String(x.id) === $('#fPkg').value);
+    $('#fAmt').value = p ? p.price : '';
+    $('#fPkgTests').textContent = p && p.tests ? p.tests : '';
+  }
+  $('#fPkg').onchange = pkgPicked;
+  function setState(name) {
+    const sel = $('#fState'); if (!name) return;
+    const want = name.toLowerCase().replace(/&/g, 'and').replace(/\s+/g, ' ').trim();
+    let o = $$('option', sel).find((x) => x.value && x.value.toLowerCase() === want);
+    if (!o) { o = document.createElement('option'); o.value = o.textContent = name; sel.appendChild(o); }
+    sel.value = o.value;
+  }
   $('#fDate').onchange = () => fillSlots($('#fDate').value, $('#fSlot').value, form.id);
   $('#fPin').oninput = async () => {
     const v = $('#fPin').value.replace(/\D/g, '').slice(0, 6); $('#fPin').value = v;
     if (v.length !== 6) return;
-    try { const r = await fetch('/api/pincode/' + v).then((x) => x.json()); if (r.found) { if (!$('#fCity').value) $('#fCity').value = r.city; if (!$('#fState').value) $('#fState').value = r.state; } } catch (e) {}
+    try {
+      const r = await fetch('/api/pincode/' + v).then((x) => x.json());
+      if (r.found) { $('#fCity').value = r.city; setState(r.state); }
+      else toast('Pincode not found – enter city and state');
+    } catch (e) {}
   };
   $('#bkForm').onsubmit = async (e) => {
     e.preventDefault(); $('#formErr').textContent = '';
@@ -791,7 +877,12 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     if (form.fee && !$('#fFee').checked) { $('#formErr').textContent = 'Tick "visit fee received" once the patient has paid it.'; return; }
     const btn = $('#formSave'); btn.disabled = true;
     try {
-      if (form.mode === 'add') { delete fd.feePaid; await post('/api/admin/bookings', fd); toast('Booking added'); }
+      if (form.mode === 'add') {
+        delete fd.feePaid;
+        if (!fd.package_id) throw new Error('Pick the test.');
+        if (!fd.state) throw new Error('Pick the state.');
+        await post('/api/admin/bookings', fd); toast('Booking added');
+      }
       else { await post(`/api/admin/bookings/${form.id}/move`, { date: fd.date, slot: fd.slot, feePaid: form.fee ? true : undefined }); }
       $('#formDlg').close();
       if (form.mode === 'move' && cal.view !== 'week') cal.anchor = fd.date;
@@ -820,6 +911,8 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     else if (a === 'report-one') { oneReportId = id; $('#oneReport').click(); }
     else if (a === 'report-view') viewReport(id);
     else if (a === 'reports') openReports();
+    else if (a === 'pkg-add') openPkg(null);
+    else if (a === 'pkg-edit') openPkg(Number(el.dataset.pid));
     else if (a === 'move') { const b = findB(id); if (b) openForm('move', b); }
     else if (a === 'add') openForm('add', { date: el.dataset.date || (tab === 'calendar' ? cal.anchor : ist()), slot: el.dataset.slot });
     else if (a === 'block') block(el.dataset.date, el.dataset.slot, true);

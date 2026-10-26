@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS bookings (
   city TEXT, state TEXT,
   vial_no TEXT, collected_at TEXT,            -- tracker entered when the sample is collected
   report_name TEXT, report_size INTEGER, report_token TEXT, report_at TEXT, completed_at TEXT,
-  fee_due INTEGER, fee_paid_at TEXT, missed_slot TEXT   -- "reached, patient unavailable" visit fee
+  fee_due INTEGER, fee_paid_at TEXT, missed_slot TEXT,  -- "reached, patient unavailable" visit fee
+  package_id INTEGER, package_name TEXT                  -- test booked (name kept even if the test is later renamed)
 );
 
 -- Only one PAID booking can hold a slot. Unpaid (pending), expired and cancelled rows do not count.
@@ -35,4 +36,8 @@ CREATE INDEX IF NOT EXISTS bookings_by_status ON bookings(status);
 CREATE TABLE IF NOT EXISTS payment_proofs (booking_id TEXT PRIMARY KEY, mime TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS report_chunks (booking_id TEXT NOT NULL, idx INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (booking_id, idx));
 CREATE TABLE IF NOT EXISTS msg_log (id INTEGER PRIMARY KEY AUTOINCREMENT, booking_id TEXT NOT NULL, kind TEXT NOT NULL, at TEXT NOT NULL);
+-- Tests / packages (seeded from DRSARWAN_TESTS_PACKAGES.xlsx on first run)
+CREATE TABLE IF NOT EXISTS packages (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, tests TEXT, mrp INTEGER, price INTEGER NOT NULL,
+  margin INTEGER, target TEXT, active INTEGER NOT NULL DEFAULT 1, is_default INTEGER NOT NULL DEFAULT 0, sort INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 -- (The Worker creates / upgrades all of this automatically; this file is for reference.)

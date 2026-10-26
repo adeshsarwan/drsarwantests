@@ -296,3 +296,16 @@ a{color:var(--teal)}
 .dt-sec{display:flex;flex-direction:column;gap:8px}
 @media (max-width:640px){.track span{font-size:9.5px}.rep-t select{max-width:150px}}
 .tbl td.num .btn{display:flex;margin:6px 0 0 auto}
+
+/* tests tab */
+.pkg-t{min-width:900px}
+.pkg-t td b{font-weight:700}
+.pkg-t .tests{color:var(--muted);font-size:12.5px;display:block;margin-top:3px;max-width:460px}
+.pkg-t tr.off td{opacity:.55}
+.badge{display:inline-block;font-size:11.5px;font-weight:800;border-radius:999px;padding:2px 8px;margin:2px 4px 0 0}
+.badge.on{background:#dff3ea;color:#17694a}.badge.off{background:#eef1f4;color:var(--muted)}.badge.web{background:#e1ecf7;color:#1f4f8a}
+.chk span{display:flex;align-items:center;gap:8px;font-weight:500}
+.chk input{width:18px;height:18px}
+.test-l{display:block;font-size:12px;font-weight:700;color:#1f6977;margin-top:2px}
+.dt-test{margin-top:10px;display:flex;flex-direction:column;gap:2px}
+.dt-test b{font-size:15px}
