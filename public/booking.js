@@ -50,7 +50,8 @@
     const box = $('#bk-slots');
     box.innerHTML = '<span class="bk-muted">Checking availability…</span>';
     try {
-      const { slots } = await api('/api/slots?date=' + d);
+      const cityEl = document.getElementById('bk-city');
+      const { slots } = await api('/api/slots?date=' + d + (cityEl && cityEl.value.trim() ? '&city=' + encodeURIComponent(cityEl.value.trim()) : ''));
       box.innerHTML = '';
       slots.forEach((s) => {
         const b = document.createElement('button');

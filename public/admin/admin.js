@@ -112,10 +112,10 @@
   $$('.tab').forEach((t) => (t.onclick = () => showTab(t.getAttribute('data-tab'))));
 
   async function refreshAll() {
-    await load();
-    loadPkgs().catch(() => {});
+    await Promise.all([load(), loadPkgs().catch(() => {})]);
     if (tab === 'calendar' || cal.data) await loadCal();
     if (detailId && $('#detailDlg').open) { const b = findB(detailId); if (b) $('#detailBody').innerHTML = detailHTML(b); }
+    else if (slotOpen && $('#detailDlg').open && cal.data) $('#detailBody').innerHTML = slotListHTML(slotOpen.date, slotOpen.slot);
   }
 
   // ================= WORKFLOW (shared by list, calendar, detail) =================
@@ -126,6 +126,7 @@
   };
   const hasPaidProof = (b) => !!(b.has_proof || b.utr);
   const pkgOf = (b) => PKGS.find((p) => p.id === b.package_id);
+  const prepOf = (b) => { const p = pkgOf(b); return p ? (p.prep || '').trim() : '• Our phlebotomist will call you before arriving'; };
   const testLine = (b) => (b.package_name ? `<span class="test-l">🧪 ${esc(b.package_name)}</span>` : '');
 
   // The one most useful next action for a booking
@@ -193,7 +194,7 @@
         'Want a different time? Just reply here.', sign].join('\n');
       case 'confirm': return confirmText(b);
       case 'reminder': return [hi, `Reminder: our phlebotomist will visit you *${dayWord(b.date)}, ${slotLabel(b.slot)}*${b.package_name ? ` for your *${b.package_name}* test` : ''}.`, `📍 ${fullAddr(b)}`, '',
-        'Please fast for 10–12 hours before the test (water is fine). Our phlebotomist will call you before arriving.', '', 'Need to change the time? Reply here.', sign].join('\n');
+        ...(prepOf(b) ? ['Before the test:', prepOf(b), ''] : []), 'Need to change the time? Reply here.', sign].join('\n');
       case 'slots': return [hi, (isPast(b.date, b.slot) || OCCUPY.includes(b.status)) ? `We need to find you a new time for your home blood test.` : `The slot you picked (${fmtD(b.date)}, ${slotLabel(b.slot)}) is no longer available.`, '',
         'These slots are free:', list || '(no free slots in the next few days – please call us)', '', 'Reply with the number of the slot that suits you and we\'ll book it.', sign].join('\n');
       case 'missed': return [hi, `Our phlebotomist reached your address ${b.missed_slot ? `on ${fmtD(b.missed_slot.slice(0, 10))} at ${fmtT(slotMin(b.missed_slot.slice(11)))}` : ''} but couldn't reach you, so the sample could not be collected.`, '',
@@ -210,7 +211,7 @@
       `🧾 Booking ref: ${b.id}`, `📅 Date: ${fmt(b.date, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}`, `⏰ Time: ${slotLabel(b.slot)}`,
       `📍 Address: ${fullAddr(b)}`, `💳 Payment of ${money(b.amount)} received. Thank you!`,
       `🧪 Test: ${b.package_name || 'Blood test'}${pkgOf(b) && pkgOf(b).tests ? ` (${pkgOf(b).tests})` : ''}`, '',
-      'Before the test:', '• Fast for 10–12 hours overnight (water is fine)', '• Our phlebotomist will call you before arriving', '',
+      ...(prepOf(b) ? ['Before the test:', prepOf(b), '(If your doctor gave you different instructions, follow your doctor.)', ''] : []),
       'Need to reschedule? Call/WhatsApp 8368143677.'].join('\n');
   }
 
@@ -419,9 +420,21 @@ ${b.notes ? `<div><div class="dt-k">Notes</div><div style="margin-top:2px">${esc
   }
 
   const at = (date, slot) => cal.data.bookings.filter((b) => b.date === date && b.slot === slot);
-  const occupant = (date, slot) => at(date, slot).find((b) => OCCUPY.includes(b.status));
-  const dayBooked = (date) => cal.data.bookings.filter((b) => b.date === date && OCCUPY.includes(b.status) && b.status !== 'blocked').length;
-  const fillColor = (n) => (n >= 8 ? '#e2603f' : '#1f8a6a');
+  const HOLD = OCCUPY.filter((x) => x !== 'blocked');
+  const CAP = () => CFG.slotCapacity || 20;
+  const cityKey = (c) => String(c || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const isBlocked = (date, slot) => at(date, slot).some((b) => b.status === 'blocked');
+  const dayBooked = (date) => cal.data.bookings.filter((b) => b.date === date && HOLD.includes(b.status)).length;
+  const slotsUsed = (date) => new Set(cal.data.bookings.filter((b) => b.date === date && HOLD.includes(b.status)).map((b) => b.slot)).size;
+  const fillColor = (n) => (n >= 8 ? '#e2603f' : '#1f8a6a'); // n = slots in use out of 10
+  // bookings to show in a slot (respecting the filters): paid first, then unpaid, then cancelled
+  const rank = (st) => (HOLD.includes(st) ? 0 : st === 'pending' ? 1 : 2);
+  const slotItems = (date, slot) => at(date, slot).filter((b) => b.status !== 'blocked' && shown(b))
+    .sort((a, b) => rank(a.status) - rank(b.status) || String(a.created_at).localeCompare(String(b.created_at)));
+  function slotSummary(items) {
+    const cities = {}; items.forEach((b) => { const c = b.city || '—'; cities[c] = (cities[c] || 0) + 1; });
+    return Object.entries(cities).sort((a, b) => b[1] - a[1]).map(([c, n]) => `${c} ${n}`).join(' · ');
+  }
 
   function renderCal() {
     if (!cal.data) return;
@@ -455,12 +468,12 @@ ${b.notes ? `<div><div class="dt-k">Notes</div><div style="margin-top:2px">${esc
     const list = cal.data.bookings.filter(inView);
     const occ = list.filter((b) => OCCUPY.includes(b.status) && b.status !== 'blocked');
     const [vs, ve] = cal.view === 'month' ? [monthStart(cal.anchor), monthEnd(cal.anchor)] : viewRange();
-    let free = 0; for (let d = vs; d <= ve; d = addDays(d, 1)) SLOTS.forEach((sl) => { if (!isPast(d, sl) && !occupant(d, sl)) free++; });
+    let free = 0; for (let d = vs; d <= ve; d = addDays(d, 1)) SLOTS.forEach((sl) => { if (!isPast(d, sl) && !isBlocked(d, sl)) free++; });
     const c = (s) => list.filter((b) => b.status === s).length;
     $('#railStatsTitle').textContent = cal.view === 'day' ? 'This day' : cal.view === 'month' ? 'This month' : 'This week';
     $('#railStats').innerHTML = `
 <div class="rs"><b>${occ.length}</b><span>Bookings</span></div>
-<div class="rs"><b>${free}</b><span>Free slots left</span></div>
+<div class="rs"><b>${free}</b><span>Open slots left</span></div>
 <div class="rs v"><b>${c('payment_submitted')}</b><span>To verify</span></div>
 <div class="rs c"><b>${c('confirmed')}</b><span>Confirmed</span></div>
 <div class="rs"><b>${c('collected')}</b><span>Awaiting report</span></div>
@@ -473,27 +486,29 @@ ${b.notes ? `<div><div class="dt-k">Notes</div><div style="margin-top:2px">${esc
   const shown = (b) => b.status === 'blocked' || cal.filters.has(['cancelled', 'expired'].includes(b.status) ? 'cancelled' : b.status);
 
   function cellHTML(date, slot) {
-    const list = at(date, slot), past = isPast(date, slot);
-    const occ = list.find((b) => OCCUPY.includes(b.status));
-    if (occ && occ.status === 'blocked') return `<button type="button" class="blk" data-act="unblock" data-date="${date}" data-slot="${slot}" title="Click to unblock">Blocked</button>`;
-    let b = occ && shown(occ) ? occ : null, extra = '';
-    if (!occ) {
-      const pend = list.filter((x) => x.status === 'pending');
-      if (pend.length && cal.filters.has('pending')) { b = pend[0]; if (pend.length > 1) extra = ` +${pend.length - 1}`; }
-      else { const cx = list.find((x) => ['cancelled', 'expired'].includes(x.status)); if (cx && cal.filters.has('cancelled')) b = cx; }
+    const items = slotItems(date, slot), past = isPast(date, slot), blocked = isBlocked(date, slot);
+    const lock = blocked ? ' · 🔒' : '';
+    if (!items.length) {
+      if (blocked) return `<button type="button" class="blk" data-act="unblock" data-date="${date}" data-slot="${slot}" title="Click to unblock">Blocked</button>`;
+      return `<button type="button" class="fr" data-act="add" data-date="${date}" data-slot="${slot}" ${past ? 'disabled' : ''} aria-label="Free slot ${esc(slotLabel(slot))}, add booking">+</button>`;
     }
-    if (!b) return occ ? '' : `<button type="button" class="fr" data-act="add" data-date="${date}" data-slot="${slot}" ${past ? 'disabled' : ''} aria-label="Free slot ${esc(slotLabel(slot))}, add booking">+</button>`;
-    const s = ST[b.status];
-    const cls = ['bk', b.id === cal.sel ? 'sel' : '', b.status === 'pending' ? 'dash' : '', ['cancelled', 'expired'].includes(b.status) ? 'cx' : ''].join(' ');
-    return `<button type="button" class="${cls}" data-act="sel" data-id="${b.id}" style="background:${s.bg};border-left-color:${s.stripe}" title="${esc(b.package_name || '')}" aria-label="${esc(b.name)}, ${esc(b.package_name || '')}, ${esc(slotLabel(slot))}, ${s.label}">
-<span class="nm">${esc(b.name)}</span><span class="ar">${b.vial_no ? '🧪 ' + esc(b.vial_no) : esc(b.city || '') + (b.pincode ? ' · ' + esc(b.pincode) : '')}</span><span class="tg" style="color:${s.fg}">${s.tag}${extra}${b.has_proof && b.status === 'payment_submitted' ? ' · 📎' : ''}</span></button>`;
+    if (items.length === 1) {
+      const b = items[0], st = ST[b.status];
+      const cls = ['bk', b.id === cal.sel ? 'sel' : '', b.status === 'pending' ? 'dash' : '', ['cancelled', 'expired'].includes(b.status) ? 'cx' : ''].join(' ');
+      return `<button type="button" class="${cls}" data-act="sel" data-id="${b.id}" data-tip="${date}|${slot}" style="background:${st.bg};border-left-color:${st.stripe}" aria-label="${esc(b.name)}, ${esc(b.package_name || '')}, ${esc(slotLabel(slot))}, ${st.label}">
+<span class="nm">${esc(b.name)}</span><span class="ar">${b.vial_no ? '🧪 ' + esc(b.vial_no) : esc(b.city || '') + (b.pincode ? ' · ' + esc(b.pincode) : '')}</span><span class="tg" style="color:${st.fg}">${st.tag}${b.has_proof && b.status === 'payment_submitted' ? ' · 📎' : ''}${lock}</span></button>`;
+    }
+    const held = items.filter((b) => HOLD.includes(b.status)).length;
+    const dots = items.slice(0, 12).map((b) => `<i style="background:${ST[b.status].stripe}"></i>`).join('');
+    return `<button type="button" class="bk multi" data-act="slotlist" data-date="${date}" data-slot="${slot}" data-tip="${date}|${slot}" aria-label="${items.length} bookings at ${esc(slotLabel(slot))}: ${esc(items.map((b) => b.name).join(', '))}">
+<span class="nm"><b class="cnt">${items.length}</b> bookings${lock}</span><span class="ar">${esc(slotSummary(items))}</span><span class="dots">${dots}</span>${held !== items.length ? `<span class="tg" style="color:#5a6880">${held} paid</span>` : ''}</button>`;
   }
 
   function renderWeek() {
     const days = []; for (let i = 0; i < 7; i++) days.push(addDays(cal.anchor, i));
     const today = ist();
     let h = '<div class="wk"><div class="wk-grid"><div class="wk-h" style="cursor:default;border-left:0"></div>';
-    days.forEach((d) => { const n = dayBooked(d); h += `<button type="button" class="wk-h ${d === today ? 'today' : ''}" data-act="goday" data-date="${d}" style="border-top:0;border-right:0"><div class="dw">${fmt(d, { weekday: 'short' })}</div><div class="dn">${fmt(d, { day: 'numeric' })}</div><div class="cap"><i style="width:${n * 10}%;background:${fillColor(n)}"></i></div><div class="cn"><b>${n}</b>/10 booked</div></button>`; });
+    days.forEach((d) => { const n = dayBooked(d), u = slotsUsed(d); h += `<button type="button" class="wk-h ${d === today ? 'today' : ''}" data-act="goday" data-date="${d}" style="border-top:0;border-right:0" title="${n} bookings in ${u} of 10 slots"><div class="dw">${fmt(d, { weekday: 'short' })}</div><div class="dn">${fmt(d, { day: 'numeric' })}</div><div class="cap"><i style="width:${u * 10}%;background:${fillColor(u)}"></i></div><div class="cn"><b>${n}</b> booked</div></button>`; });
     SLOTS.forEach((s) => {
       h += `<div class="wk-t">${fmtT(slotMin(s))}</div>`;
       days.forEach((d) => { h += `<div class="wk-c ${d === today ? 'today' : ''}">${cellHTML(d, s)}</div>`; });
@@ -502,41 +517,40 @@ ${b.notes ? `<div><div class="dt-k">Notes</div><div style="margin-top:2px">${esc
   }
 
   function runStops(date) {
-    return cal.data.bookings.filter((b) => b.date === date && ['payment_submitted', 'confirmed'].includes(b.status)).sort((a, b) => a.slot.localeCompare(b.slot));
+    return cal.data.bookings.filter((b) => b.date === date && ['payment_submitted', 'confirmed'].includes(b.status)).sort((a, b) => a.slot.localeCompare(b.slot) || String(a.city || '').localeCompare(String(b.city || '')) || String(a.pincode).localeCompare(String(b.pincode)));
   }
 
   function renderDay() {
     const d = cal.anchor, list = cal.data.bookings.filter((b) => b.date === d);
     let strip = '';
     for (let i = -3; i <= 3; i++) {
-      const x = addDays(d, i), n = dayBooked(x), on = i === 0;
-      strip += `<button type="button" class="sd ${on ? 'on' : ''}" data-act="goday" data-date="${x}"><span class="l"><span>${fmt(x, { weekday: 'short', day: 'numeric' })}</span><b>${n}<small>/10</small></b></span><span class="bar"><i style="width:${n * 10}%;background:${n >= 8 ? '#e2603f' : on ? '#7fd1b9' : '#1f8a6a'}"></i></span></button>`;
+      const x = addDays(d, i), n = dayBooked(x), u = slotsUsed(x), on = i === 0;
+      strip += `<button type="button" class="sd ${on ? 'on' : ''}" data-act="goday" data-date="${x}" title="${n} bookings in ${u} of 10 slots"><span class="l"><span>${fmt(x, { weekday: 'short', day: 'numeric' })}</span><b>${n}</b></span><span class="bar"><i style="width:${u * 10}%;background:${u >= 8 ? '#e2603f' : on ? '#7fd1b9' : '#1f8a6a'}"></i></span></button>`;
     }
     const occ = list.filter((b) => OCCUPY.includes(b.status) && b.status !== 'blocked');
     const c = (s) => list.filter((b) => b.status === s).length;
     let rows = '';
-    SLOTS.forEach((s) => {
-      const all = list.filter((b) => b.slot === s), oc = all.find((b) => OCCUPY.includes(b.status)), past = isPast(d, s);
-      const tm = `<div class="tm"><b>${fmtT(slotMin(s))}</b><small>to ${fmtT(slotMin(s) + 30)}</small></div>`;
-      let body;
-      if (oc && oc.status === 'blocked') body = `<div class="dblk">Blocked <button type="button" class="btn ghost sm" data-act="unblock" data-date="${d}" data-slot="${s}">Unblock</button></div>`;
-      else if (oc && shown(oc)) {
-        const st = ST[oc.status];
-        body = `<div class="dbk" data-act="open" data-id="${oc.id}" style="border-left-color:${st.stripe};background:${['completed', 'collected'].includes(oc.status) ? '#fafbff' : '#fff'}" role="button" tabindex="0" aria-label="Open ${esc(oc.name)}">
+    const dbk = (oc) => {
+      const st = ST[oc.status];
+      return `<div class="dbk ${['cancelled', 'expired'].includes(oc.status) ? 'cx' : ''}" data-act="open" data-id="${oc.id}" style="border-left-color:${st.stripe};background:${['completed', 'collected'].includes(oc.status) ? '#fafbff' : '#fff'}" role="button" tabindex="0" aria-label="Open ${esc(oc.name)}">
 <div class="p1"><b>${esc(oc.name)}</b><div>+91 ${esc(oc.phone)}</div>${testLine(oc)}${oc.vial_no ? `<span class="vial">${esc(oc.vial_no)}</span>` : ''}</div>
 <div class="p2">${esc(oc.address)}<br><b style="color:#1b2a4e">${esc(oc.city || '')}</b> · ${esc(oc.pincode)}</div>
 <span class="pill st-${oc.status}" style="margin:0">${st.label}</span>
 <div class="acts" style="margin:0">${oc.status === 'payment_submitted' && oc.has_proof ? `<button type="button" class="btn ghost sm" data-act="shot" data-id="${oc.id}">Screenshot</button>` : ''}${nextStep(oc)}</div></div>`;
-      } else if (oc) body = `<div class="dfree">Booked (hidden by filter)</div>`;
-      else body = `<div class="dfree">${past ? 'Free (past)' : `Free slot <button type="button" class="btn ghost sm" data-act="add" data-date="${d}" data-slot="${s}">+ Add booking</button><button type="button" class="btn warn sm" data-act="block" data-date="${d}" data-slot="${s}">Block</button>`}</div>`;
-      rows += `<div class="drow">${tm}${body}</div>`;
-      const pend = all.filter((b) => b.status === 'pending' && cal.filters.has('pending'));
-      const cx = all.filter((b) => ['cancelled', 'expired'].includes(b.status) && cal.filters.has('cancelled'));
-      if (pend.length || cx.length) rows += `<div class="extra">${pend.map((b) => `<button type="button" class="btn ghost sm" data-act="open" data-id="${b.id}">${esc(b.name)} · awaiting payment</button>`).join(' ')} ${cx.map((b) => `<button type="button" class="btn ghost sm" data-act="open" data-id="${b.id}" style="opacity:.7">${esc(b.name)} · ${ST[b.status].label.toLowerCase()}</button>`).join(' ')}</div>`;
+    };
+    SLOTS.forEach((s) => {
+      const items = slotItems(d, s), past = isPast(d, s), blocked = isBlocked(d, s);
+      const held = at(d, s).filter((b) => HOLD.includes(b.status)).length;
+      const tm = `<div class="tm"><b>${fmtT(slotMin(s))}</b><small>to ${fmtT(slotMin(s) + 30)}</small>${items.length > 1 ? `<span class="tmc" data-tip="${d}|${s}">${items.length} bookings</span>` : ''}</div>`;
+      let tools;
+      if (blocked) tools = `<div class="dblk">${items.length ? 'Closed to new bookings' : 'Blocked'} <button type="button" class="btn ghost sm" data-act="unblock" data-date="${d}" data-slot="${s}">Unblock</button></div>`;
+      else if (past) tools = items.length ? '' : '<div class="dfree">Free (past)</div>';
+      else tools = `<div class="dfree">${items.length ? `${held} paid booking${held === 1 ? '' : 's'} · up to ${CAP()} per city` : 'Free slot'} <button type="button" class="btn ghost sm" data-act="add" data-date="${d}" data-slot="${s}">+ Add booking</button><button type="button" class="btn warn sm" data-act="block" data-date="${d}" data-slot="${s}">Block</button></div>`;
+      rows += `<div class="drow">${tm}<div class="dcol">${items.map(dbk).join('')}${tools}</div></div>`;
     });
     $('#calMain').innerHTML = `<div class="strip">${strip}</div>
 <div class="dsum">
-<div class="ds"><b>${occ.length}<small style="font-size:14px;color:#8492a6">/10</small></b><span>Slots booked</span></div>
+<div class="ds"><b>${occ.length}</b><span>Bookings · ${slotsUsed(d)} of 10 slots</span></div>
 <div class="ds v"><b>${c('payment_submitted')}</b><span>Payment to verify</span></div>
 <div class="ds p"><b>${c('pending')}</b><span>Awaiting payment</span></div>
 <div class="ds c"><b>${c('confirmed')}</b><span>Confirmed</span></div>
@@ -553,21 +567,57 @@ ${b.notes ? `<div><div class="dt-k">Notes</div><div style="margin-top:2px">${esc
     let h = '<div class="mo"><div class="mo-grid">' + ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((x) => `<div class="mo-dow">${x}</div>`).join('');
     for (let d = gs; d <= ge; d = addDays(d, 1)) {
       const list = cal.data.bookings.filter((b) => b.date === d);
-      const n = dayBooked(d), cnt = (st) => list.filter((b) => b.status === st).length;
+      const n = dayBooked(d), u = slotsUsed(d), cnt = (st) => list.filter((b) => b.status === st).length;
       const v = cnt('payment_submitted'), p = cnt('pending'), r = cnt('report_ready'), w = cnt('collected');
       const out = d < s || d > e;
       h += `<button type="button" class="mo-c ${out ? 'out' : ''} ${d === today ? 'today' : ''}" data-act="goday" data-date="${d}" aria-label="${fmt(d, { weekday: 'long', day: 'numeric', month: 'long' })}: ${n} booked">
 <span class="num">${Number(d.slice(8))}</span>
-<span class="chips">${n ? `<span class="chip" style="background:${n >= 8 ? '#ffe3d9' : '#dff3ea'};color:${n >= 8 ? '#a33a1f' : '#17694a'}">${n}/10 booked</span>` : ''}${v ? `<span class="chip st-payment_submitted">${v} to verify</span>` : ''}${w ? `<span class="chip st-collected">${w} awaiting report</span>` : ''}${r ? `<span class="chip st-report_ready">${r} report to send</span>` : ''}${p && cal.filters.has('pending') ? `<span class="chip st-pending">${p} unpaid</span>` : ''}</span>
-${n ? `<span class="cap" style="width:100%;margin:auto 0 0"><i style="width:${n * 10}%;background:${fillColor(n)}"></i></span>` : ''}</button>`;
+<span class="chips">${n ? `<span class="chip" style="background:${u >= 8 ? '#ffe3d9' : '#dff3ea'};color:${u >= 8 ? '#a33a1f' : '#17694a'}">${n} booked</span>` : ''}${v ? `<span class="chip st-payment_submitted">${v} to verify</span>` : ''}${w ? `<span class="chip st-collected">${w} awaiting report</span>` : ''}${r ? `<span class="chip st-report_ready">${r} report to send</span>` : ''}${p && cal.filters.has('pending') ? `<span class="chip st-pending">${p} unpaid</span>` : ''}</span>
+${n ? `<span class="cap" style="width:100%;margin:auto 0 0"><i style="width:${u * 10}%;background:${fillColor(u)}"></i></span>` : ''}</button>`;
     }
     $('#calMain').innerHTML = h + '</div></div>';
   }
 
+  // all bookings in one slot (click on a "3 bookings" cell)
+  function slotListHTML(date, slot) {
+    const items = slotItems(date, slot), blocked = isBlocked(date, slot), past = isPast(date, slot);
+    const byCity = {}; at(date, slot).filter((b) => HOLD.includes(b.status)).forEach((b) => { const k = b.city || '—'; byCity[k] = (byCity[k] || 0) + 1; });
+    return `<div class="dt-h"><div class="dt-name">${esc(slotLabel(slot))}</div><div class="meta">${fmt(date, { weekday: 'long', day: 'numeric', month: 'long' })} · ${items.length} booking${items.length === 1 ? '' : 's'}${blocked ? ' · closed to new bookings' : ''}</div>
+<div class="cityc">${Object.entries(byCity).map(([c, n]) => `<span class="badge ${n >= CAP() ? 'full' : 'web'}">${esc(c)} ${n}/${CAP()}</span>`).join('')}</div></div>
+<div class="dt-b">${items.map((b) => `<div class="sl-row" style="border-left-color:${ST[b.status].stripe}"><div style="min-width:0;flex:1"><button type="button" class="lnk" data-act="open" data-id="${b.id}">${esc(b.name)}</button>${testLine(b)}<div class="meta">${esc(b.city || '')} · ${esc(b.pincode || '')} · +91 ${esc(b.phone)}</div></div><div class="next" style="align-items:flex-end"><span class="pill st-${b.status}" style="margin:0">${ST[b.status].label}</span>${nextStep(b)}</div></div>`).join('') || '<p class="meta">No bookings shown (check the filters).</p>'}</div>
+<div class="dt-f">${!past && !blocked ? `<button class="btn" data-act="add" data-date="${date}" data-slot="${slot}">+ Add booking in this slot</button>` : ''}${blocked ? `<button class="btn ghost" data-act="unblock" data-date="${date}" data-slot="${slot}">Unblock slot</button>` : !past ? `<button class="btn warn" data-act="block" data-date="${date}" data-slot="${slot}">Block slot (no new bookings)</button>` : ''}</div>`;
+  }
+  let slotOpen = null;
+  function openSlotList(date, slot) {
+    slotOpen = { date, slot }; detailId = null;
+    $('#detailBody').innerHTML = slotListHTML(date, slot);
+    $$('dialog[open]').forEach((x) => x !== $('#detailDlg') && x.close());
+    if (!$('#detailDlg').open) $('#detailDlg').showModal();
+  }
+  $('#detailDlg').addEventListener('close', () => (slotOpen = null));
+
+  // hover card listing every booking in a slot
+  const tip = document.createElement('div'); tip.className = 'tip'; tip.setAttribute('role', 'tooltip'); tip.hidden = true; document.body.appendChild(tip);
+  function showTip(el) {
+    if (!cal.data) return;
+    const [date, slot] = el.dataset.tip.split('|');
+    const items = slotItems(date, slot); if (!items.length) return;
+    tip.innerHTML = `<div class="tip-h">${esc(slotLabel(slot))} · ${fmtD(date)} · ${items.length} booking${items.length === 1 ? '' : 's'}</div>` + items.slice(0, 20).map((b) => `<div class="tip-r"><i style="background:${ST[b.status].stripe}"></i><div><b>${esc(b.name)}</b> <span>${esc(b.city || '')}</span><div class="tip-s">${esc(b.package_name || '')}${b.package_name ? ' · ' : ''}${ST[b.status].label}${b.vial_no ? ' · ' + esc(b.vial_no) : ''}</div></div></div>`).join('') + (items.length > 20 ? `<div class="tip-s">+${items.length - 20} more – click to see all</div>` : '');
+    tip.hidden = false;
+    const r = el.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+    let x = r.right + 8, y = r.top;
+    if (x + w > window.innerWidth - 8) x = Math.max(8, r.left - w - 8);
+    if (y + h > window.innerHeight - 8) y = Math.max(8, window.innerHeight - h - 8);
+    tip.style.left = x + 'px'; tip.style.top = y + 'px';
+  }
+  document.addEventListener('mouseover', (e) => { const el = e.target.closest('[data-tip]'); if (el) showTip(el); else tip.hidden = true; });
+  document.addEventListener('focusin', (e) => { const el = e.target.closest && e.target.closest('[data-tip]'); if (el) showTip(el); else tip.hidden = true; });
+  window.addEventListener('scroll', () => (tip.hidden = true), true);
+
   function runSheetHTML(date) {
     const stops = runStops(date);
     return `<div class="run-h"><div class="run-k">Phlebotomist run sheet</div><div class="run-t">${stops.length} pickup${stops.length === 1 ? '' : 's'} · ${fmtD(date)}</div><div class="meta" style="margin-top:2px">Confirmed + paid-to-verify bookings, in slot order</div></div>
-<div class="run-b">${stops.length ? stops.map((b, i) => `<div class="stop"><div style="display:flex;flex-direction:column;align-items:center"><span class="n">${i + 1}</span><span class="ln"></span></div><div class="bd"><div style="font-weight:800">${fmtT(slotMin(b.slot))} · <a href="#" data-act="open" data-id="${b.id}" style="color:inherit">${esc(b.name)}</a></div><div style="font-size:12.5px;color:#3b4a68;margin-top:2px">${esc(b.address)}, ${esc(b.city || '')} · ${esc(b.pincode)}</div><div style="font-size:12px;color:#8492a6;margin-top:2px">${b.package_name ? esc(b.package_name) + ' · ' : ''}+91 ${esc(b.phone)}${b.status === 'payment_submitted' ? ' · payment to verify' : ''}</div></div></div>`).join('') : '<p class="meta">No confirmed pickups for this day yet.</p>'}</div>
+<div class="run-b">${stops.length ? stops.map((b, i) => `<div class="stop"><div style="display:flex;flex-direction:column;align-items:center"><span class="n">${i + 1}</span><span class="ln"></span></div><div class="bd"><div style="font-weight:800">${fmtT(slotMin(b.slot))} · <a href="#" data-act="open" data-id="${b.id}" style="color:inherit">${esc(b.name)}</a> <span class="meta" style="font-weight:600">${esc(b.city || '')}</span></div><div style="font-size:12.5px;color:#3b4a68;margin-top:2px">${esc(b.address)}, ${esc(b.city || '')} · ${esc(b.pincode)}</div><div style="font-size:12px;color:#8492a6;margin-top:2px">${b.package_name ? esc(b.package_name) + ' · ' : ''}+91 ${esc(b.phone)}${b.status === 'payment_submitted' ? ' · payment to verify' : ''}</div></div></div>`).join('') : '<p class="meta">No confirmed pickups for this day yet.</p>'}</div>
 <div class="dt-f">
 <button class="btn wa" data-act="run-wa" ${stops.length ? '' : 'disabled'}>Send run sheet on WhatsApp</button>
 <div style="display:flex;gap:8px"><button class="btn ghost" style="flex:1" data-act="run-map" ${stops.length ? '' : 'disabled'}>Open route in Maps</button><button class="btn ghost" style="flex:1" data-act="run-print" ${stops.length ? '' : 'disabled'}>Print</button></div>
@@ -769,7 +819,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     const q = ($('#pkgSearch').value || '').trim().toLowerCase();
     const rows = PKGS.filter((p) => !q || (p.name + ' ' + (p.tests || '')).toLowerCase().includes(q));
     $('#pkgBody').innerHTML = rows.length ? rows.map((p) => `<tr class="${p.active ? '' : 'off'}">
-<td><b>${esc(p.name)}</b><span class="tests">${esc(p.tests || '—')}</span></td>
+<td><b>${esc(p.name)}</b><span class="tests">${esc(p.tests || '—')}</span>${p.prep ? `<span class="prep"><b>Before the test:</b> ${esc(p.prep).replace(/\n/g, ' ')}</span>` : '<span class="prep none">No "before the test" instructions</span>'}</td>
 <td class="num">${p.mrp ? money(p.mrp) : '—'}</td>
 <td class="num"><b>${money(p.price)}</b></td>
 <td class="num">${p.margin != null ? money(p.margin) : '—'}</td>
@@ -790,6 +840,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     $('#pName').value = p ? p.name : ''; $('#pTests').value = p ? p.tests || '' : '';
     $('#pPrice').value = p ? p.price : ''; $('#pMrp').value = p && p.mrp != null ? p.mrp : '';
     $('#pMargin').value = p && p.margin != null ? p.margin : ''; $('#pTarget').value = p ? p.target || '' : '';
+    $('#pPrep').value = p ? p.prep || '' : '• Our phlebotomist will call you before arriving';
     $('#pActive').checked = p ? !!p.active : true; $('#pDefault').checked = p ? !!p.is_default : false;
     $('#pkgDel').hidden = !p;
     $$('dialog[open]').forEach((d) => d.close());
@@ -797,7 +848,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   }
   $('#pkgForm').onsubmit = async (e) => {
     e.preventDefault(); $('#pkgErr').textContent = '';
-    const body = { name: $('#pName').value, tests: $('#pTests').value, price: $('#pPrice').value, mrp: $('#pMrp').value, margin: $('#pMargin').value, target: $('#pTarget').value, active: $('#pActive').checked, is_default: $('#pDefault').checked };
+    const body = { name: $('#pName').value, tests: $('#pTests').value, price: $('#pPrice').value, mrp: $('#pMrp').value, margin: $('#pMargin').value, target: $('#pTarget').value, prep: $('#pPrep').value, active: $('#pActive').checked, is_default: $('#pDefault').checked };
     $('#pkgSave').disabled = true;
     try {
       await post(pkgEditing ? `/api/admin/packages/${pkgEditing}` : '/api/admin/packages', body);
@@ -816,17 +867,25 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   // ---------- add / reschedule form ----------
   let form = { mode: 'add', id: null, fee: false };
   async function fillSlots(date, keep, ownId) {
-    const sel = $('#fSlot');
+    const sel = $('#fSlot'), cur = sel.value;
+    const city = form.mode === 'add' ? $('#fCity').value.trim() : form.city || '';
     sel.innerHTML = '<option>Loading…</option>';
     try {
       const r = await api(`/api/admin/bookings?from=${date}&to=${date}&all=1`);
-      const occ = new Map(r.bookings.filter((b) => OCCUPY.includes(b.status) && b.id !== ownId).map((b) => [b.slot, b]));
-      sel.innerHTML = SLOTS.map((s) => { const o = occ.get(s); return `<option value="${s}" ${o ? 'disabled' : ''} ${s === keep ? 'selected' : ''}>${slotLabel(s)}${o ? (o.status === 'blocked' ? ' (blocked)' : ' (booked)') : ''}</option>`; }).join('');
-      if (sel.selectedOptions[0] && sel.selectedOptions[0].disabled) { const free = $$('option:not([disabled])', sel)[0]; if (free) free.selected = true; }
+      const blocked = new Set(r.bookings.filter((b) => b.status === 'blocked').map((b) => b.slot));
+      const n = {}; r.bookings.filter((b) => HOLD.includes(b.status) && b.id !== ownId && cityKey(b.city) === cityKey(city)).forEach((b) => (n[b.slot] = (n[b.slot] || 0) + 1));
+      const want = keep || cur;
+      sel.innerHTML = SLOTS.map((s) => {
+        const c = n[s] || 0, off = blocked.has(s) || c >= CAP();
+        const note = blocked.has(s) ? ' (blocked)' : c >= CAP() ? ` (full${city ? ' for ' + city : ''})` : c ? ` (${c} booked${city ? ' in ' + city : ''})` : '';
+        return `<option value="${s}" ${off ? 'disabled' : ''} ${s === want ? 'selected' : ''}>${slotLabel(s)}${note}</option>`;
+      }).join('');
+      if (!sel.selectedOptions[0] || sel.selectedOptions[0].disabled) { const free = $$('option:not([disabled])', sel)[0]; if (free) free.selected = true; }
     } catch (e) { sel.innerHTML = ''; toast(e.message); }
   }
+  let cityT; $('#fCity').addEventListener('input', () => { clearTimeout(cityT); cityT = setTimeout(() => fillSlots($('#fDate').value, null, form.id), 400); });
   function openForm(mode, ctx) {
-    form = { mode, id: ctx.id || null, fee: mode === 'move' && ctx.status === 'no_show' };
+    form = { mode, id: ctx.id || null, fee: mode === 'move' && ctx.status === 'no_show', city: ctx.city || '' };
     $('#bkForm').reset(); $('#formErr').textContent = '';
     $$('.add-only', $('#bkForm')).forEach((el) => (el.hidden = mode !== 'add'));
     $$('.fee-only', $('#bkForm')).forEach((el) => (el.hidden = !form.fee));
@@ -867,7 +926,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     if (v.length !== 6) return;
     try {
       const r = await fetch('/api/pincode/' + v).then((x) => x.json());
-      if (r.found) { $('#fCity').value = r.city; setState(r.state); }
+      if (r.found) { $('#fCity').value = r.city; setState(r.state); fillSlots($('#fDate').value, null, form.id); }
       else toast('Pincode not found – enter city and state');
     } catch (e) {}
   };
@@ -917,6 +976,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     else if (a === 'add') openForm('add', { date: el.dataset.date || (tab === 'calendar' ? cal.anchor : ist()), slot: el.dataset.slot });
     else if (a === 'block') block(el.dataset.date, el.dataset.slot, true);
     else if (a === 'unblock') block(el.dataset.date, el.dataset.slot, false);
+    else if (a === 'slotlist') { tip.hidden = true; openSlotList(el.dataset.date, el.dataset.slot); }
     else if (a === 'sel') { cal.sel = id; if (window.innerWidth < 1180) openDetail(id); else renderCal(); }
     else if (a === 'open') openDetail(id);
     else if (a === 'nav') {

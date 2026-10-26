@@ -13,6 +13,8 @@ const IST_OFFSET_MIN = 330;       // UTC+05:30
 // Workflow: pending → payment_submitted → confirmed → collected (vial no.) → report_ready → completed
 //           confirmed → no_show ("reached, patient unavailable": visit fee due before rebooking)
 const ACTIVE = ["payment_submitted", "confirmed", "collected", "report_ready", "completed", "no_show", "blocked"];
+// Patient bookings that take one of a slot's places (per city). "blocked" closes the whole slot to new bookings.
+const HOLDING = ["payment_submitted", "confirmed", "collected", "report_ready", "completed", "no_show"];
 const ADMIN_SETTABLE = ["payment_submitted", "confirmed", "collected", "report_ready", "completed", "no_show", "cancelled"];
 const MAX_REPORT_BYTES = 10 * 1024 * 1024;
 const REPORT_CHUNK = 1_500_000; // base64 chars per row (D1 rows max ~2 MB)
@@ -97,6 +99,18 @@ async function packageById(env, id, activeOnly = true) {
   if (!id) return null;
   return await env.DB.prepare(`SELECT * FROM packages WHERE id=?1 ${activeOnly ? "AND active=1" : ""}`).bind(parseInt(id, 10) || 0).first();
 }
+function slotCapacity(env) { return Math.max(1, parseInt(env.SLOT_CAPACITY || "20", 10) || 20); }
+const cityKey = (c) => String(c || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+// Is there room in this slot for one more booking in this city?
+async function slotRoom(env, date, slot, city, excludeId = "") {
+  const { results } = await env.DB.prepare(
+    `SELECT id, city, status FROM bookings WHERE date=?1 AND slot=?2 AND status IN (${ACTIVE.map((_, i) => "?" + (i + 3)).join(",")})`
+  ).bind(date, slot, ...ACTIVE).all();
+  if (results.some((r) => r.status === "blocked")) return { ok: false, blocked: true, msg: `${slotLabel(slot)} on ${prettyDate(date)} is closed for bookings.` };
+  const cap = slotCapacity(env), key = cityKey(city);
+  const n = results.filter((r) => r.status !== "blocked" && r.id !== excludeId && cityKey(r.city) === key).length;
+  return n < cap ? { ok: true, n, cap } : { ok: false, n, cap, msg: `${slotLabel(slot)} on ${prettyDate(date)} is full${city ? " for " + city : ""} (${cap} bookings). Please pick another time.` };
+}
 function visitFee(env) { return parseInt(env.VISIT_FEE_INR || "300", 10); }
 
 // Create tables automatically on first use (same as migrations/0001_bookings.sql).
@@ -107,8 +121,7 @@ const SCHEMA = [
     paid_at TEXT, updated_at TEXT NOT NULL)`,
   `DROP INDEX IF EXISTS one_booking_per_slot`,
   `DROP INDEX IF EXISTS one_paid_booking_per_slot`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS slot_holder_v3 ON bookings(date, slot)
-    WHERE status IN ('payment_submitted', 'confirmed', 'collected', 'report_ready', 'completed', 'no_show', 'blocked')`,
+  `DROP INDEX IF EXISTS slot_holder_v3`, // was "one booking per slot"; now up to SLOT_CAPACITY per slot per city, checked in code
   `CREATE INDEX IF NOT EXISTS bookings_by_date ON bookings(date, slot)`,
   `CREATE INDEX IF NOT EXISTS bookings_by_status ON bookings(status)`,
   `CREATE TABLE IF NOT EXISTS payment_proofs (booking_id TEXT PRIMARY KEY, mime TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL)`,
@@ -116,7 +129,7 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS msg_log (id INTEGER PRIMARY KEY AUTOINCREMENT, booking_id TEXT NOT NULL, kind TEXT NOT NULL, at TEXT NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS msg_log_by_booking ON msg_log(booking_id)`,
   `CREATE TABLE IF NOT EXISTS packages (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, tests TEXT, mrp INTEGER, price INTEGER NOT NULL,
-    margin INTEGER, target TEXT, active INTEGER NOT NULL DEFAULT 1, is_default INTEGER NOT NULL DEFAULT 0, sort INTEGER NOT NULL DEFAULT 0,
+    margin INTEGER, target TEXT, prep TEXT, active INTEGER NOT NULL DEFAULT 1, is_default INTEGER NOT NULL DEFAULT 0, sort INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
 ];
 
@@ -141,13 +154,69 @@ const SEED_PACKAGES = [
   ["PREGNANCY ADVANCED", null, 2434, 1287, "CBC, Blood Group, HIV, HCV, HBsAg, VDRL, HPLC"],
   ["ALLERGY DRUG PANEL", null, 5999, 4292, ""],
 ];
+// "Before the test" text sent in the WhatsApp confirmation; editable per test in the admin Tests tab.
+const CALL = "• Our phlebotomist will call you before arriving";
+const BIOTIN = "• Taking biotin (hair, skin or nail vitamins)? Skip it for 2 days before – it can give false thyroid and hormone results";
+const FAST = "• Fast for 10–12 hours overnight – only plain water (no tea, coffee, juice or gum)";
+const NO_FAST = "• No fasting needed – eat and drink as usual";
+const NO_ALCOHOL = "• No alcohol for 24 hours before";
+const URINE = "• Collect your first urine of the morning in the container we give you (or keep a clean container ready)";
+const MEDS_AFTER = "• Keep taking your regular medicines, but take diabetes medicine/insulin and thyroid tablets only after the sample";
+const PREG_DOCS = "• Keep ready: doctor's prescription, latest ultrasound report, your date of birth, current weight and first day of your last period (LMP)";
+const DEFAULT_PREP = [FAST, CALL].join("\n");
+const PREP = {
+  "FEMALE FERTILITY": ["• Best done on day 2–5 of your period (day 1 = first day of bleeding). If your periods are irregular, any day is fine – just tell us",
+    "• Morning sample, ideally before 10 AM. Rest quietly for 15 minutes before – stress can raise prolactin",
+    NO_FAST, BIOTIN, "• Tell us if you take hormone tablets or birth-control pills", CALL],
+  "FEMALE PCOS": ["• Best done on day 2–5 of your period (day 1 = first day of bleeding). If your periods are irregular, any day is fine – just tell us",
+    "• If your doctor wants progesterone checked around day 21 (about a week before your next period), tell us and we'll plan the date",
+    "• Morning sample, ideally before 10 AM. Rest quietly for 15 minutes before",
+    NO_FAST, BIOTIN, CALL],
+  "HEALTH FOR ALL": [FAST, NO_ALCOHOL, URINE, MEDS_AFTER, BIOTIN, CALL],
+  "NIPT (NON-INVASIVE PRENATAL TEST)": ["• Can be done from 10 weeks of pregnancy", NO_FAST, PREG_DOCS + ", and a photo ID",
+    "• We'll help you fill the consent form at collection", CALL],
+  "FATTY LIVER": ["• Fast for 8–10 hours overnight – only plain water", NO_ALCOHOL, "• Avoid a heavy, oily dinner the night before", "• Keep taking your regular medicines", CALL],
+  "MALE CANCER SCREEN": [NO_FAST, "• No ejaculation (sex or masturbation) for 48 hours before – it can raise PSA",
+    "• No cycling, horse riding or heavy exercise for 48 hours before",
+    "• Had a prostate examination, catheter or biopsy recently, or a urine infection in the last 6 weeks? Tell us – we may need to change the date",
+    "• Tell us if you take medicines for the prostate or hair loss (e.g. finasteride, dutasteride) – they lower PSA", CALL],
+  "COMPLETE HEALTH CHECK UP": [FAST, NO_ALCOHOL, URINE, MEDS_AFTER, BIOTIN, CALL],
+  "DIABETES CHECK": ["• Fast for 8–12 hours overnight – only plain water", "• Take diabetes tablets/insulin only after the fasting sample",
+    "• If your test includes a post-meal (PP) sugar: eat your usual breakfast right after the first sample and note the time – the second sample is taken exactly 2 hours after you start eating",
+    "• Avoid heavy exercise on the morning of the test", CALL],
+  "HYPERTENSION": [FAST, "• Book an early-morning slot. Be up and about for at least 2 hours before the sample, then sit quietly for 10 minutes",
+    "• Eat your usual amount of salt in the days before – don't cut down just for the test. Avoid liquorice (mulethi)",
+    "• Some blood-pressure medicines affect the aldosterone/renin test. Ask your doctor before the test – don't stop any medicine on your own",
+    NO_ALCOHOL, URINE, CALL],
+  "HEALTH BASIC": [FAST, NO_ALCOHOL, URINE, MEDS_AFTER, BIOTIN, CALL],
+  "CARDIAC PACKAGE": [FAST, NO_ALCOHOL, URINE,
+    "• After the fasting sample, eat your usual breakfast and note the time – the post-meal (PP) sugar sample is taken exactly 2 hours after you start eating",
+    "• Take diabetes medicine/insulin only after the fasting sample; keep taking other regular medicines", CALL],
+  "PREGNANCY ANTENATAL BASIC": [NO_FAST, "• Keep your doctor's prescription and a photo ID ready", CALL],
+  "VIRAL MARKERS": [NO_FAST, "• Keep your doctor's prescription ready, if you have one", CALL],
+  "DOUBLE MARKER": ["• Done between 11 and 13 weeks (+6 days) of pregnancy, ideally on or soon after your NT scan", NO_FAST,
+    "• Keep ready: NT scan report (with CRL and NT values), doctor's prescription, your date of birth, current weight and LMP",
+    "• Tell us if this is an IVF pregnancy, twins, or if you have diabetes – it changes the risk calculation", CALL],
+  "TRIPLE MARKER TESTS (14-22 WEEKS)": ["• Best done between 15 and 20 weeks of pregnancy", NO_FAST, PREG_DOCS,
+    "• Tell us if this is an IVF pregnancy, twins, or if you have diabetes – it changes the risk calculation", CALL],
+  "PREGNANCY ADVANCED": [NO_FAST, "• Keep your doctor's prescription and a photo ID ready", CALL],
+  "ALLERGY DRUG PANEL": [NO_FAST, "• Keep taking your medicines. If you take antihistamines or steroids, tell us – your doctor may ask you to pause them",
+    "• Keep a list of the medicines you think you react to", CALL],
+};
+const prepFor = (name) => (PREP[String(name || "").trim().toUpperCase()] || [FAST, CALL]).join("\n");
+const DEFAULT_PREP_V1 = "• Fast for 10–12 hours overnight (water is fine)\n• Our phlebotomist will call you before arriving"; // first version, same for all tests
 async function seedPackages(env) {
+  const cols = await env.DB.prepare("PRAGMA table_info(packages)").all();
+  if (!(cols.results || []).some((c) => c.name === "prep")) await env.DB.prepare("ALTER TABLE packages ADD COLUMN prep TEXT").run();
+  // fill researched instructions where nobody has written their own yet
+  const { results: blank } = await env.DB.prepare("SELECT id, name FROM packages WHERE prep IS NULL OR prep = ?1").bind(DEFAULT_PREP_V1).all();
+  if (blank.length) await env.DB.batch(blank.map((r) => env.DB.prepare("UPDATE packages SET prep=?1 WHERE id=?2").bind(prepFor(r.name), r.id)));
   const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM packages").first();
   if (n && n.n > 0) return;
   const now = isoNow();
   await env.DB.batch(SEED_PACKAGES.map(([name, mrp, price, margin, tests], i) =>
-    env.DB.prepare("INSERT INTO packages (name, tests, mrp, price, margin, active, is_default, sort, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, ?8, ?8)")
-      .bind(name, tests, mrp, price, margin, i === 0 ? 1 : 0, (i + 1) * 10, now)));
+    env.DB.prepare("INSERT INTO packages (name, tests, mrp, price, margin, prep, active, is_default, sort, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?9, 1, ?6, ?7, ?8, ?8)")
+      .bind(name, tests, mrp, price, margin, i === 0 ? 1 : 0, (i + 1) * 10, now, prepFor(name))));
   // bookings made before tests existed were all for the fertility panel
   const d = await env.DB.prepare("SELECT id, name FROM packages WHERE is_default=1").first();
   if (d) await env.DB.prepare("UPDATE bookings SET package_id=?1, package_name=?2 WHERE package_id IS NULL AND status!='blocked'").bind(d.id, d.name).run();
@@ -209,12 +278,15 @@ async function getSlots(env, url) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return bad("Invalid date");
   await expireHolds(env);
   const { results } = await env.DB.prepare(
-    `SELECT slot FROM bookings WHERE date=?1 AND status IN (${ACTIVE.map(() => "?").join(",")})`
+    `SELECT slot, city, status FROM bookings WHERE date=?1 AND status IN (${ACTIVE.map(() => "?").join(",")})`
   ).bind(date, ...ACTIVE).all();
-  const taken = new Set(results.map((r) => r.slot));
+  const city = cityKey(url.searchParams.get("city")), cap = slotCapacity(env);
+  const closed = new Set(results.filter((r) => r.status === "blocked").map((r) => r.slot));
+  const used = {};
+  if (city) results.filter((r) => r.status !== "blocked" && cityKey(r.city) === city).forEach((r) => (used[r.slot] = (used[r.slot] || 0) + 1));
   return json({
     date,
-    slots: SLOTS.map((s) => ({ time: s, label: slotLabel(s), available: !taken.has(s) && isBookable(date, s) })),
+    slots: SLOTS.map((s) => ({ time: s, label: slotLabel(s), available: !closed.has(s) && (used[s] || 0) < cap && isBookable(date, s) })),
   });
 }
 
@@ -234,6 +306,7 @@ async function getConfig(env) {
     upiQr: env.UPI_QR_STRING || "",
     mapsKey: env.GOOGLE_MAPS_KEY || "",
     holdMinutes: HOLD_MIN,
+    slotCapacity: slotCapacity(env),
     visitFee: visitFee(env),
     dates,
   });
@@ -255,10 +328,8 @@ async function createBooking(env, req) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !isBookable(date, slot)) return bad("That slot is no longer available. Please pick another.", 409);
 
   await expireHolds(env);
-  const taken = await env.DB.prepare(
-    `SELECT 1 FROM bookings WHERE date=?1 AND slot=?2 AND status IN (${ACTIVE.map((_, i) => "?" + (i + 3)).join(",")}) LIMIT 1`
-  ).bind(date, slot, ...ACTIVE).first();
-  if (taken) return bad("Sorry, that slot has just been booked. Please pick another.", 409);
+  const room = await slotRoom(env, date, slot, city);
+  if (!room.ok) return bad("Sorry, " + room.msg, 409);
   const pkg = (await packageById(env, b.package_id)) || (await defaultPackage(env));
   const price = pkg ? pkg.price : amount(env);
   const id = "DSL-" + randId(6), token = randId(24, "abcdefghijklmnopqrstuvwxyz0123456789");
@@ -311,6 +382,8 @@ async function submitPayment(env, req, id, ctx) {
   // Save the payment proof first, so it is never lost even if the slot was taken meanwhile.
   await saveProof();
   if (utr) await env.DB.prepare("UPDATE bookings SET utr=?1, updated_at=?2 WHERE id=?3").bind(utr, now, id).run();
+  const room = await slotRoom(env, row.date, row.slot, row.city, id);
+  if (!room.ok) return slotTaken(row);
   try {
     const r = await env.DB.prepare(
       "UPDATE bookings SET status='payment_submitted', paid_at=?1, updated_at=?1 WHERE id=?2 AND status IN ('pending','expired')"
@@ -325,7 +398,7 @@ async function submitPayment(env, req, id, ctx) {
 
 function slotTaken(row) {
   return json({
-    error: `Sorry, ${slotLabel(row.slot)} on ${prettyDate(row.date)} was just booked by someone else. Your payment is saved. Please pick another slot.`,
+    error: `Sorry, ${slotLabel(row.slot)} on ${prettyDate(row.date)} just got fully booked. Your payment is saved. Please pick another slot.`,
     code: "slot_taken", id: row.id, date: row.date,
   }, 409);
 }
@@ -341,6 +414,8 @@ async function reslot(env, req, id) {
   const proof = await env.DB.prepare("SELECT 1 FROM payment_proofs WHERE booking_id=?1").bind(id).first();
   if (!proof && !row.utr) return bad("Please upload your payment screenshot first.", 400);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !isBookable(date, slot)) return bad("That slot is not available. Please pick another.", 409);
+  const room = await slotRoom(env, date, slot, row.city, id);
+  if (!room.ok) return slotTaken({ ...row, date, slot });
   const now = isoNow();
   try {
     const r = await env.DB.prepare(
@@ -394,6 +469,8 @@ async function adminCreate(env, req) {
   if (!pkg) return bad("Pick the test.");
   const amt = b.amount === undefined || b.amount === "" ? pkg.price : parseInt(b.amount, 10);
   if (!Number.isFinite(amt) || amt < 0 || amt > 1000000) return bad("Enter a valid amount.");
+  const room = await slotRoom(env, date, slot, city);
+  if (!room.ok && (room.blocked || HOLDING.includes(status))) return bad(room.msg, 409);
   const id = "DSL-" + randId(6), token = randId(24, "abcdefghijklmnopqrstuvwxyz0123456789"), now = isoNow();
   try {
     await env.DB.prepare(
@@ -412,8 +489,10 @@ async function adminCreate(env, req) {
 async function adminMove(env, req, id) {
   const { date, slot, feePaid } = await req.json().catch(() => ({}));
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date || "") || !SLOTS.includes(slot)) return bad("Pick a date and slot.");
-  const row = await env.DB.prepare("SELECT status FROM bookings WHERE id=?1").bind(id).first();
+  const row = await env.DB.prepare("SELECT status, city FROM bookings WHERE id=?1").bind(id).first();
   if (!row || ["blocked", "cancelled"].includes(row.status)) return bad("Booking not found", 404);
+  const room = await slotRoom(env, date, slot, row.city, id);
+  if (!room.ok) return bad(room.msg, 409);
   if (["collected", "report_ready", "completed"].includes(row.status)) return bad("The sample is already collected, so this booking can't be moved.", 409);
   const now = isoNow();
   try {
@@ -460,6 +539,10 @@ async function adminSetStatus(env, req, id) {
     set.collected_at = row.collected_at || now;
   }
   if (status === "report_ready" && !row.report_name) return bad("Upload the report PDF first.");
+  if (HOLDING.includes(status) && !HOLDING.includes(row.status)) {
+    const room = await slotRoom(env, row.date, row.slot, row.city, id);
+    if (!room.ok) return bad(room.msg + " Reschedule it instead.", 409);
+  }
   if (status === "completed") set.completed_at = now;
   if (status === "no_show") {
     set.fee_due = visitFee(env);
@@ -556,7 +639,7 @@ async function adminSent(env, req, id) {
 
 // ---- tests / packages ----
 async function publicPackages(env) {
-  const { results } = await env.DB.prepare("SELECT id, name, tests, mrp, price, is_default FROM packages WHERE active=1 ORDER BY sort, id").all();
+  const { results } = await env.DB.prepare("SELECT id, name, tests, mrp, price, prep, is_default FROM packages WHERE active=1 ORDER BY sort, id").all();
   return json({ packages: results });
 }
 async function adminPackages(env) {
@@ -572,7 +655,8 @@ function readPackage(b) {
   if (name.length < 2) return { err: "Enter the test / package name." };
   if (price === null || !Number.isFinite(price) || price <= 0) return { err: "Enter the price shown to patients." };
   for (const v of [mrp, margin]) if (v !== null && (!Number.isFinite(v) || v < 0)) return { err: "MRP and margin must be numbers." };
-  return { name, tests: clean(b.tests, 1000), price, mrp, margin, target: clean(b.target, 120),
+  const prep = b.prep === undefined ? null : String(b.prep).replace(/\r/g, "").replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, " ").split("\n").map((l) => l.trim()).join("\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, 1500);
+  return { name, tests: clean(b.tests, 1000), price, mrp, margin, target: clean(b.target, 120), prep,
     active: b.active === false || b.active === 0 || b.active === "0" ? 0 : 1, is_default: b.is_default ? 1 : 0 };
 }
 async function adminSavePackage(env, req, id) {
@@ -588,14 +672,14 @@ async function adminSavePackage(env, req, id) {
     const cur = await env.DB.prepare("SELECT * FROM packages WHERE id=?1").bind(id).first();
     if (!cur) return bad("Test not found", 404);
     if (cur.is_default && !p.is_default) return bad("Pick another test as the website test instead of unticking this one.");
-    stmts.push(env.DB.prepare("UPDATE packages SET name=?1, tests=?2, mrp=?3, price=?4, margin=?5, target=?6, active=?7, is_default=?8, updated_at=?9 WHERE id=?10")
-      .bind(p.name, p.tests, p.mrp, p.price, p.margin, p.target, p.active, p.is_default, now, id));
+    stmts.push(env.DB.prepare("UPDATE packages SET name=?1, tests=?2, mrp=?3, price=?4, margin=?5, target=?6, active=?7, is_default=?8, updated_at=?9, prep=COALESCE(?11, prep) WHERE id=?10")
+      .bind(p.name, p.tests, p.mrp, p.price, p.margin, p.target, p.active, p.is_default, now, id, p.prep));
     await env.DB.batch(stmts);
     return json({ ok: true, id });
   }
   const mx = await env.DB.prepare("SELECT COALESCE(MAX(sort), 0) AS m FROM packages").first();
-  stmts.push(env.DB.prepare("INSERT INTO packages (name, tests, mrp, price, margin, target, active, is_default, sort, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)")
-    .bind(p.name, p.tests, p.mrp, p.price, p.margin, p.target, p.active, p.is_default, (mx ? mx.m : 0) + 10, now));
+  stmts.push(env.DB.prepare("INSERT INTO packages (name, tests, mrp, price, margin, target, active, is_default, sort, created_at, updated_at, prep) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11)")
+    .bind(p.name, p.tests, p.mrp, p.price, p.margin, p.target, p.active, p.is_default, (mx ? mx.m : 0) + 10, now, p.prep));
   await env.DB.batch(stmts);
   const row = await env.DB.prepare("SELECT id FROM packages WHERE name=?1").bind(p.name).first();
   return json({ ok: true, id: row && row.id }, 201);
@@ -619,6 +703,8 @@ async function adminBlock(env, req) {
     return json({ ok: true });
   }
   await expireHolds(env);
+  const already = await env.DB.prepare("SELECT 1 FROM bookings WHERE date=?1 AND slot=?2 AND status='blocked'").bind(date, slot).first();
+  if (already) return bad("That slot is already blocked.", 409);
   try {
     await env.DB.prepare(
       `INSERT INTO bookings (id, token, date, slot, name, phone, address, pincode, amount, status, created_at, updated_at)
