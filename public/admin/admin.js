@@ -84,7 +84,6 @@
   };
   let tab = pref.get('tab', 'bookings');
   let PKGS = [];
-  let attTab = null;
   let detailId = null;
 
   const findB = (id) => (cal.data && cal.data.bookings.find((b) => b.id === id)) || (data && data.bookings.find((b) => b.id === id));
@@ -116,6 +115,7 @@
     if (tab === 'calendar' || cal.data) await loadCal();
     if (detailId && $('#detailDlg').open) { const b = findB(detailId); if (b) $('#detailBody').innerHTML = detailHTML(b); }
     else if (slotOpen && $('#detailDlg').open && cal.data) $('#detailBody').innerHTML = slotListHTML(slotOpen.date, slotOpen.slot);
+    if (repId && $('#repDlg').open) renderRepDlg();
   }
 
   // ================= WORKFLOW (shared by list, calendar, detail) =================
@@ -125,92 +125,111 @@
     return m;
   };
   const hasPaidProof = (b) => !!(b.has_proof || b.utr);
-  const pkgOf = (b) => PKGS.find((p) => p.id === b.package_id);
-  const prepOf = (b) => { const p = pkgOf(b); return p ? (p.prep || '').trim() : '• Our phlebotomist will call you before arriving'; };
-  const testLine = (b) => (b.package_name ? `<span class="test-l">🧪 ${esc(b.package_name)}</span>` : '');
+  const testsOf = (b) => (b.tests && b.tests.length ? b.tests : b.package_name ? [{ name: b.package_name, package_id: b.package_id, price: b.amount, margin: null }] : []);
+  const testNames = (b) => testsOf(b).map((t) => t.name).join(', ');
+  const pkgFor = (t) => PKGS.find((p) => p.id === t.package_id);
+  const reportsOf = (b) => b.reports || [];
+  const marginOf = (b) => { const t = testsOf(b); return t.reduce((a, x) => a + (x.margin || 0), 0) - (t.reduce((a, x) => a + (x.price || 0), 0) - (b.amount || 0)); };
+  const CALL_LINE = '• Our phlebotomist will call you before arriving';
+  // "Before the test" for all the booking's tests together (no repeats; fasting wins over "no fasting")
+  const prepOf = (b) => {
+    const lines = []; let call = !testsOf(b).some(pkgFor);
+    testsOf(b).forEach((t) => {
+      const p = pkgFor(t);
+      String(p ? p.prep || '' : '').split('\n').map((l) => l.trim()).filter(Boolean).forEach((l) => { if (/phlebotomist will call/i.test(l)) call = true; else if (!lines.includes(l)) lines.push(l); });
+    });
+    const fasting = lines.some((l) => /^•?\s*fast for/i.test(l));
+    const out = lines.filter((l) => !(fasting && /no fasting needed/i.test(l)));
+    if (call) out.push(CALL_LINE);
+    return out.join('\n');
+  };
+  const testLine = (b) => (testsOf(b).length ? `<span class="test-l">🧪 ${esc(testNames(b))}</span>` : '');
+  const PAID_LIKE = ['confirmed', 'collected', 'report_ready', 'completed'];
+  const AFTER_COLLECT = ['collected', 'report_ready', 'completed'];
 
-  // The one most useful next action for a booking
-  function nextStep(b, small = true) {
-    const sm = small ? ' sm' : '';
-    switch (b.status) {
-      case 'pending': case 'expired':
-        return hasPaidProof(b) ? `<button class="btn${sm}" data-act="status" data-id="${b.id}" data-st="confirmed">Confirm payment</button>`
-          : `<button class="btn wa${sm}" data-act="wa" data-kind="pay" data-id="${b.id}">Payment reminder</button>`;
-      case 'payment_submitted': return `<button class="btn${sm}" data-act="status" data-id="${b.id}" data-st="confirmed">Confirm payment</button>`;
-      case 'confirmed': return `<button class="btn blue${sm}" data-act="collect" data-id="${b.id}">Sample collected</button>`;
-      case 'collected': return `<button class="btn purple${sm}" data-act="report-one" data-id="${b.id}">Upload report</button>`;
-      case 'report_ready': return `<button class="btn wa${sm}" data-act="wa" data-kind="report" data-id="${b.id}">Send report</button>`;
-      case 'no_show': return `<button class="btn dark${sm}" data-act="move" data-id="${b.id}">Rebook (${money(b.fee_due || CFG.visitFee)} fee)</button>`;
-      case 'completed': return '<span class="m-ok">Done ✓</span>';
-      default: return '';
-    }
+  // The process, step by step (also drives the "next step" button everywhere)
+  function steps(b) {
+    const s = b.status, sent = sentMap(b), reps = reportsOf(b), nSent = reps.filter((r) => r.sent_at).length;
+    const W = (kind, label, ghost) => `<button type="button" class="btn ${ghost ? 'ghost' : 'wa'} sm" data-act="wa" data-kind="${kind}" data-id="${b.id}">${label}</button>`;
+    const unpaid = ['pending', 'expired'].includes(s);
+    return [
+      { key: 'pay', label: 'Payment confirmed', done: PAID_LIKE.includes(s), at: b.paid_at, avail: s === 'payment_submitted' || unpaid,
+        act: s === 'payment_submitted' || (unpaid && hasPaidProof(b))
+          ? `<button type="button" class="btn sm" data-act="status" data-id="${b.id}" data-st="confirmed">Confirm payment</button>${b.has_proof ? `<button type="button" class="btn ghost sm" data-act="shot" data-id="${b.id}">Screenshot</button>` : ''}`
+          : W('pay', 'Payment reminder') },
+      { key: 'confirm', label: 'Booking confirmation sent to patient', done: !!sent.confirm, at: sent.confirm, avail: PAID_LIKE.includes(s), act: W('confirm', 'Send confirmation'), again: W('confirm', 'Resend', true) },
+      { key: 'center', label: `Booking sent to collection centre (${CFG.centerPhone || '8368143677'})`, done: !!sent.center, at: sent.center, avail: PAID_LIKE.includes(s), act: W('center', 'Send to centre'), again: W('center', 'Resend', true) },
+      { key: 'reminder', label: 'Visit reminder sent to patient', done: !!sent.reminder, at: sent.reminder, avail: PAID_LIKE.includes(s), act: W('reminder', 'Send reminder'), again: W('reminder', 'Resend', true) },
+      { key: 'collect', label: b.vial_no ? `Sample collected · vial ${b.vial_no}` : 'Sample collected (enter vial no.)', done: AFTER_COLLECT.includes(s), at: b.collected_at, avail: s === 'confirmed',
+        act: `<button type="button" class="btn blue sm" data-act="collect" data-id="${b.id}">Sample collected</button>`, again: b.vial_no ? `<button type="button" class="btn ghost sm" data-act="vial-edit" data-id="${b.id}">Edit vial</button>` : '' },
+      { key: 'received', label: '"Sample received at lab" sent to patient', done: !!sent.collected, at: sent.collected, avail: AFTER_COLLECT.includes(s), act: W('collected', 'Send to patient'), again: W('collected', 'Resend', true) },
+      { key: 'upload', label: reps.length ? `${reps.length} report${reps.length === 1 ? '' : 's'} uploaded` : 'Reports uploaded', done: reps.length > 0, at: reps.length ? reps[reps.length - 1].created_at : null, avail: AFTER_COLLECT.includes(s),
+        act: `<button type="button" class="btn purple sm" data-act="reports" data-id="${b.id}">Upload reports</button>`, again: `<button type="button" class="btn ghost sm" data-act="reports" data-id="${b.id}">Add more</button>` },
+      { key: 'send', label: reps.length ? `Reports sent to patient (${nSent} of ${reps.length})` : 'Reports sent to patient', done: s === 'completed' || (reps.length > 0 && nSent === reps.length), at: b.completed_at, avail: reps.length > 0,
+        act: `<button type="button" class="btn wa sm" data-act="reports" data-id="${b.id}">Send reports</button>`, again: `<button type="button" class="btn ghost sm" data-act="reports" data-id="${b.id}">Resend</button>` },
+    ];
   }
-
-  const STAGES = ['Booked', 'Paid', 'Confirmed', 'Collected', 'Report', 'Sent'];
-  function tracker(b) {
-    const at = { pending: 0, expired: 0, payment_submitted: 1, confirmed: 2, no_show: 3, collected: 3, report_ready: 4, completed: 6 }[b.status];
-    if (at == null) return '';
-    return `<div class="track">${STAGES.map((s, i) => {
-      let c = i < at || (b.status === 'completed') ? 'done' : i === at ? 'now' : '';
-      if (b.status === 'no_show' && i === 3) { c = 'bad'; s = 'Not avail.'; }
-      if (b.status === 'collected' && i === 3) c = 'done';
-      if (b.status === 'report_ready' && i === 4) c = 'done';
-      if (b.status === 'payment_submitted' && i === 1) c = 'done';
-      return `<span class="${c}"><i></i>${s}</span>`;
-    }).join('')}</div>`;
+  // The one most useful next action for a booking
+  function nextStep(b) {
+    if (b.status === 'cancelled' || b.status === 'blocked') return '';
+    if (b.status === 'no_show') return `<button type="button" class="btn dark sm" data-act="move" data-id="${b.id}">Rebook (${money(b.fee_due || CFG.visitFee)} fee)</button>`;
+    if (b.status === 'completed') return '<span class="m-ok">Done ✓</span>';
+    const st = steps(b).find((x) => !x.done && x.avail);
+    return st ? st.act : '';
+  }
+  function stepsHTML(b) {
+    if (['cancelled', 'no_show', 'blocked'].includes(b.status)) return '';
+    const all = steps(b); const cur = all.find((x) => !x.done && x.avail);
+    return `<ol class="steps">${all.map((st, i) => `<li class="stp ${st.done ? 'done' : ''} ${st === cur ? 'cur' : ''} ${!st.done && !st.avail ? 'wait' : ''}">
+<span class="n" aria-hidden="true">${st.done ? '✓' : i + 1}</span><div class="t"><b>${esc(st.label)}</b>${st.done && st.at ? `<small>${when(st.at)}</small>` : ''}</div>
+<div class="a">${st.done ? st.again || '' : st.avail ? st.act : ''}</div></li>`).join('')}</ol>`;
   }
 
   // ---------- WhatsApp messages ----------
   const MSG = {
-    pay: 'Payment reminder', confirm: 'Booking confirmation', reminder: 'Visit reminder', slots: 'Suggest new slots',
-    missed: 'Missed visit · fee & new slots', collected: 'Sample collected', report: 'Send report', chat: 'Open chat',
+    pay: 'Payment reminder', confirm: 'Booking confirmation', center: 'Booking details to collection centre', reminder: 'Visit reminder', slots: 'Suggest new slots',
+    missed: 'Missed visit · fee & new slots', collected: 'Sample received at lab', report: 'Reports', chat: 'Open chat',
   };
-  function msgKinds(b) {
-    const s = b.status, k = [];
-    if (['pending', 'expired'].includes(s)) k.push('pay', 'slots');
-    if (s === 'payment_submitted') k.push('slots');
-    if (s === 'confirmed') k.push('confirm', 'reminder', 'slots');
-    if (s === 'no_show') k.push('missed');
-    if (['collected', 'report_ready', 'completed'].includes(s)) k.push('collected');
-    if (['report_ready', 'completed'].includes(s)) k.push('report');
-    k.push('chat');
-    return k;
-  }
-  function suggestedKind(b) {
-    const sent = sentMap(b);
-    return { pending: 'pay', expired: 'pay', confirmed: sent.confirm ? 'reminder' : 'confirm', no_show: 'missed', collected: sent.collected ? null : 'collected', report_ready: 'report' }[b.status] || null;
-  }
   const NEEDS_SLOTS = ['slots', 'missed'];
   const dayWord = (d) => (d === ist() ? 'today' : d === addDays(ist(), 1) ? 'tomorrow' : 'on ' + fmtD(d));
-  const reportLink = (b) => `${location.origin}/api/report/${b.report_token}`;
+  const fileLink = (f) => `${location.origin}/api/report/${f.token}`;
 
-  function msgText(b, kind, sug) {
+  function msgText(b, kind, sug, files) {
     const hi = `Hi ${b.name.split(' ')[0]} 👋`;
     const sign = '— Dr. Sarwan Diagnostic Labs · 8368143677';
     const list = (sug || []).map((s, i) => `${i + 1}) ${fmtD(s.date)}, ${slotLabel(s.slot)}`).join('\n');
+    const tests = testNames(b) || 'home blood test';
     switch (kind) {
-      case 'pay': return [hi, `We received your request for *${b.package_name || 'a home blood test'}* on *${fmtD(b.date)}, ${slotLabel(b.slot)}*, but your payment hasn't reached us yet.`, '',
+      case 'pay': return [hi, `We received your request for *${tests}* on *${fmtD(b.date)}, ${slotLabel(b.slot)}*, but your payment hasn't reached us yet.`, '',
         `Your slot is reserved only after payment. Please pay *${money(b.amount || CFG.amount)}* by UPI to *${CFG.upiId || 'our UPI ID'}* and reply here with the payment screenshot.`, '',
         'Want a different time? Just reply here.', sign].join('\n');
       case 'confirm': return confirmText(b);
-      case 'reminder': return [hi, `Reminder: our phlebotomist will visit you *${dayWord(b.date)}, ${slotLabel(b.slot)}*${b.package_name ? ` for your *${b.package_name}* test` : ''}.`, `📍 ${fullAddr(b)}`, '',
+      case 'center': return ['📋 *New home collection* – Dr. Sarwan Diagnostic Labs', '',
+        `Ref: ${b.id}`, `Patient: ${b.name} · +91 ${b.phone}`, `Date: ${fmt(b.date, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}`, `Time: ${slotLabel(b.slot)}`,
+        `Address: ${fullAddr(b)}`, `Map: ${mapUrl(b)}`, `Tests: ${tests}`, b.notes ? `Notes: ${b.notes}` : null, '', 'Please confirm the visit. 🙏'].filter((x) => x !== null).join('\n');
+      case 'reminder': return [hi, `Reminder: our phlebotomist will visit you *${dayWord(b.date)}, ${slotLabel(b.slot)}* for your *${tests}*.`, `📍 ${fullAddr(b)}`, '',
         ...(prepOf(b) ? ['Before the test:', prepOf(b), ''] : []), 'Need to change the time? Reply here.', sign].join('\n');
       case 'slots': return [hi, (isPast(b.date, b.slot) || OCCUPY.includes(b.status)) ? `We need to find you a new time for your home blood test.` : `The slot you picked (${fmtD(b.date)}, ${slotLabel(b.slot)}) is no longer available.`, '',
         'These slots are free:', list || '(no free slots in the next few days – please call us)', '', 'Reply with the number of the slot that suits you and we\'ll book it.', sign].join('\n');
       case 'missed': return [hi, `Our phlebotomist reached your address ${b.missed_slot ? `on ${fmtD(b.missed_slot.slice(0, 10))} at ${fmtT(slotMin(b.missed_slot.slice(11)))}` : ''} but couldn't reach you, so the sample could not be collected.`, '',
         `To rebook, a visit fee of *${money(b.fee_due || CFG.visitFee)}* applies. Please pay it by UPI to *${CFG.upiId || 'our UPI ID'}* and send the screenshot here with the slot you want:`, list || '(please call us for a slot)', sign].join('\n');
-      case 'collected': return [hi, 'Your blood sample has been collected ✅', b.vial_no ? `Vial no.: *${b.vial_no}*` : null, '',
-        "We'll send your report here on WhatsApp as soon as it's ready.", sign].filter((x) => x !== null).join('\n');
-      case 'report': return [hi, `Your ${b.package_name ? b.package_name + ' ' : 'test '}report is ready 📄`, '', `Download: ${reportLink(b)}`, b.vial_no ? `Vial no.: ${b.vial_no}` : null, '',
-        'Please share it with your doctor. Questions? Reply here or call 8368143677.', sign].filter((x) => x !== null).join('\n');
+      case 'collected': return [hi, 'Your blood sample has reached our lab ✅', b.vial_no ? `Vial no.: *${b.vial_no}*` : null, '',
+        "We'll send your reports here on WhatsApp as soon as they're ready.", sign].filter((x) => x !== null).join('\n');
+      case 'report': {
+        const fs = files && files.length ? files : reportsOf(b).filter((f) => !f.sent_at);
+        return [hi, `Your report${fs.length === 1 ? ' is' : 's are'} ready 📄`, '',
+          ...fs.map((f) => `• ${f.name.replace(/\.pdf$/i, '')}:\n${fileLink(f)}`), '', b.vial_no ? `Vial no.: ${b.vial_no}` : null,
+          'Please share them with your doctor. Questions? Reply here or call 8368143677.', sign].filter((x) => x !== null).join('\n');
+      }
       default: return '';
     }
   }
   function confirmText(b) {
+    const t = testsOf(b);
     return [`Hi ${b.name}! 👋`, 'Your home blood test with *Dr. Sarwan Diagnostic Labs* is *confirmed* ✅', '',
       `🧾 Booking ref: ${b.id}`, `📅 Date: ${fmt(b.date, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}`, `⏰ Time: ${slotLabel(b.slot)}`,
       `📍 Address: ${fullAddr(b)}`, `💳 Payment of ${money(b.amount)} received. Thank you!`,
-      `🧪 Test: ${b.package_name || 'Blood test'}${pkgOf(b) && pkgOf(b).tests ? ` (${pkgOf(b).tests})` : ''}`, '',
+      t.length > 1 ? `🧪 Tests:\n${t.map((x) => `   – ${x.name}`).join('\n')}` : `🧪 Test: ${t[0] ? t[0].name : 'Blood test'}${t[0] && pkgFor(t[0]) && pkgFor(t[0]).tests ? ` (${pkgFor(t[0]).tests})` : ''}`, '',
       ...(prepOf(b) ? ['Before the test:', prepOf(b), '(If your doctor gave you different instructions, follow your doctor.)', ''] : []),
       'Need to reschedule? Call/WhatsApp 8368143677.'].join('\n');
   }
@@ -221,7 +240,7 @@
     const out = [];
     for (const d of dates) {
       try {
-        const r = await fetch('/api/slots?date=' + d).then((x) => x.json());
+        const r = await fetch('/api/slots?date=' + d + (b.city ? '&city=' + encodeURIComponent(b.city) : '')).then((x) => x.json());
         r.slots.filter((s) => s.available && !(d === b.date && s.time === b.slot)).forEach((s) => out.push({ date: d, slot: s.time }));
       } catch (e) {}
       if (out.length >= n) break;
@@ -245,12 +264,14 @@
     else window.open(url, '_blank', 'noopener');
   }
 
-  async function logSent(b, kind) {
+  async function logSent(b, kind, extra = {}) {
     try {
-      const r = await post(`/api/admin/bookings/${b.id}/sent`, { kind });
+      const r = await post(`/api/admin/bookings/${b.id}/sent`, { kind, ...extra });
       await refreshAll();
-      if (r.completed) toast('Report sent · job marked completed ✓', { label: 'Undo', fn: () => setStatus(b.id, 'report_ready', { quiet: true }) });
-      else if (kind !== 'chat') toast(`${MSG[kind]} opened in WhatsApp`);
+      if (kind === 'report') {
+        const undo = { label: 'Undo', fn: async () => { await post(`/api/admin/bookings/${b.id}/sent`, { kind: 'report-undo', reportIds: r.marked || [] }); await refreshAll(); toast('Marked as not sent'); } };
+        toast(r.completed ? 'Reports sent · job marked completed ✓' : `${(r.marked || []).length} report${(r.marked || []).length === 1 ? '' : 's'} marked as sent`, undo);
+      } else if (kind !== 'chat') toast(`${MSG[kind]} opened in WhatsApp`);
     } catch (e) { toast(e.message); }
   }
 
@@ -258,7 +279,8 @@
   async function sendWa(id, kind) {
     const b = findB(id); if (!b) return;
     if (kind === 'chat') { openWhatsApp(b.phone, ''); return; }
-    if (kind === 'report' && !b.report_token) { toast('Upload the report first'); return; }
+    if (kind === 'report') { openReports(id); return; }
+    if (kind === 'center') { openWhatsApp(CFG.centerPhone || '8368143677', msgText(b, 'center')); logSent(b, 'center'); return; }
     if (NEEDS_SLOTS.includes(kind)) {
       openMsg({ b, kind, title: MSG[kind], sub: `To ${b.name} · +91 ${b.phone}`, text: 'Finding free slots…' });
       const sug = await suggestSlots(b);
@@ -294,38 +316,45 @@
 
   // ---------- detail (side panel on calendar, dialog everywhere else) ----------
   function detailHTML(b) {
-    if (!b) return `<div class="dt-empty"><b>Select a booking</b>Click any booking in the calendar to see the patient's details, the next step and WhatsApp messages here.</div>`;
-    const s = ST[b.status], sent = sentMap(b), sug = suggestedKind(b);
+    if (!b) return `<div class="dt-empty"><b>Select a booking</b>Click any booking in the calendar to see the patient's details, the steps and WhatsApp messages here.</div>`;
+    const s = ST[b.status], reps = reportsOf(b);
     const f = [];
-    if (b.status !== 'completed') { const ns = nextStep(b, false); if (ns) f.push(ns); }
+    if (b.status === 'no_show') f.push(nextStep(b));
+    if (b.status === 'report_ready') f.push(`<button class="btn ghost" data-act="status" data-id="${b.id}" data-st="completed">Mark job complete</button>`);
     if (b.status === 'confirmed') f.push(`<button class="btn warn" data-act="status" data-id="${b.id}" data-st="no_show">Reached – patient not available</button>`);
-    if (b.status === 'completed') f.push(`<button class="btn ghost" data-act="status" data-id="${b.id}" data-st="report_ready">Undo: report not sent</button>`);
     if (b.status === 'cancelled' && hasPaidProof(b)) f.push(`<button class="btn ghost" data-act="status" data-id="${b.id}" data-st="confirmed">Restore &amp; confirm</button>`);
     if (CANCELLABLE.includes(b.status)) f.push(`<button class="btn warn" data-act="status" data-id="${b.id}" data-st="cancelled">Cancel &amp; free slot</button>`);
     const payNote = b.status === 'payment_submitted' ? 'Payment submitted · check your Paytm app'
       : ['pending', 'expired'].includes(b.status) ? (hasPaidProof(b) ? 'Screenshot uploaded · slot not held' : 'Not paid yet · slot not reserved')
       : PAID.includes(b.status) ? 'Payment verified' : '—';
+    const other = [];
+    if (['pending', 'expired'].includes(b.status)) other.push('pay');
+    if (['pending', 'expired', 'payment_submitted', 'confirmed'].includes(b.status)) other.push('slots');
+    if (b.status === 'no_show') other.push('missed');
+    other.push('chat');
+    const sent = sentMap(b);
+    const t = testsOf(b);
     return `<div class="dt-h">
-<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px"><div><div class="dt-name">${esc(b.name)}</div><div class="meta" style="margin-top:2px">Ref ${esc(b.id)}</div></div>
+<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px"><div><div class="dt-name">${esc(b.name)}</div><div class="meta" style="margin-top:2px">Ref ${esc(b.id)} · +91 ${esc(b.phone)}</div></div>
 <span class="pill st-${b.status}" style="margin:0;flex:none">${s.label}</span></div>
-${b.package_name ? `<div class="dt-test"><span class="dt-k">Test</span><b>${esc(b.package_name)}</b>${pkgOf(b) && pkgOf(b).tests ? `<span class="meta">${esc(pkgOf(b).tests)}</span>` : ''}</div>` : ''}
 <div class="dt-when"><span>${fmtD(b.date)} · ${esc(slotLabel(b.slot))}</span>${MOVABLE.includes(b.status) ? `<button type="button" class="btn ghost sm" style="margin-left:auto" data-act="move" data-id="${b.id}">${b.status === 'no_show' ? 'Rebook' : 'Reschedule'}</button>` : ''}</div>
-${tracker(b)}
 </div>
 <div class="dt-b">
 ${b.status === 'no_show' ? `<div class="fee">Phlebotomist reached${b.missed_slot ? ` on ${fmtD(b.missed_slot.slice(0, 10))}, ${fmtT(slotMin(b.missed_slot.slice(11)))}` : ''} – patient not available. <b>${money(b.fee_due || CFG.visitFee)} visit fee</b> is due before rebooking.</div>` : ''}
 ${b.fee_paid_at ? `<div class="meta">Visit fee ${money(b.fee_due)} received ${when(b.fee_paid_at)} · rebooked</div>` : ''}
+<div class="dt-sec"><div class="dt-k" style="display:flex;justify-content:space-between;align-items:center">Tests (${t.length})${b.status !== 'cancelled' ? `<button type="button" class="btn ghost sm" data-act="tests-edit" data-id="${b.id}">Edit tests</button>` : ''}</div>
+<ul class="tl">${t.map((x) => `<li><b>${esc(x.name)}</b><span>${money(x.price)}</span></li>`).join('') || '<li class="meta">No test recorded</li>'}</ul>
+<div class="pay"><div style="min-width:0;flex:1"><b>${money(b.amount)}</b><div class="meta">${payNote}${b.utr ? ` · UTR ${esc(b.utr)}` : ''}${t.some((x) => x.margin != null) ? ` · margin ${money(marginOf(b))}` : ''}</div></div>${b.has_proof ? `<button type="button" class="btn ghost sm" data-act="shot" data-id="${b.id}">Screenshot</button>` : ''}</div></div>
+${stepsHTML(b) ? `<div class="dt-sec"><div class="dt-k">Steps</div>${stepsHTML(b)}</div>` : ''}
+<div class="dt-sec"><div class="dt-k" style="display:flex;justify-content:space-between;align-items:center">Reports (${reps.length})${AFTER_COLLECT.includes(b.status) ? `<button type="button" class="btn ghost sm" data-act="reports" data-id="${b.id}">${reps.length ? 'Manage / send' : 'Upload'}</button>` : ''}</div>
+${reps.length ? `<ul class="rl">${reps.map((r) => `<li>📄 ${esc(r.name)} <span class="${r.sent_at ? 'm-ok' : 'meta'}">${r.sent_at ? 'sent ' + when(r.sent_at) : 'not sent'}</span></li>`).join('')}</ul>` : `<div class="meta">${AFTER_COLLECT.includes(b.status) ? 'No reports uploaded yet.' : 'Reports can be uploaded after the sample is collected.'}</div>`}</div>
+<div class="dt-sec"><div class="dt-k">Other WhatsApp messages</div><div class="wa-list">${other.map((k) => `<button type="button" class="wa-btn" data-act="wa" data-kind="${k}" data-id="${b.id}"><span class="ic">✆</span><span><b>${MSG[k]}</b></span>${sent[k] ? `<span class="ok">Sent ${when(sent[k])}</span>` : ''}</button>`).join('')}</div></div>
 <div class="dt-links"><a class="call" href="tel:+91${esc(b.phone)}">Call</a><a class="wa" href="#" data-act="wa" data-kind="chat" data-id="${b.id}">WhatsApp</a><a href="${mapUrl(b)}" target="_blank" rel="noopener">Map</a></div>
-${b.vial_no ? `<div class="kv"><div><div class="dt-k">Vial no.</div><div class="v">${esc(b.vial_no)}</div></div><button type="button" class="btn ghost sm" data-act="vial-edit" data-id="${b.id}">Edit</button></div>` : ''}
-${b.report_name ? `<div class="kv"><div style="min-width:0"><div class="dt-k">Report</div><div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📄 ${esc(b.report_name)}</div><div class="meta">${kb(b.report_size || 0)} · uploaded ${when(b.report_at)}</div></div><span style="display:flex;gap:6px;flex:none"><button type="button" class="btn ghost sm" data-act="report-view" data-id="${b.id}">View</button><button type="button" class="btn ghost sm" data-act="report-one" data-id="${b.id}">Replace</button></span></div>` : ''}
-<div class="dt-sec"><div class="dt-k">WhatsApp messages</div><div class="wa-list">${msgKinds(b).map((k) => `<button type="button" class="wa-btn ${k === sug ? 'sug' : ''}" data-act="wa" data-kind="${k}" data-id="${b.id}"><span class="ic">✆</span><span><b>${MSG[k]}</b>${k === sug ? '<small>Suggested next</small>' : ''}</span>${sent[k] ? `<span class="ok">Sent ${when(sent[k])}</span>` : ''}</button>`).join('')}</div></div>
-<div><div class="dt-k">Mobile</div><div style="font-weight:600;margin-top:2px">+91 ${esc(b.phone)}</div></div>
 <div><div class="dt-k">Collection address</div><div style="margin-top:2px;line-height:1.45">${esc(b.address)}<br><b>${esc(b.city || '')}</b>${b.state ? ', ' + esc(b.state) : ''} – ${esc(b.pincode)}</div></div>
-<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px"><div><div class="dt-k">Cycle</div><div style="margin-top:2px">${esc(b.cycle || '–')}</div></div><div><div class="dt-k">Source</div><div style="margin-top:2px">${esc(srcLabel(b.source))}</div></div></div>
-<div class="pay"><div style="min-width:0;flex:1"><b>${money(b.amount)}</b><div class="meta">${payNote}${b.utr ? `<br>UTR ${esc(b.utr)}` : ''}</div></div>${b.has_proof ? `<button type="button" class="btn ghost sm" data-act="shot" data-id="${b.id}">View screenshot</button>` : ''}</div>
+<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">${b.cycle ? `<div><div class="dt-k">Cycle</div><div style="margin-top:2px">${esc(b.cycle)}</div></div>` : ''}<div><div class="dt-k">Source</div><div style="margin-top:2px">${esc(srcLabel(b.source))}</div></div></div>
 ${b.notes ? `<div><div class="dt-k">Notes</div><div style="margin-top:2px">${esc(b.notes)}</div></div>` : ''}
 </div>
-<div class="dt-f">${f.join('')}</div>`;
+${f.length ? `<div class="dt-f">${f.join('')}</div>` : ''}`;
   }
 
   function openDetail(id) {
@@ -338,69 +367,99 @@ ${b.notes ? `<div><div class="dt-k">Notes</div><div style="margin-top:2px">${esc
   $('#detailDlg').addEventListener('close', () => (detailId = null));
 
   // ================= BOOKINGS TAB =================
+  const period = { preset: pref.get('period', 'month'), from: pref.get('pfrom', ''), to: pref.get('pto', '') };
+  function presetRange(p) {
+    const t = ist();
+    switch (p) {
+      case 'today': return [t, t];
+      case 'tomorrow': return [addDays(t, 1), addDays(t, 1)];
+      case 'next7': return [t, addDays(t, 6)];
+      case 'week': { const s = addDays(t, -dowMon(t)); return [s, addDays(s, 6)]; }
+      case 'lastmonth': { const s = addMonths(monthStart(t), -1); return [s, monthEnd(s)]; }
+      case 'last30': return [addDays(t, -29), t];
+      case 'custom': return [period.from || t, period.to || period.from || t];
+      default: return [monthStart(t), monthEnd(t)];
+    }
+  }
+  function syncPeriod() {
+    [period.from, period.to] = presetRange(period.preset);
+    $('#perPreset').value = period.preset; $('#perFrom').value = period.from; $('#perTo').value = period.to;
+  }
+  syncPeriod();
+  $('#perPreset').onchange = () => { period.preset = $('#perPreset').value; pref.set('period', period.preset); syncPeriod(); load().catch((e) => toast(e.message)); };
+  ['perFrom', 'perTo'].forEach((id) => ($('#' + id).onchange = () => {
+    let f = $('#perFrom').value, t = $('#perTo').value; if (!f || !t) return;
+    if (t < f) [f, t] = [t, f];
+    period.preset = 'custom'; period.from = f; period.to = t; pref.set('period', 'custom'); pref.set('pfrom', f); pref.set('pto', t);
+    syncPeriod(); load().catch((e) => toast(e.message));
+  }));
+
   async function load() {
     const today = ist();
-    data = await api(`/api/admin/bookings?from=${addDays(today, -90)}&to=${addDays(today, 14)}&all=1`);
+    syncPeriod();
+    const from = [period.from, addDays(today, -90)].sort()[0], to = [period.to, addDays(today, 14)].sort()[1];
+    data = await api(`/api/admin/bookings?from=${from}&to=${to}&all=1`);
     renderBookings();
   }
-
-  function card(b) {
-    return `<div class="lrow"><div class="t">${fmtD(b.date)}<br><span class="meta">${esc(slotLabel(b.slot))}</span></div>
-<div class="who"><div><button type="button" class="lnk n" data-act="open" data-id="${b.id}" style="background:none;border:0;padding:0;font:inherit;font-weight:700;font-size:16px;cursor:pointer;color:var(--ink)">${esc(b.name)}</button><span class="pill st-${b.status}">${ST[b.status].label}</span>${b.vial_no ? ` <span class="vial">${esc(b.vial_no)}</span>` : ''}${testLine(b)}</div>
-<div class="meta"><a href="tel:+91${esc(b.phone)}">+91 ${esc(b.phone)}</a> · ${esc(b.city || '')} ${esc(b.pincode)} · ${money(b.amount)}${b.status === 'no_show' ? ` · <b style="color:#9b1c31">${money(b.fee_due || CFG.visitFee)} fee due</b>` : ''}${b.report_at ? ` · report ${when(b.report_at)}` : ''}${b.collected_at && !b.report_at ? ` · collected ${when(b.collected_at)}` : ''}</div>
-<div class="acts">${nextStep(b)}${b.has_proof && ['payment_submitted', 'pending', 'expired'].includes(b.status) ? `<button class="btn ghost sm" data-act="shot" data-id="${b.id}">View screenshot</button>` : ''}<button class="btn ghost sm" data-act="open" data-id="${b.id}">Details &amp; messages</button></div></div></div>`;
-  }
+  const inPeriod = (b) => b.date >= period.from && b.date <= period.to;
 
   function renderBookings() {
-    const today = ist();
-    const bookings = data.bookings.filter((b) => b.status !== 'blocked');
-    const groups = [
-      ['verify', 'Payments to verify', bookings.filter((b) => b.status === 'payment_submitted' || (['pending', 'expired'].includes(b.status) && hasPaidProof(b))), 'Open the screenshot, check the payment in your Paytm for Business app, then confirm.'],
-      ['send', 'Reports to send', bookings.filter((b) => b.status === 'report_ready'), 'Click "Send report": WhatsApp opens with the download link and the job is marked completed.'],
-      ['await', 'Waiting for report', bookings.filter((b) => b.status === 'collected'), 'Samples collected. Upload each report when the collection centre sends it (or use "Upload reports" at the top for many at once).'],
-      ['noshow', 'Patient not available', bookings.filter((b) => b.status === 'no_show'), 'Send the missed-visit message, collect the visit fee, then rebook.'],
-      ['unpaid', 'Unpaid bookings', bookings.filter((b) => b.status === 'pending' && b.date >= today && !hasPaidProof(b)), 'Booked on the website but not paid. The slot is not held. Send a payment reminder.'],
-    ];
-    const upcoming = bookings.filter((b) => b.date >= today && OCCUPY.includes(b.status));
-    $('#stats').innerHTML = [
-      [groups[0][2].length, 'Payments to verify'],
-      [upcoming.filter((b) => b.date === today).length, 'Today'],
-      [upcoming.filter((b) => b.date === addDays(today, 1)).length, 'Tomorrow'],
-      [groups[2][2].length, 'Waiting for report'],
-      [groups[1][2].length, 'Reports to send'],
-      [money(revenue(bookings.filter((b) => b.date >= addDays(today, -30)))), 'Revenue (30 days + upcoming)'],
-    ].map(([v, l]) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`).join('');
-    if (!attTab || !groups.find((g) => g[0] === attTab)) attTab = (groups.find((g) => g[2].length) || groups[0])[0];
-    $('#attTabs').innerHTML = groups.map(([k, l, list]) => `<button type="button" role="tab" data-att="${k}" aria-selected="${k === attTab}" class="${list.length ? '' : 'zero'}">${l}<b>${list.length}</b></button>`).join('');
-    $$('[data-att]').forEach((x) => (x.onclick = () => { attTab = x.dataset.att; renderBookings(); }));
-    const g = groups.find((x) => x[0] === attTab);
-    const list = g[2].slice().sort((a, b) => (a.date + a.slot).localeCompare(b.date + b.slot));
-    $('#attention').innerHTML = `<p class="meta" style="margin:0 0 4px">${g[3]}</p>` + (list.length ? list.map(card).join('') : '<p class="meta" style="margin:0">Nothing here right now.</p>');
+    const list = data.bookings.filter((b) => b.status !== 'blocked' && inPeriod(b));
+    const active = list.filter((b) => HOLD_ST.includes(b.status));
+    const reps = list.flatMap(reportsOf);
+    const paid = list.filter((b) => PAID.includes(b.status));
+    const card = ([v, l, filt, cls]) => `<${filt ? `button type="button" data-filt="${filt}"` : 'div'} class="stat ${cls || ''}"><b>${v}</b><span>${l}</span></${filt ? 'button' : 'div'}>`;
+    $('#stats1').innerHTML = [
+      [active.reduce((a, b) => a + Math.max(1, testsOf(b).length), 0), 'Total tests', 'active'],
+      [list.filter((b) => AFTER_COLLECT.includes(b.status)).length, 'Total samples collected', 'collected_any'],
+      [reps.length, 'Total reports'],
+      [reps.filter((r) => r.sent_at).length, 'Total reports sent', 'completed'],
+    ].map(card).join('');
+    $('#stats2').innerHTML = [
+      [money(revenue(list)), 'Total price'],
+      [money(paid.reduce((a, b) => a + marginOf(b), 0) + list.reduce((a, b) => a + (b.fee_paid_at ? b.fee_due || 0 : 0), 0)), 'Total margin'],
+      [list.filter((b) => b.status === 'no_show').length, 'Patient not available', 'no_show', 'red'],
+      [list.filter((b) => b.status === 'pending').length, 'Unpaid bookings', 'pending', 'amber'],
+    ].map(card).join('');
+    const ver = data.bookings.filter((b) => b.status === 'payment_submitted' || (['pending', 'expired'].includes(b.status) && hasPaidProof(b) && b.date >= ist()));
+    $('#verifyNote').innerHTML = ver.length ? `<div class="vnote">⚠ ${ver.length} payment${ver.length === 1 ? '' : 's'} to verify <button type="button" class="btn sm" data-filt="payment_submitted">Show</button></div>` : '';
     renderTable();
   }
+  const HOLD_ST = ['payment_submitted', 'confirmed', 'collected', 'report_ready', 'completed', 'no_show'];
 
   function renderTable() {
     if (!data) return;
-    const today = ist(), st = $('#fStatus').value, wh = $('#fWhen').value, q = $('#fSearch').value.trim().toLowerCase();
-    let rows = data.bookings.filter((b) => b.status !== 'blocked');
-    if (st === 'active') rows = rows.filter(live); else if (st !== 'all') rows = rows.filter((b) => b.status === st);
-    if (wh === 'upcoming') rows = rows.filter((b) => b.date >= today); else if (wh === 'past') rows = rows.filter((b) => b.date < today);
-    if (q) rows = rows.filter((b) => [b.name, b.phone, b.address, b.city, b.state, b.pincode, b.id, b.utr, b.vial_no, b.package_name].join(' ').toLowerCase().includes(q));
-    rows.sort((a, b) => (wh === 'past' ? (b.date + b.slot).localeCompare(a.date + a.slot) : (a.date + a.slot).localeCompare(b.date + b.slot)));
-    $('#tbody').innerHTML = rows.length ? rows.map((b) => `<tr class="row" data-row="${b.id}">
+    const st = $('#fStatus').value, q = $('#fSearch').value.trim().toLowerCase();
+    let rows = data.bookings.filter((b) => b.status !== 'blocked' && (st === 'payment_submitted' || inPeriod(b)));
+    if (st === 'active') rows = rows.filter(live);
+    else if (st === 'collected_any') rows = rows.filter((b) => AFTER_COLLECT.includes(b.status));
+    else if (st !== 'all') rows = rows.filter((b) => b.status === st);
+    if (q) rows = rows.filter((b) => [b.name, b.phone, b.address, b.city, b.state, b.pincode, b.id, b.utr, b.vial_no, testNames(b)].join(' ').toLowerCase().includes(q));
+    rows.sort((a, b) => (a.date + a.slot).localeCompare(b.date + b.slot));
+    $('#tbody').innerHTML = rows.length ? rows.map((b) => {
+      const reps = reportsOf(b), nSent = reps.filter((r) => r.sent_at).length;
+      const repBtn = AFTER_COLLECT.includes(b.status) ? `<button type="button" class="btn ghost sm rep-b" data-act="reports" data-id="${b.id}">📄 ${reps.length ? `Reports (${nSent}/${reps.length} sent)` : 'Upload reports'}</button>` : '';
+      return `<tr class="row" data-row="${b.id}">
 <td style="white-space:nowrap"><b>${fmt(b.date, { weekday: 'short', day: 'numeric', month: 'short' })}</b><small>${esc(slotLabel(b.slot))}</small><small>${esc(b.id)}</small></td>
-<td><button type="button" class="lnk" data-act="open" data-id="${b.id}">${esc(b.name)}</button>${testLine(b)}${b.vial_no ? `<br><span class="vial">${esc(b.vial_no)}</span>` : ''}${b.cycle ? `<small>${esc(b.cycle)}</small>` : ''}</td>
+<td><button type="button" class="lnk" data-act="open" data-id="${b.id}">${esc(b.name)}</button>${testsOf(b).map((t) => `<span class="test-l">🧪 ${esc(t.name)}</span>`).join('')}${b.vial_no ? `<span class="vial">${esc(b.vial_no)}</span>` : ''}${repBtn}</td>
 <td style="white-space:nowrap"><a href="tel:+91${esc(b.phone)}">${esc(b.phone)}</a><small><a href="#" data-act="wa" data-kind="chat" data-id="${b.id}">WhatsApp</a></small></td>
 <td class="addr">${esc(b.address)}<small>PIN ${esc(b.pincode)} · <a href="${mapUrl(b)}" target="_blank" rel="noopener">Map</a></small>${b.notes ? `<small>Note: ${esc(b.notes)}</small>` : ''}</td>
 <td>${esc(b.city || '–')}</td>
 <td>${esc(b.state || '–')}</td>
-<td class="num"><b>${money(b.amount)}</b>${b.utr ? `<small>UTR ${esc(b.utr)}</small>` : ''}${b.has_proof ? `<button class="btn ghost sm" style="margin-top:6px" data-act="shot" data-id="${b.id}">Screenshot</button>` : ''}</td>
+<td class="num"><b>${money(b.amount)}</b>${testsOf(b).some((x) => x.margin != null) ? `<small>margin ${money(marginOf(b))}</small>` : ''}${b.utr ? `<small>UTR ${esc(b.utr)}</small>` : ''}</td>
 <td><div class="next"><span class="pill st-${b.status}" style="margin:0">${ST[b.status].label}</span>${nextStep(b)}</div></td>
-</tr>`).join('') : '<tr><td colspan="8" class="meta" style="padding:18px">No bookings match.</td></tr>';
-    $('#tblCount').textContent = `${rows.length} booking${rows.length === 1 ? '' : 's'} · ${money(revenue(rows))} paid / submitted · click a name for details & WhatsApp messages`;
+</tr>`;
+    }).join('') : '<tr><td colspan="8" class="meta" style="padding:18px">No bookings in this period.</td></tr>';
+    $('#tblCount').textContent = `${rows.length} booking${rows.length === 1 ? '' : 's'} · ${fmtD(period.from)}${period.to !== period.from ? ' – ' + fmtD(period.to) : ''} · click a name for the steps & WhatsApp messages`;
   }
-  ['fStatus', 'fWhen'].forEach((id) => ($('#' + id).onchange = renderTable));
+  $('#fStatus').onchange = renderTable;
   $('#fSearch').oninput = renderTable;
+  document.addEventListener('click', (e) => {
+    const c = e.target.closest('[data-filt]'); if (!c) return;
+    const v = c.dataset.filt, sel = $('#fStatus');
+    if (![...sel.options].some((o) => o.value === v)) sel.insertAdjacentHTML('beforeend', `<option value="${v}">Collected (incl. reports)</option>`);
+    sel.value = v; renderTable(); $('.tbl-wrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
 
   // ================= CALENDAR TAB =================
   function viewRange() {
@@ -666,16 +725,6 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
       $('#shotDlg').showModal();
     } catch (e) { toast(e.message); }
   }
-  async function viewReport(id) {
-    const w = window.open('', '_blank');
-    try {
-      const r = await fetch(`/api/admin/bookings/${id}/report`, { headers: { 'x-admin-key': KEY } });
-      if (!r.ok) throw new Error('Report not found');
-      const u = URL.createObjectURL(await r.blob());
-      if (w) w.location = u; else window.open(u, '_blank');
-    } catch (e) { if (w) w.close(); toast(e.message); }
-  }
-
   // ---------- mutations ----------
   async function setStatus(id, st, opts = {}) {
     const b0 = findB(id);
@@ -722,7 +771,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
       $('#vialDlg').close();
       await refreshAll();
       const b = findB(id);
-      if (!edit && b) openMsg({ b, kind: 'collected', title: 'Sample collected ✓', sub: `Let ${b.name} know · vial ${b.vial_no}`, text: msgText(b, 'collected') });
+      if (!edit && b) { toast('Sample collected ✓ – once the centre confirms, send "Sample received" to the patient'); openDetail(id); }
       else toast('Vial number saved');
     } catch (err) {
       $('#vialErr').textContent = err.message + (err.code === 'dup_vial' ? ' Click save again to use it anyway.' : '');
@@ -730,84 +779,77 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     } finally { $('#vialSave').disabled = false; }
   };
 
-  // ---------- reports ----------
+  // ---------- reports of one patient ----------
   async function uploadReport(id, file) {
     if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') throw new Error(`${file.name} is not a PDF`);
     if (file.size > 10 * 1024 * 1024) throw new Error(`${file.name} is larger than 10 MB`);
-    const r = await fetch(`/api/admin/bookings/${id}/report`, { method: 'POST', body: file, headers: { 'content-type': 'application/pdf', 'x-admin-key': KEY, 'x-filename': encodeURIComponent(file.name) } });
+    const r = await fetch(`/api/admin/bookings/${id}/reports`, { method: 'POST', body: file, headers: { 'content-type': 'application/pdf', 'x-admin-key': KEY, 'x-filename': encodeURIComponent(file.name) } });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || 'Upload failed');
     return j;
   }
-  let oneReportId = null;
-  $('#oneReport').onchange = async () => {
-    const f = $('#oneReport').files[0], id = oneReportId; $('#oneReport').value = '';
-    if (!f || !id) return;
-    const b0 = findB(id);
-    if (b0 && b0.vial_no && !norm(f.name).includes(norm(b0.vial_no)) && !confirm(`The file name "${f.name}" doesn't contain vial no. ${b0.vial_no}.\n\nUpload it for ${b0.name} anyway?`)) return;
-    toast('Uploading report…');
-    try {
-      await uploadReport(id, f);
-      await refreshAll();
-      const b = findB(id);
-      openMsg({ b, kind: 'report', title: 'Report uploaded ✓', sub: `Send it to ${b.name} · +91 ${b.phone}. Sending marks the job completed.`, text: msgText(b, 'report') });
-    } catch (e) { toast(e.message); }
-  };
-
-  // bulk upload: match "vial no." in each file name
-  let repRows = [];
-  const awaiting = () => (data ? data.bookings.filter((b) => b.vial_no && ['collected', 'report_ready', 'completed'].includes(b.status)) : []);
-  function matchFile(name) {
-    const n = norm(name);
-    let best = null, tie = false;
-    awaiting().forEach((b) => {
-      const v = norm(b.vial_no);
-      if (v.length >= 3 && n.includes(v)) {
-        if (!best || v.length > norm(best.vial_no).length) { best = b; tie = false; } else if (v.length === norm(best.vial_no).length && best.id !== b.id) tie = true;
-      }
-    });
-    return tie ? null : best;
+  let repId = null, repPicked = null;
+  function openReports(id) {
+    repId = id; repPicked = null; $('#repErr').textContent = '';
+    renderRepDlg();
+    $$('dialog[open]').forEach((x) => x !== $('#repDlg') && x.close());
+    if (!$('#repDlg').open) $('#repDlg').showModal();
   }
-  function openReports() {
-    repRows = []; renderRep();
-    $$('dialog[open]').forEach((x) => x.close());
-    $('#repDlg').showModal();
+  function renderRepDlg() {
+    const b = findB(repId); if (!b) return;
+    const reps = reportsOf(b), can = AFTER_COLLECT.includes(b.status);
+    if (!repPicked) repPicked = new Set(reps.filter((r) => !r.sent_at).map((r) => r.id));
+    $('#repTitle').textContent = `Reports · ${b.name}`;
+    $('#repSub').textContent = `${testNames(b)}${b.vial_no ? ' · vial ' + b.vial_no : ''} · +91 ${b.phone}`;
+    $('#repList').innerHTML = reps.length ? `<ul class="rp-l">${reps.map((r) => `<li class="rp">
+<label><input type="checkbox" data-rp="${r.id}" ${repPicked.has(r.id) ? 'checked' : ''}><span><b>📄 ${esc(r.name)}</b><small>${kb(r.size)} · uploaded ${when(r.created_at)}${r.sent_at ? ` · <span class="m-ok">sent ${when(r.sent_at)}</span>` : ' · not sent yet'}</small></span></label>
+<span class="rp-a"><button type="button" class="btn ghost sm" data-act="rp-view" data-rid="${r.id}">View</button><button type="button" class="btn warn sm" data-act="rp-del" data-rid="${r.id}" aria-label="Delete ${esc(r.name)}">Delete</button></span></li>`).join('')}</ul>` : '<p class="meta" style="margin:0 0 10px">No reports uploaded yet.</p>';
+    $('#repDrop').hidden = !can; $('#repLocked').hidden = can;
+    const n = repPicked.size;
+    $('#repSend').disabled = !n;
+    $('#repSend').textContent = n ? `Send ${n} report${n === 1 ? '' : 's'} on WhatsApp` : 'Tick the reports to send';
+    $('#repDone').hidden = b.status !== 'report_ready';
   }
-  function addRepFiles(files) {
-    Array.from(files).forEach((f) => { const m = matchFile(f.name); repRows.push({ file: f, id: m ? m.id : '', auto: !!m, state: '' }); });
-    renderRep();
+  $('#repList').addEventListener('change', (e) => { const id = Number(e.target.dataset.rp); if (!id) return; e.target.checked ? repPicked.add(id) : repPicked.delete(id); renderRepDlg(); });
+  async function addRepFiles(files) {
+    const list = Array.from(files); if (!list.length) return;
+    $('#repErr').textContent = ''; let ok = 0;
+    for (const [i, f] of list.entries()) {
+      $('#repErr').innerHTML = `<span class="meta">Uploading ${i + 1} of ${list.length}: ${esc(f.name)}…</span>`;
+      try { const r = await uploadReport(repId, f); ok++; repPicked && repPicked.add(r.id); }
+      catch (e) { $('#repErr').textContent = e.message; await new Promise((r) => setTimeout(r, 1200)); }
+    }
+    await refreshAll(); renderRepDlg();
+    if (ok) { $('#repErr').innerHTML = `<span class="m-ok">${ok} report${ok === 1 ? '' : 's'} uploaded ✓</span>`; }
   }
-  function renderRep() {
-    const opts = awaiting().sort((a, b) => (a.status === 'collected' ? 0 : 1) - (b.status === 'collected' ? 0 : 1) || (b.date + b.slot).localeCompare(a.date + a.slot));
-    $('#repList').innerHTML = repRows.length ? `<table class="rep-t"><tr><th>File</th><th>Patient</th><th></th></tr>${repRows.map((r, i) => `<tr>
-<td style="word-break:break-all">📄 ${esc(r.file.name)}<br><span class="meta">${kb(r.file.size)}</span></td>
-<td><select class="inp" data-rep="${i}" ${r.state === 'done' ? 'disabled' : ''}><option value="">— Not matched · pick patient —</option>${opts.map((b) => `<option value="${b.id}" ${b.id === r.id ? 'selected' : ''}>${esc(b.vial_no)} · ${esc(b.name)} · ${fmtD(b.date)}${b.report_name ? ' (has report)' : ''}</option>`).join('')}</select></td>
-<td style="white-space:nowrap">${r.state === 'done' ? '<span class="m-ok">Uploaded ✓</span>' : r.state === 'busy' ? 'Uploading…' : r.state ? `<span class="m-no">${esc(r.state)}</span>` : r.id ? `<span class="m-ok">${r.auto ? 'Matched by vial no.' : 'Picked'}</span>` : '<span class="m-no">No match</span>'}</td></tr>`).join('')}</table>`
-      : `<p class="meta" style="margin:12px 0 0">${awaiting().filter((b) => b.status === 'collected').length} patient(s) are waiting for a report.</p>`;
-    $$('[data-rep]').forEach((s) => (s.onchange = () => { const r = repRows[+s.dataset.rep]; r.id = s.value; r.auto = false; renderRep(); }));
-    const todo = repRows.filter((r) => r.id && r.state !== 'done');
-    $('#repUpload').disabled = !todo.length;
-    $('#repUpload').textContent = todo.length ? `Upload ${todo.length} report${todo.length === 1 ? '' : 's'}` : 'Upload';
-  }
-  $('#repFiles').onchange = () => { addRepFiles($('#repFiles').files); $('#repFiles').value = ''; };
+  $('#repFiles').onchange = () => { const f = $('#repFiles').files; addRepFiles(f).finally(() => ($('#repFiles').value = '')); };
   const drop = $('#repDrop');
   drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
   drop.addEventListener('dragleave', () => drop.classList.remove('over'));
   drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); addRepFiles(e.dataTransfer.files); });
-  $('#repUpload').onclick = async () => {
-    const ids = repRows.filter((r) => r.id && r.state !== 'done').map((r) => r.id);
-    if (new Set(ids).size !== ids.length) { toast('Two files are matched to the same patient. Fix that first.'); return; }
-    $('#repUpload').disabled = true;
-    let ok = 0;
-    for (const r of repRows) {
-      if (!r.id || r.state === 'done') continue;
-      r.state = 'busy'; renderRep();
-      try { await uploadReport(r.id, r.file); r.state = 'done'; ok++; } catch (e) { r.state = e.message; }
-      renderRep();
-    }
-    await refreshAll();
-    if (ok) { attTab = 'send'; renderBookings(); toast(`${ok} report${ok === 1 ? '' : 's'} uploaded · send them from "Reports to send"`); }
+  $('#repSend').onclick = () => {
+    const b = findB(repId); if (!b) return;
+    const files = reportsOf(b).filter((r) => repPicked.has(r.id)); if (!files.length) return;
+    openWhatsApp(b.phone, msgText(b, 'report', null, files));
+    $('#repDlg').close();
+    logSent(b, 'report', { reportIds: files.map((f) => f.id) });
   };
+  $('#repDone').onclick = () => { const id = repId; $('#repDlg').close(); setStatus(id, 'completed'); };
+  async function viewReportFile(rid) {
+    const w = window.open('', '_blank');
+    try {
+      const r = await fetch(`/api/admin/reports/${rid}`, { headers: { 'x-admin-key': KEY } });
+      if (!r.ok) throw new Error('Report not found');
+      const u = URL.createObjectURL(await r.blob());
+      if (w) w.location = u; else window.open(u, '_blank');
+    } catch (e) { if (w) w.close(); toast(e.message); }
+  }
+  async function deleteReportFile(rid) {
+    const b = findB(repId), f = b && reportsOf(b).find((r) => r.id === rid);
+    if (!confirm(`Delete "${f ? f.name : 'this report'}"? The patient's link to it will stop working.`)) return;
+    try { await api(`/api/admin/reports/${rid}`, { method: 'DELETE' }); repPicked && repPicked.delete(rid); await refreshAll(); renderRepDlg(); toast('Report deleted'); }
+    catch (e) { $('#repErr').textContent = e.message; }
+  }
 
   // ---------- tests / packages ----------
   async function loadPkgs() {
@@ -888,31 +930,47 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     form = { mode, id: ctx.id || null, fee: mode === 'move' && ctx.status === 'no_show', city: ctx.city || '' };
     $('#bkForm').reset(); $('#formErr').textContent = '';
     $$('.add-only', $('#bkForm')).forEach((el) => (el.hidden = mode !== 'add'));
+    $$('.tests-f', $('#bkForm')).forEach((el) => (el.hidden = !(mode === 'add' || mode === 'tests')));
+    $$('.slot-f', $('#bkForm')).forEach((el) => (el.hidden = mode === 'tests'));
     $$('.fee-only', $('#bkForm')).forEach((el) => (el.hidden = !form.fee));
     $('#fFeeLbl').textContent = `${money(ctx.fee_due || CFG.visitFee)} visit fee received`;
     if (mode === 'add') { $('#formTitle').textContent = 'Add booking'; $('#formSub').textContent = 'For phone or walk-in bookings'; $('#formSave').textContent = 'Save booking'; }
+    else if (mode === 'tests') { $('#formTitle').textContent = `Tests for ${ctx.name}`; $('#formSub').textContent = `${fmtD(ctx.date)} · ${slotLabel(ctx.slot)} · currently ${money(ctx.amount)}`; $('#formSave').textContent = 'Save tests'; }
     else { $('#formTitle').textContent = `${form.fee ? 'Rebook' : 'Reschedule'} ${ctx.name}`; $('#formSub').textContent = `Currently ${fmtD(ctx.date)} · ${slotLabel(ctx.slot)}`; $('#formSave').textContent = form.fee ? 'Rebook' : 'Move booking'; }
-    const date = mode === 'move' && ctx.date < ist() ? ist() : (ctx.date || ist());
-    if (mode === 'add') fillPkgSelect();
-    if (mode === 'add' && !PKGS.length) loadPkgs().then(fillPkgSelect).catch(() => {});
-    $('#fDate').value = date;
-    fillSlots(date, mode === 'move' && ctx.date < ist() ? null : ctx.slot, form.id);
+    $('#tSearch').value = '';
+    if (mode === 'add') {
+      const def = PKGS.find((p) => p.active && p.is_default) || PKGS.find((p) => p.active);
+      pick = new Set(def ? [def.id] : []); amtTouched = false; renderPick();
+      if (!PKGS.length) loadPkgs().then(() => { const d = PKGS.find((p) => p.active && p.is_default); if (d && !pick.size) pick.add(d.id); renderPick(); }).catch(() => {});
+    }
+    if (mode === 'tests') {
+      pick = new Set(testsOf(ctx).map((t) => t.package_id).filter(Boolean));
+      const total = [...pick].reduce((a, id) => a + ((PKGS.find((p) => p.id === id) || {}).price || 0), 0);
+      amtTouched = total !== ctx.amount; renderPick(); $('#fAmt').value = ctx.amount;
+    }
+    if (mode !== 'tests') {
+      const date = mode === 'move' && ctx.date < ist() ? ist() : (ctx.date || ist());
+      $('#fDate').value = date;
+      fillSlots(date, mode === 'move' && ctx.date < ist() ? null : ctx.slot, form.id);
+    }
     $$('dialog[open]').forEach((d) => d.close());
     $('#formDlg').showModal();
-    setTimeout(() => (mode === 'add' ? $('#fName') : $('#fDate')).focus(), 50);
+    setTimeout(() => (mode === 'add' ? $('#fName') : mode === 'tests' ? $('#tSearch') : $('#fDate')).focus(), 50);
   }
-  function fillPkgSelect() {
-    const act = PKGS.filter((p) => p.active);
-    const def = act.find((p) => p.is_default) || act[0];
-    $('#fPkg').innerHTML = act.map((p) => `<option value="${p.id}" ${def && p.id === def.id ? 'selected' : ''}>${esc(p.name)} – ${money(p.price)}</option>`).join('') || '<option value="">No tests – add one in the Tests tab</option>';
-    pkgPicked();
+  // pick one or more tests
+  let pick = new Set(), amtTouched = false;
+  function renderPick() {
+    const q = $('#tSearch').value.trim().toLowerCase();
+    const shown = PKGS.filter((p) => (p.active || pick.has(p.id)) && (!q || (p.name + ' ' + (p.tests || '')).toLowerCase().includes(q)));
+    $('#tList').innerHTML = shown.map((p) => `<label class="tp ${pick.has(p.id) ? 'on' : ''}"><input type="checkbox" data-tp="${p.id}" ${pick.has(p.id) ? 'checked' : ''}><span><b>${esc(p.name)}</b>${p.tests ? `<small>${esc(p.tests)}</small>` : ''}</span><em>${money(p.price)}</em></label>`).join('') || '<p class="meta" style="padding:8px 10px;margin:0">No test matches.</p>';
+    const sel = PKGS.filter((p) => pick.has(p.id)), total = sel.reduce((a, p) => a + p.price, 0);
+    $('#tSum').innerHTML = sel.length ? `<b>${sel.length} selected:</b> ${esc(sel.map((p) => p.name).join(', '))} · total ${money(total)}` : '<span class="m-no">Pick at least one test</span>';
+    if (!amtTouched) $('#fAmt').value = sel.length ? total : '';
   }
-  function pkgPicked() {
-    const p = PKGS.find((x) => String(x.id) === $('#fPkg').value);
-    $('#fAmt').value = p ? p.price : '';
-    $('#fPkgTests').textContent = p && p.tests ? p.tests : '';
-  }
-  $('#fPkg').onchange = pkgPicked;
+  $('#tList').addEventListener('change', (e) => { const id = Number(e.target.dataset.tp); if (!id) return; e.target.checked ? pick.add(id) : pick.delete(id); renderPick(); });
+  $('#tSearch').oninput = renderPick;
+  $('#tSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
+  $('#fAmt').oninput = () => (amtTouched = true);
   function setState(name) {
     const sel = $('#fState'); if (!name) return;
     const want = name.toLowerCase().replace(/&/g, 'and').replace(/\s+/g, ' ').trim();
@@ -938,14 +996,21 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     try {
       if (form.mode === 'add') {
         delete fd.feePaid;
-        if (!fd.package_id) throw new Error('Pick the test.');
+        if (!pick.size) throw new Error('Pick at least one test.');
         if (!fd.state) throw new Error('Pick the state.');
+        fd.package_ids = [...pick];
         await post('/api/admin/bookings', fd); toast('Booking added');
+      }
+      else if (form.mode === 'tests') {
+        if (!pick.size) throw new Error('Pick at least one test.');
+        await post(`/api/admin/bookings/${form.id}/tests`, { package_ids: [...pick], amount: $('#fAmt').value });
+        toast('Tests updated');
       }
       else { await post(`/api/admin/bookings/${form.id}/move`, { date: fd.date, slot: fd.slot, feePaid: form.fee ? true : undefined }); }
       $('#formDlg').close();
       if (form.mode === 'move' && cal.view !== 'week') cal.anchor = fd.date;
       await refreshAll();
+      if (form.mode === 'tests') openDetail(form.id);
       if (form.mode === 'move') {
         const b = findB(form.id);
         if (b) openMsg({ b, kind: 'confirm', title: form.fee ? 'Rebooked ✓' : 'Booking moved ✓', sub: `Send the new time to ${b.name} · +91 ${b.phone}`, text: msgText(b, 'confirm') });
@@ -967,9 +1032,10 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     else if (a === 'wa') sendWa(id, el.dataset.kind);
     else if (a === 'collect') openVial(id, false);
     else if (a === 'vial-edit') openVial(id, true);
-    else if (a === 'report-one') { oneReportId = id; $('#oneReport').click(); }
-    else if (a === 'report-view') viewReport(id);
-    else if (a === 'reports') openReports();
+    else if (a === 'reports') openReports(id);
+    else if (a === 'rp-view') viewReportFile(Number(el.dataset.rid));
+    else if (a === 'rp-del') deleteReportFile(Number(el.dataset.rid));
+    else if (a === 'tests-edit') { const b = findB(id); if (b) openForm('tests', b); }
     else if (a === 'pkg-add') openPkg(null);
     else if (a === 'pkg-edit') openPkg(Number(el.dataset.pid));
     else if (a === 'move') { const b = findB(id); if (b) openForm('move', b); }
@@ -1007,6 +1073,13 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   };
   let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { if (tab === 'calendar' && window.innerWidth < 960 && cal.view === 'week') loadCal().catch(() => {}); }, 250); });
   setInterval(() => { if (KEY && !document.hidden && !$$('dialog[open]').length) refreshAll().catch(() => {}); }, 60000);
+
+  // a visible close (×) on every pop-up
+  $$('dialog.dlg').forEach((d) => {
+    const x = document.createElement('button');
+    x.type = 'button'; x.className = 'x'; x.dataset.close = d.id; x.setAttribute('aria-label', 'Close'); x.innerHTML = '&times;';
+    d.prepend(x);
+  });
 
   if (KEY) refreshAll().then(() => { $('#app').hidden = false; showTab(tab); }).catch(() => logout());
   else $('#login').hidden = false;

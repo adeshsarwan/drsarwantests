@@ -34,7 +34,6 @@
 </div>
 <div class="top-r">
 <button class="btn sm" data-act="add">+ Add booking</button>
-<button class="btn ghost sm" data-act="reports">Upload reports</button>
 <label class="wa-pref hide-sm" title="Where the WhatsApp buttons open">WhatsApp
 <select id="waPref" class="inp"><option value="app">Desktop app</option><option value="web">WhatsApp Web</option></select></label>
 <button class="btn ghost sm" id="refresh">Refresh</button>
@@ -45,13 +44,14 @@
 
 <!-- ================= BOOKINGS TAB ================= -->
 <main id="view-bookings" class="wrap" style="padding-bottom:40px">
-<div class="stats" style="margin-top:16px" id="stats"></div>
-
-<div class="card">
-<h2 class="h2" style="margin:0 0 6px">Needs your attention</h2>
-<div class="att-tabs" id="attTabs" role="tablist"></div>
-<div id="attention" class="list"></div>
+<div class="period" role="group" aria-label="Period">
+<span class="period-l">Showing bookings for</span>
+<select id="perPreset" class="inp" aria-label="Period"><option value="today">Today</option><option value="tomorrow">Tomorrow</option><option value="next7">Next 7 days</option><option value="week">This week</option><option value="month">This month</option><option value="lastmonth">Last month</option><option value="last30">Last 30 days</option><option value="custom">Custom dates…</option></select>
+<label class="period-d"><span class="sr">From</span><input type="date" id="perFrom" class="inp" aria-label="From date"></label><span class="meta">to</span><label class="period-d"><span class="sr">To</span><input type="date" id="perTo" class="inp" aria-label="To date"></label>
 </div>
+<div class="stats stats4" id="stats1"></div>
+<div class="stats stats4" id="stats2" style="margin-top:12px"></div>
+<div id="verifyNote"></div>
 
 <div class="card">
 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
@@ -59,12 +59,11 @@
 <div style="display:flex;gap:8px;flex-wrap:wrap">
 <label class="meta" for="fStatus" style="align-self:center">Status</label>
 <select id="fStatus" class="inp"><option value="active">All active</option><option value="payment_submitted">Paid – verify</option><option value="pending">Awaiting payment</option><option value="confirmed">Confirmed</option><option value="collected">Collected – report pending</option><option value="report_ready">Report ready – to send</option><option value="completed">Completed</option><option value="no_show">Patient not available</option><option value="cancelled">Cancelled</option><option value="expired">Expired (unpaid)</option><option value="all">Everything</option></select>
-<select id="fWhen" class="inp" aria-label="Date range"><option value="upcoming">Upcoming</option><option value="past">Past</option><option value="any">All dates</option></select>
 <input id="fSearch" class="inp" type="search" placeholder="Search name, phone, PIN…" aria-label="Search bookings">
 </div>
 </div>
 <div class="tbl-wrap"><table class="tbl">
-<thead><tr><th>Slot</th><th>Name</th><th>Phone</th><th>Address</th><th>City</th><th>State</th><th class="num">Amount</th><th>Status</th></tr></thead>
+<thead><tr><th>Slot</th><th>Patient &amp; tests</th><th>Phone</th><th>Address</th><th>City</th><th>State</th><th class="num">Amount</th><th>Status</th></tr></thead>
 <tbody id="tbody"></tbody>
 </table></div>
 <p class="meta" id="tblCount" style="margin:10px 0 0"></p>
@@ -153,12 +152,12 @@
 
 <!-- payment screenshot -->
 <dialog id="shotDlg" class="dlg" style="max-width:min(92vw,520px)">
-<div class="dlg-h row"><b id="shotTitle">Payment screenshot</b><button class="btn ghost sm" data-close="shotDlg">Close</button></div>
+<div class="dlg-h"><b id="shotTitle">Payment screenshot</b></div>
 <div style="max-height:80vh;overflow:auto;background:#f4f7fa;text-align:center"><img id="shotImg" alt="Payment screenshot" style="max-width:100%;display:block;margin:0 auto"></div>
 </dialog>
 
 <!-- booking details (day / month / phone) -->
-<dialog id="detailDlg" class="dlg" style="max-width:min(94vw,420px)">
+<dialog id="detailDlg" class="dlg" style="max-width:min(94vw,560px)">
 <div id="detailBody"></div>
 <div class="dlg-f" style="padding-top:0"><button class="btn ghost" data-close="detailDlg" style="flex:1">Close</button></div>
 </dialog>
@@ -168,8 +167,8 @@
 <form id="bkForm" novalidate>
 <div class="dlg-h"><b id="formTitle">Add booking</b><div class="meta" id="formSub">For phone or walk-in bookings</div></div>
 <div class="dlg-b fgrid">
-<div class="fld wide add-only"><label for="fPkg">Test</label><select id="fPkg" name="package_id" class="inp"></select><span class="meta" id="fPkgTests"></span></div>
-<div class="fld add-only"><label for="fAmt">Amount (₹)</label><input id="fAmt" name="amount" class="inp" inputmode="numeric" autocomplete="off"></div>
+<div class="fld wide add-only tests-f"><span class="lbl" id="tLbl">Tests</span><div class="tpick" role="group" aria-labelledby="tLbl"><input id="tSearch" class="inp" type="search" placeholder="Search tests…" aria-label="Search tests" autocomplete="off"><div id="tList" class="tlist"></div></div><span class="meta" id="tSum"></span></div>
+<div class="fld add-only tests-f"><label for="fAmt">Amount charged (₹)</label><input id="fAmt" name="amount" class="inp" inputmode="numeric" autocomplete="off"></div>
 <div class="fld add-only"><label for="fStatusNew">Payment</label><select id="fStatusNew" name="status" class="inp"><option value="confirmed">Paid – confirmed</option><option value="payment_submitted">Paid – to verify</option><option value="pending">Not paid yet</option></select></div>
 <div class="fld add-only"><label for="fName">Patient's full name</label><input id="fName" name="name" class="inp" autocomplete="off"></div>
 <div class="fld add-only"><label for="fPhone">Mobile</label><input id="fPhone" name="phone" class="inp" inputmode="numeric" autocomplete="off"></div>
@@ -177,8 +176,8 @@
 <div class="fld add-only"><label for="fPin">Pincode</label><input id="fPin" name="pincode" class="inp" inputmode="numeric" maxlength="6" autocomplete="off"></div>
 <div class="fld add-only"><label for="fCity">City</label><input id="fCity" name="city" class="inp" autocomplete="off"></div>
 <div class="fld wide add-only"><label for="fState">State</label><select id="fState" name="state" class="inp"><option value="">Select state</option><option>Andaman and Nicobar Islands</option><option>Andhra Pradesh</option><option>Arunachal Pradesh</option><option>Assam</option><option>Bihar</option><option>Chandigarh</option><option>Chhattisgarh</option><option>Dadra and Nagar Haveli and Daman and Diu</option><option>Delhi</option><option>Goa</option><option>Gujarat</option><option>Haryana</option><option>Himachal Pradesh</option><option>Jammu and Kashmir</option><option>Jharkhand</option><option>Karnataka</option><option>Kerala</option><option>Ladakh</option><option>Lakshadweep</option><option>Madhya Pradesh</option><option>Maharashtra</option><option>Manipur</option><option>Meghalaya</option><option>Mizoram</option><option>Nagaland</option><option>Odisha</option><option>Puducherry</option><option>Punjab</option><option>Rajasthan</option><option>Sikkim</option><option>Tamil Nadu</option><option>Telangana</option><option>Tripura</option><option>Uttar Pradesh</option><option>Uttarakhand</option><option>West Bengal</option></select></div>
-<div class="fld"><label for="fDate">Date</label><input id="fDate" name="date" type="date" class="inp"></div>
-<div class="fld"><label for="fSlot">Slot</label><select id="fSlot" name="slot" class="inp"></select></div>
+<div class="fld slot-f"><label for="fDate">Date</label><input id="fDate" name="date" type="date" class="inp"></div>
+<div class="fld slot-f"><label for="fSlot">Slot</label><select id="fSlot" name="slot" class="inp"></select></div>
 <div class="fld wide add-only"><label for="fNotes">Notes (optional)</label><input id="fNotes" name="notes" class="inp" autocomplete="off" placeholder="e.g. day of cycle, doctor's name, landmark"></div>
 <label class="fld wide fee-only fee-box" hidden><span><input type="checkbox" id="fFee" name="feePaid"> <b id="fFeeLbl">₹300 visit fee received</b></span><span class="meta">The patient missed the last visit. Rebook only after the fee is paid.</span></label>
 </div>
@@ -218,16 +217,17 @@
 </form>
 </dialog>
 
-<!-- upload reports (bulk, matched by vial no. in file name) -->
-<dialog id="repDlg" class="dlg" style="max-width:min(96vw,760px)">
-<div class="dlg-h"><b>Upload reports</b><div class="meta">Pick the PDFs from the collection centre. Each file is matched to a patient by the vial number in its file name. Check the matches, then upload.</div></div>
+<!-- reports of one patient -->
+<dialog id="repDlg" class="dlg" style="max-width:min(96vw,640px)">
+<div class="dlg-h"><b id="repTitle">Reports</b><div class="meta" id="repSub"></div></div>
 <div class="dlg-b">
-<label class="drop" id="repDrop"><input type="file" id="repFiles" accept="application/pdf,.pdf" multiple hidden><b>Choose PDF files</b><span class="meta">or drop them here</span></label>
 <div id="repList"></div>
+<label class="drop" id="repDrop"><input type="file" id="repFiles" accept="application/pdf,.pdf" multiple hidden><b>+ Upload report PDFs</b><span class="meta">Choose one or more files, or drop them here</span></label>
+<p class="meta" id="repLocked" hidden>Mark the sample as collected before uploading reports.</p>
+<p class="err" id="repErr" style="margin:8px 0 0"></p>
 </div>
-<div class="dlg-f"><button class="btn" id="repUpload" style="flex:1" disabled>Upload</button><button type="button" class="btn ghost" data-close="repDlg">Close</button></div>
+<div class="dlg-f"><button type="button" class="btn wa" id="repSend" style="flex:1">Send selected on WhatsApp</button><button type="button" class="btn ghost" id="repDone">Mark job complete</button></div>
 </dialog>
-<input type="file" id="oneReport" accept="application/pdf,.pdf" hidden>
 
 <script src="/admin/admin.js"></script>
 </body>
