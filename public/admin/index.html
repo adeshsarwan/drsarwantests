@@ -34,10 +34,6 @@
 </div>
 <div class="top-r">
 <button class="btn sm" data-act="add">+ Add booking</button>
-<label class="wa-pref hide-sm" title="Where the WhatsApp buttons open">WhatsApp
-<select id="waPref" class="inp"><option value="app">Desktop app</option><option value="web">WhatsApp Web</option></select></label>
-<button class="btn ghost sm" id="refresh">Refresh</button>
-<button class="btn ghost sm hide-sm" id="csv">Export CSV</button>
 <button class="btn ghost sm" id="logout">Sign out</button>
 </div>
 </header>
@@ -60,6 +56,7 @@
 <label class="meta" for="fStatus" style="align-self:center">Status</label>
 <select id="fStatus" class="inp"><option value="active">All active</option><option value="payment_submitted">Paid – verify</option><option value="pending">Awaiting payment</option><option value="confirmed">Confirmed</option><option value="collected">Collected – report pending</option><option value="report_ready">Report ready – to send</option><option value="completed">Completed</option><option value="no_show">Patient not available</option><option value="cancelled">Cancelled</option><option value="expired">Expired (unpaid)</option><option value="all">Everything</option></select>
 <input id="fSearch" class="inp" type="search" placeholder="Search name, phone, PIN…" aria-label="Search bookings">
+<button type="button" class="ibtn" id="csv" title="Download CSV" aria-label="Download bookings as CSV"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M10 3v9m0 0-3.5-3.5M10 12l3.5-3.5M4 14v2h12v-2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></button>
 </div>
 </div>
 <div class="tbl-wrap"><table class="tbl">

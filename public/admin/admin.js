@@ -336,16 +336,13 @@
     return out.slice(0, n);
   }
 
-  // where WhatsApp opens: phone → wa.me (opens the app); computer → desktop app or WhatsApp Web
+  // where WhatsApp opens: phone → wa.me (opens the app); computer → WhatsApp desktop app
   const isTouch = () => window.matchMedia && window.matchMedia('(pointer:coarse)').matches && window.innerWidth < 1000;
-  $('#waPref').value = pref.get('wa', 'app');
-  $('#waPref').onchange = () => pref.set('wa', $('#waPref').value);
   function openWhatsApp(phone, text) {
     const ph = phone ? '91' + phone : '';
     const t = text ? encodeURIComponent(text) : '';
     let url;
     if (isTouch()) url = `https://wa.me/${ph}${t ? '?text=' + t : ''}`;
-    else if (pref.get('wa', 'app') === 'web') url = `https://web.whatsapp.com/send?${ph ? 'phone=' + ph + '&' : ''}text=${t}`;
     else url = `whatsapp://send?${ph ? 'phone=' + ph + '&' : ''}text=${t}`;
     if (window.__dslOpen) return window.__dslOpen(url); // test hook
     if (url.startsWith('whatsapp:')) { const a = document.createElement('a'); a.href = url; a.click(); }
@@ -1172,7 +1169,6 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   });
   $('#shotDlg').addEventListener('click', (e) => { if (e.target.id === 'shotDlg') $('#shotDlg').close(); });
 
-  $('#refresh').onclick = () => refreshAll().then(() => toast('Refreshed')).catch((e) => toast(e.message));
   $('#csv').onclick = async () => {
     try {
       const r = await fetch('/api/admin/export.csv', { headers: { 'x-admin-key': KEY } }); if (!r.ok) throw new Error('Export failed');
