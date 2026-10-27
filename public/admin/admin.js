@@ -530,7 +530,7 @@ ${f.length ? `<div class="dt-f">${f.join('')}</div>` : ''}`;
 <td style="white-space:nowrap"><b>${fmt(b.date, { weekday: 'short', day: 'numeric', month: 'short' })}</b><small>${esc(slotLabel(b.slot))}</small><small>${esc(b.id)}</small></td>
 <td><button type="button" class="lnk" data-act="open" data-id="${b.id}">${esc(b.name)}</button>${testsOf(b).map((t) => `<span class="test-l">🧪 ${esc(t.name)}</span>`).join('')}${b.vial_no ? `<span class="vial">${esc(b.vial_no)}</span>` : vialWarn(b)}${repBtn}</td>
 <td style="white-space:nowrap"><a href="tel:+91${esc(b.phone)}">${esc(b.phone)}</a><small><a href="#" data-act="wa" data-kind="chat" data-id="${b.id}">WhatsApp</a></small></td>
-<td class="addr">${esc(b.address)}<small>PIN ${esc(b.pincode)} · <a href="${mapUrl(b)}" target="_blank" rel="noopener">Map</a></small>${b.notes ? `<small>Note: ${esc(b.notes)}</small>` : ''}</td>
+<td class="addr">${esc(b.address)}<small>PIN ${esc(b.pincode)} · <a href="${mapUrl(b)}" target="_blank" rel="noopener">Map</a></small></td>
 <td>${esc(b.city || '–')}</td>
 <td>${esc(b.state || '–')}</td>
 <td class="num"><b>${money(b.amount)}</b>${testsOf(b).some((x) => x.margin != null) ? `<small>margin ${money(marginOf(b))}</small>` : ''}${b.utr ? `<small>UTR ${esc(b.utr)}</small>` : ''}</td>
