@@ -116,12 +116,19 @@
     if (detailId && $('#detailDlg').open) { const b = findB(detailId); if (b) $('#detailBody').innerHTML = detailHTML(b); }
     else if (slotOpen && $('#detailDlg').open && cal.data) $('#detailBody').innerHTML = slotListHTML(slotOpen.date, slotOpen.slot);
     if (repId && $('#repDlg').open) renderRepDlg();
+    if (stepsId && $('#stepsDlg').open) { const b = findB(stepsId); if (b) $('#stepsBody').innerHTML = stepsPopHTML(b); }
   }
 
   // ================= WORKFLOW (shared by list, calendar, detail) =================
+  // kind → latest time. "done:<kind>" rows are steps ticked by hand (sent outside the system); sentMap(b).manual says which.
   const sentMap = (b) => {
-    const m = {};
-    String(b.msgs || '').split(',').filter(Boolean).forEach((x) => { const i = x.indexOf('@'); const k = x.slice(0, i), at = x.slice(i + 1); if (!m[k] || at > m[k]) m[k] = at; });
+    const m = {}, man = {};
+    String(b.msgs || '').split(',').filter(Boolean).forEach((x) => {
+      const i = x.indexOf('@'); let k = x.slice(0, i); const at = x.slice(i + 1);
+      const hand = k.startsWith('done:'); if (hand) k = k.slice(5);
+      if (!m[k] || at > m[k]) { m[k] = at; man[k] = hand; }
+    });
+    Object.defineProperty(m, 'manual', { value: man, enumerable: false });
     return m;
   };
   const hasPaidProof = (b) => !!(b.has_proof || b.utr);
@@ -147,42 +154,124 @@
   const PAID_LIKE = ['confirmed', 'collected', 'report_ready', 'completed'];
   const AFTER_COLLECT = ['collected', 'report_ready', 'completed'];
 
-  // The process, step by step (also drives the "next step" button everywhere)
+  // The process, step by step (also drives the "next step" button everywhere).
+  // msg = the WhatsApp message a step sends (those steps can be skipped or ticked as done by hand).
   function steps(b) {
     const s = b.status, sent = sentMap(b), reps = reportsOf(b), nSent = reps.filter((r) => r.sent_at).length;
     const W = (kind, label, ghost) => `<button type="button" class="btn ${ghost ? 'ghost' : 'wa'} sm" data-act="wa" data-kind="${kind}" data-id="${b.id}">${label}</button>`;
     const unpaid = ['pending', 'expired'].includes(s);
+    const M = (key, msg, label, btn) => ({ key, msg, label, btn, cls: 'wa', done: !!sent[msg], hand: !!sent.manual[msg], at: sent[msg], avail: PAID_LIKE.includes(s),
+      act: W(msg, btn), again: W(msg, 'Resend', true) });
+    const vialBtn = b.vial_no ? `<button type="button" class="btn ghost sm" data-act="vial-edit" data-id="${b.id}">Edit vial</button>`
+      : `<button type="button" class="btn sm" data-act="vial-edit" data-id="${b.id}">Add vial no.</button>`;
     return [
       { key: 'pay', label: 'Payment confirmed', done: PAID_LIKE.includes(s), at: b.paid_at, avail: s === 'payment_submitted' || unpaid,
         act: s === 'payment_submitted' || (unpaid && hasPaidProof(b))
           ? `<button type="button" class="btn sm" data-act="status" data-id="${b.id}" data-st="confirmed">Confirm payment</button>${b.has_proof ? `<button type="button" class="btn ghost sm" data-act="shot" data-id="${b.id}">Screenshot</button>` : ''}`
           : W('pay', 'Payment reminder') },
-      { key: 'confirm', label: 'Booking confirmation sent to patient', done: !!sent.confirm, at: sent.confirm, avail: PAID_LIKE.includes(s), act: W('confirm', 'Send confirmation'), again: W('confirm', 'Resend', true) },
-      { key: 'center', label: `Booking sent to collection centre (${CFG.centerPhone || '8368143677'})`, done: !!sent.center, at: sent.center, avail: PAID_LIKE.includes(s), act: W('center', 'Send to centre'), again: W('center', 'Resend', true) },
-      { key: 'reminder', label: 'Visit reminder sent to patient', done: !!sent.reminder, at: sent.reminder, avail: PAID_LIKE.includes(s), act: W('reminder', 'Send reminder'), again: W('reminder', 'Resend', true) },
-      { key: 'collect', label: b.vial_no ? `Sample collected · vial ${b.vial_no}` : 'Sample collected (enter vial no.)', done: AFTER_COLLECT.includes(s), at: b.collected_at, avail: s === 'confirmed',
-        act: `<button type="button" class="btn blue sm" data-act="collect" data-id="${b.id}">Sample collected</button>`, again: b.vial_no ? `<button type="button" class="btn ghost sm" data-act="vial-edit" data-id="${b.id}">Edit vial</button>` : '' },
-      { key: 'received', label: '"Sample received at lab" sent to patient', done: !!sent.collected, at: sent.collected, avail: AFTER_COLLECT.includes(s), act: W('collected', 'Send to patient'), again: W('collected', 'Resend', true) },
-      { key: 'upload', label: reps.length ? `${reps.length} report${reps.length === 1 ? '' : 's'} uploaded` : 'Reports uploaded', done: reps.length > 0, at: reps.length ? reps[reps.length - 1].created_at : null, avail: AFTER_COLLECT.includes(s),
+      M('confirm', 'confirm', 'Booking confirmation sent to patient', 'Send confirmation'),
+      M('center', 'center', `Booking sent to collection centre (${CFG.centerPhone || '8368143677'})`, 'Send to centre'),
+      M('reminder', 'reminder', 'Visit reminder sent to patient', 'Send reminder'),
+      { key: 'collect', label: AFTER_COLLECT.includes(s) ? (b.vial_no ? `Sample collected · vial ${b.vial_no}` : 'Sample collected · ⚠ vial no. missing') : 'Sample collected (enter vial no.)',
+        btn: 'Sample collected', cls: 'blue', done: AFTER_COLLECT.includes(s), at: b.collected_at, avail: s === 'confirmed',
+        act: `<button type="button" class="btn blue sm" data-act="collect" data-id="${b.id}">Sample collected</button>`, again: vialBtn },
+      { ...M('received', 'collected', '"Sample received at lab" sent to patient', 'Send to patient'), avail: AFTER_COLLECT.includes(s) },
+      { key: 'upload', label: reps.length ? `${reps.length} report${reps.length === 1 ? '' : 's'} uploaded` : 'Reports uploaded', btn: 'Upload reports', cls: 'purple',
+        done: reps.length > 0, at: reps.length ? reps[reps.length - 1].created_at : null, avail: AFTER_COLLECT.includes(s),
         act: `<button type="button" class="btn purple sm" data-act="reports" data-id="${b.id}">Upload reports</button>`, again: `<button type="button" class="btn ghost sm" data-act="reports" data-id="${b.id}">Add more</button>` },
-      { key: 'send', label: reps.length ? `Reports sent to patient (${nSent} of ${reps.length})` : 'Reports sent to patient', done: s === 'completed' || (reps.length > 0 && nSent === reps.length), at: b.completed_at, avail: reps.length > 0,
+      { key: 'send', label: reps.length ? `Reports sent to patient (${nSent} of ${reps.length})` : 'Reports sent to patient', btn: 'Send reports', cls: 'wa',
+        done: s === 'completed' || (reps.length > 0 && nSent === reps.length), at: b.completed_at, avail: reps.length > 0,
         act: `<button type="button" class="btn wa sm" data-act="reports" data-id="${b.id}">Send reports</button>`, again: `<button type="button" class="btn ghost sm" data-act="reports" data-id="${b.id}">Resend</button>` },
     ];
   }
+  // Steps with where the booking really is: a message step left undone before a later finished step is "skipped",
+  // and the next step is the first one after that (so a forgotten reminder doesn't hold the booking back).
+  const NO_FLOW = ['cancelled', 'no_show', 'blocked'];
+  function flow(b) {
+    const all = steps(b);
+    let last = -1; all.forEach((st, i) => { if (st.done) last = i; });
+    all.forEach((st, i) => { st.skipped = !st.done && !!st.msg && i < last; });
+    const cur = all.find((st) => !st.done && !st.skipped && st.avail) || null;
+    return { all, cur };
+  }
+  // can this step be done from the steps pop-up right now? (later steps open once the patient has paid)
+  const canDo = (b, st) => st.key === 'pay' || ['payment_submitted', ...PAID_LIKE].includes(b.status);
   // The one most useful next action for a booking
   function nextStep(b) {
     if (b.status === 'cancelled' || b.status === 'blocked') return '';
     if (b.status === 'no_show') return `<button type="button" class="btn dark sm" data-act="move" data-id="${b.id}">Rebook (${money(b.fee_due || CFG.visitFee)} fee)</button>`;
     if (b.status === 'completed') return '<span class="m-ok">Done ✓</span>';
-    const st = steps(b).find((x) => !x.done && x.avail);
-    return st ? st.act : '';
+    const { cur } = flow(b);
+    return cur ? cur.act : '';
   }
-  function stepsHTML(b) {
-    if (['cancelled', 'no_show', 'blocked'].includes(b.status)) return '';
-    const all = steps(b); const cur = all.find((x) => !x.done && x.avail);
-    return `<ol class="steps">${all.map((st, i) => `<li class="stp ${st.done ? 'done' : ''} ${st === cur ? 'cur' : ''} ${!st.done && !st.avail ? 'wait' : ''}">
-<span class="n" aria-hidden="true">${st.done ? '✓' : i + 1}</span><div class="t"><b>${esc(st.label)}</b>${st.done && st.at ? `<small>${when(st.at)}</small>` : ''}</div>
-<div class="a">${st.done ? st.again || '' : st.avail ? st.act : ''}</div></li>`).join('')}</ol>`;
+  // small icon (steps done, e.g. 4/8) that opens every step in a pop-up
+  const STEPS_SVG = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2 3.5h1.5M2 8h1.5M2 12.5h1.5M6 3.5h8M6 8h8M6 12.5h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>';
+  function stepsBtn(b) {
+    if (NO_FLOW.includes(b.status)) return '';
+    const { all } = flow(b), n = all.filter((st) => st.done).length, sk = all.filter((st) => st.skipped).length;
+    return `<button type="button" class="stp-ic${sk ? ' sk' : ''}" data-act="steps" data-id="${b.id}" title="All steps${sk ? ` · ${sk} skipped` : ''} – click to do any step" aria-label="All steps, ${n} of ${all.length} done${sk ? `, ${sk} skipped` : ''}">${STEPS_SVG}<span>${n}/${all.length}</span></button>`;
+  }
+  const nextBar = (b) => `<div class="nx">${nextStep(b)}${stepsBtn(b)}</div>`;
+  const vialWarn = (b) => (AFTER_COLLECT.includes(b.status) && !b.vial_no ? `<button type="button" class="vial miss" data-act="vial-edit" data-id="${b.id}" title="Add the vial number">⚠ vial no. missing</button>` : '');
+
+  // compact progress for the booking panel: dots + the next step + "All steps"
+  function stepsCompact(b) {
+    if (NO_FLOW.includes(b.status)) return '';
+    const { all, cur } = flow(b), sk = all.filter((st) => st.skipped).length, i = cur ? all.indexOf(cur) : -1;
+    const dots = all.map((st) => `<i class="${st.done ? 'd' : st.skipped ? 's' : st === cur ? 'c' : ''}" title="${esc(st.label)}${st.skipped ? ' – skipped' : ''}"></i>`).join('');
+    const head = cur ? `<small>Next · step ${i + 1} of ${all.length}</small><b>${esc(cur.label)}</b>` : b.status === 'completed' ? '<b>All done ✓</b>' : '<b>Waiting for payment</b>';
+    return `<div class="stc"><div class="stc-dots">${dots}</div>
+<div class="stc-row"><div class="stc-t">${head}${sk ? `<small class="m-skip">${sk} step${sk === 1 ? '' : 's'} skipped</small>` : ''}</div>
+<div class="stc-a">${cur ? cur.act : ''}<button type="button" class="btn ghost sm" data-act="steps" data-id="${b.id}">${STEPS_SVG} All steps</button></div></div></div>`;
+  }
+
+  // the pop-up: every step, with the option to do any later one
+  function stepsPopHTML(b) {
+    const { all, cur } = flow(b), unpaid = ['pending', 'expired'].includes(b.status);
+    const note = b.status === 'payment_submitted' ? 'Payment isn’t verified yet. Doing a later step also marks the payment as verified.'
+      : unpaid ? 'Payment not received yet. The later steps open once the payment is confirmed.'
+      : 'Forgot to tick something? You can do any step directly – steps left out are marked skipped. Already done outside the system? Tick it with “Mark done”.';
+    const rows = all.map((st, i) => {
+      const locked = !st.done && !canDo(b, st);
+      const cls = st.done ? 'done' : st.skipped ? 'skip' : st === cur ? 'cur' : locked ? 'wait' : '';
+      const sub = st.done ? (st.at ? when(st.at) + (st.hand ? ' · ticked by hand' : '') : '') : st.skipped ? 'Skipped' : locked ? 'After payment' : '';
+      const doBtn = `<button type="button" class="btn ${st === cur ? st.cls : 'ghost'} sm" data-act="step" data-key="${st.key}" data-id="${b.id}">${st.skipped ? 'Do it now' : st.btn}</button>`;
+      const markBtn = st.msg ? `<button type="button" class="btn ghost sm" data-act="step-mark" data-kind="${st.msg}" data-id="${b.id}">Mark done</button>` : '';
+      const acts = st.done ? (st.hand ? `<button type="button" class="btn ghost sm" data-act="step-unmark" data-kind="${st.msg}" data-id="${b.id}">Undo</button>` : st.again || '')
+        : locked ? '' : st.key === 'pay' ? st.act : doBtn + markBtn;
+      return `<li class="stp ${cls}"><span class="n" aria-hidden="true">${st.done ? '✓' : st.skipped ? '↷' : i + 1}</span>
+<div class="t"><b>${esc(st.label)}</b>${sub ? `<small>${sub}</small>` : ''}</div><div class="a">${acts}</div></li>`;
+    }).join('');
+    return `<div class="dlg-h"><b>Steps · ${esc(b.name)}</b><div class="meta">${esc(b.id)} · ${fmtD(b.date)}, ${esc(slotLabel(b.slot))} · <span class="pill st-${b.status}" style="margin:0">${ST[b.status].label}</span></div></div>
+<div class="dlg-b"><p class="meta" style="margin:0 0 10px">${note}</p><ol class="steps">${rows}</ol></div>`;
+  }
+  let stepsId = null;
+  function openSteps(id) {
+    const b = findB(id); if (!b) return;
+    stepsId = id; $('#stepsBody').innerHTML = stepsPopHTML(b);
+    $$('dialog[open]').forEach((x) => x !== $('#stepsDlg') && x.close());
+    if (!$('#stepsDlg').open) $('#stepsDlg').showModal();
+  }
+  // do a step from the pop-up; earlier steps it needs are done first (payment verified, sample collected)
+  async function runStep(id, key) {
+    let b = findB(id); if (!b) return;
+    const needsSample = ['received', 'upload', 'send'].includes(key) && !AFTER_COLLECT.includes(b.status);
+    if (key === 'collect' || needsSample) { openVial(id, false, key === 'collect' ? null : key); return; }
+    if (b.status === 'payment_submitted') {
+      if (!confirm(`${b.name}'s payment isn't verified yet.\n\nMark the payment as verified and continue?`)) return;
+      try { await post(`/api/admin/bookings/${id}/status`, { status: 'confirmed' }); await refreshAll(); b = findB(id); }
+      catch (e) { toast(e.message); return; }
+    }
+    if (key === 'upload' || key === 'send') { openReports(id); return; }
+    sendWa(id, key === 'received' ? 'collected' : key);
+  }
+  async function markStep(id, kind, undo) {
+    try {
+      await post(`/api/admin/bookings/${id}/sent`, undo ? { kind: 'undo-done', target: kind } : { kind: 'done:' + kind });
+      await refreshAll();
+      if (undo) toast('Step un-ticked');
+      else toast(`${MSG[kind]} ticked as done`, { label: 'Undo', fn: () => markStep(id, kind, true) });
+    } catch (e) { toast(e.message); }
   }
 
   // ---------- WhatsApp messages ----------
@@ -192,7 +281,6 @@
   };
   const NEEDS_SLOTS = ['slots', 'missed'];
   const dayWord = (d) => (d === ist() ? 'today' : d === addDays(ist(), 1) ? 'tomorrow' : 'on ' + fmtD(d));
-  const fileLink = (f) => `${location.origin}/api/report/${f.token}`;
 
   function msgText(b, kind, sug, files) {
     const hi = `Hi ${b.name.split(' ')[0]} 👋`;
@@ -217,9 +305,9 @@
         "We'll send your reports here on WhatsApp as soon as they're ready.", sign].filter((x) => x !== null).join('\n');
       case 'report': {
         const fs = files && files.length ? files : reportsOf(b).filter((f) => !f.sent_at);
-        return [hi, `Your report${fs.length === 1 ? ' is' : 's are'} ready 📄`, '',
-          ...fs.map((f) => `• ${f.name.replace(/\.pdf$/i, '')}:\n${fileLink(f)}`), '', b.vial_no ? `Vial no.: ${b.vial_no}` : null,
-          'Please share them with your doctor. Questions? Reply here or call 8368143677.', sign].filter((x) => x !== null).join('\n');
+        return [hi, `Your report${fs.length === 1 ? ' is' : 's are'} ready 📄 Sending the PDF${fs.length === 1 ? '' : 's'} here:`, '',
+          ...fs.map((f) => `• ${f.name.replace(/\.pdf$/i, '')}`), '', b.vial_no ? `Vial no.: ${b.vial_no}` : null,
+          `Please share ${fs.length === 1 ? 'it' : 'them'} with your doctor. Questions? Reply here or call 8368143677.`, sign].filter((x) => x !== null).join('\n');
       }
       default: return '';
     }
@@ -345,7 +433,7 @@ ${b.fee_paid_at ? `<div class="meta">Visit fee ${money(b.fee_due)} received ${wh
 <div class="dt-sec"><div class="dt-k" style="display:flex;justify-content:space-between;align-items:center">Tests (${t.length})${b.status !== 'cancelled' ? `<button type="button" class="btn ghost sm" data-act="tests-edit" data-id="${b.id}">Edit tests</button>` : ''}</div>
 <ul class="tl">${t.map((x) => `<li><b>${esc(x.name)}</b><span>${money(x.price)}</span></li>`).join('') || '<li class="meta">No test recorded</li>'}</ul>
 <div class="pay"><div style="min-width:0;flex:1"><b>${money(b.amount)}</b><div class="meta">${payNote}${b.utr ? ` · UTR ${esc(b.utr)}` : ''}${t.some((x) => x.margin != null) ? ` · margin ${money(marginOf(b))}` : ''}</div></div>${b.has_proof ? `<button type="button" class="btn ghost sm" data-act="shot" data-id="${b.id}">Screenshot</button>` : ''}</div></div>
-${stepsHTML(b) ? `<div class="dt-sec"><div class="dt-k">Steps</div>${stepsHTML(b)}</div>` : ''}
+${stepsCompact(b) ? `<div class="dt-sec"><div class="dt-k">Steps</div>${stepsCompact(b)}</div>` : ''}
 <div class="dt-sec"><div class="dt-k" style="display:flex;justify-content:space-between;align-items:center">Reports (${reps.length})${AFTER_COLLECT.includes(b.status) ? `<button type="button" class="btn ghost sm" data-act="reports" data-id="${b.id}">${reps.length ? 'Manage / send' : 'Upload'}</button>` : ''}</div>
 ${reps.length ? `<ul class="rl">${reps.map((r) => `<li>📄 ${esc(r.name)} <span class="${r.sent_at ? 'm-ok' : 'meta'}">${r.sent_at ? 'sent ' + when(r.sent_at) : 'not sent'}</span></li>`).join('')}</ul>` : `<div class="meta">${AFTER_COLLECT.includes(b.status) ? 'No reports uploaded yet.' : 'Reports can be uploaded after the sample is collected.'}</div>`}</div>
 <div class="dt-sec"><div class="dt-k">Other WhatsApp messages</div><div class="wa-list">${other.map((k) => `<button type="button" class="wa-btn" data-act="wa" data-kind="${k}" data-id="${b.id}"><span class="ic">✆</span><span><b>${MSG[k]}</b></span>${sent[k] ? `<span class="ok">Sent ${when(sent[k])}</span>` : ''}</button>`).join('')}</div></div>
@@ -443,13 +531,13 @@ ${f.length ? `<div class="dt-f">${f.join('')}</div>` : ''}`;
       const repBtn = AFTER_COLLECT.includes(b.status) ? `<button type="button" class="btn ghost sm rep-b" data-act="reports" data-id="${b.id}">📄 ${reps.length ? `Reports (${nSent}/${reps.length} sent)` : 'Upload reports'}</button>` : '';
       return `<tr class="row" data-row="${b.id}">
 <td style="white-space:nowrap"><b>${fmt(b.date, { weekday: 'short', day: 'numeric', month: 'short' })}</b><small>${esc(slotLabel(b.slot))}</small><small>${esc(b.id)}</small></td>
-<td><button type="button" class="lnk" data-act="open" data-id="${b.id}">${esc(b.name)}</button>${testsOf(b).map((t) => `<span class="test-l">🧪 ${esc(t.name)}</span>`).join('')}${b.vial_no ? `<span class="vial">${esc(b.vial_no)}</span>` : ''}${repBtn}</td>
+<td><button type="button" class="lnk" data-act="open" data-id="${b.id}">${esc(b.name)}</button>${testsOf(b).map((t) => `<span class="test-l">🧪 ${esc(t.name)}</span>`).join('')}${b.vial_no ? `<span class="vial">${esc(b.vial_no)}</span>` : vialWarn(b)}${repBtn}</td>
 <td style="white-space:nowrap"><a href="tel:+91${esc(b.phone)}">${esc(b.phone)}</a><small><a href="#" data-act="wa" data-kind="chat" data-id="${b.id}">WhatsApp</a></small></td>
 <td class="addr">${esc(b.address)}<small>PIN ${esc(b.pincode)} · <a href="${mapUrl(b)}" target="_blank" rel="noopener">Map</a></small>${b.notes ? `<small>Note: ${esc(b.notes)}</small>` : ''}</td>
 <td>${esc(b.city || '–')}</td>
 <td>${esc(b.state || '–')}</td>
 <td class="num"><b>${money(b.amount)}</b>${testsOf(b).some((x) => x.margin != null) ? `<small>margin ${money(marginOf(b))}</small>` : ''}${b.utr ? `<small>UTR ${esc(b.utr)}</small>` : ''}</td>
-<td><div class="next"><span class="pill st-${b.status}" style="margin:0">${ST[b.status].label}</span>${nextStep(b)}</div></td>
+<td><div class="next"><span class="pill st-${b.status}" style="margin:0">${ST[b.status].label}</span>${nextBar(b)}</div></td>
 </tr>`;
     }).join('') : '<tr><td colspan="8" class="meta" style="padding:18px">No bookings in this period.</td></tr>';
     $('#tblCount').textContent = `${rows.length} booking${rows.length === 1 ? '' : 's'} · ${fmtD(period.from)}${period.to !== period.from ? ' – ' + fmtD(period.to) : ''} · click a name for the steps & WhatsApp messages`;
@@ -594,10 +682,10 @@ ${f.length ? `<div class="dt-f">${f.join('')}</div>` : ''}`;
     const dbk = (oc) => {
       const st = ST[oc.status];
       return `<div class="dbk ${['cancelled', 'expired'].includes(oc.status) ? 'cx' : ''}" data-act="open" data-id="${oc.id}" style="border-left-color:${st.stripe};background:${['completed', 'collected'].includes(oc.status) ? '#fafbff' : '#fff'}" role="button" tabindex="0" aria-label="Open ${esc(oc.name)}">
-<div class="p1"><b>${esc(oc.name)}</b><div>+91 ${esc(oc.phone)}</div>${testLine(oc)}${oc.vial_no ? `<span class="vial">${esc(oc.vial_no)}</span>` : ''}</div>
+<div class="p1"><b>${esc(oc.name)}</b><div>+91 ${esc(oc.phone)}</div>${testLine(oc)}${oc.vial_no ? `<span class="vial">${esc(oc.vial_no)}</span>` : vialWarn(oc)}</div>
 <div class="p2">${esc(oc.address)}<br><b style="color:#1b2a4e">${esc(oc.city || '')}</b> · ${esc(oc.pincode)}</div>
 <span class="pill st-${oc.status}" style="margin:0">${st.label}</span>
-<div class="acts" style="margin:0">${oc.status === 'payment_submitted' && oc.has_proof ? `<button type="button" class="btn ghost sm" data-act="shot" data-id="${oc.id}">Screenshot</button>` : ''}${nextStep(oc)}</div></div>`;
+<div class="acts" style="margin:0">${oc.status === 'payment_submitted' && oc.has_proof ? `<button type="button" class="btn ghost sm" data-act="shot" data-id="${oc.id}">Screenshot</button>` : ''}${nextBar(oc)}</div></div>`;
     };
     SLOTS.forEach((s) => {
       const items = slotItems(d, s), past = isPast(d, s), blocked = isBlocked(d, s);
@@ -645,7 +733,7 @@ ${n ? `<span class="cap" style="width:100%;margin:auto 0 0"><i style="width:${u 
     const byCity = {}; at(date, slot).filter((b) => HOLD.includes(b.status)).forEach((b) => { const k = b.city || '—'; byCity[k] = (byCity[k] || 0) + 1; });
     return `<div class="dt-h"><div class="dt-name">${esc(slotLabel(slot))}</div><div class="meta">${fmt(date, { weekday: 'long', day: 'numeric', month: 'long' })} · ${items.length} booking${items.length === 1 ? '' : 's'}${blocked ? ' · closed to new bookings' : ''}</div>
 <div class="cityc">${Object.entries(byCity).map(([c, n]) => `<span class="badge ${n >= CAP() ? 'full' : 'web'}">${esc(c)} ${n}/${CAP()}</span>`).join('')}</div></div>
-<div class="dt-b">${items.map((b) => `<div class="sl-row" style="border-left-color:${ST[b.status].stripe}"><div style="min-width:0;flex:1"><button type="button" class="lnk" data-act="open" data-id="${b.id}">${esc(b.name)}</button>${testLine(b)}<div class="meta">${esc(b.city || '')} · ${esc(b.pincode || '')} · +91 ${esc(b.phone)}</div></div><div class="next" style="align-items:flex-end"><span class="pill st-${b.status}" style="margin:0">${ST[b.status].label}</span>${nextStep(b)}</div></div>`).join('') || '<p class="meta">No bookings shown (check the filters).</p>'}</div>
+<div class="dt-b">${items.map((b) => `<div class="sl-row" style="border-left-color:${ST[b.status].stripe}"><div style="min-width:0;flex:1"><button type="button" class="lnk" data-act="open" data-id="${b.id}">${esc(b.name)}</button>${testLine(b)}<div class="meta">${esc(b.city || '')} · ${esc(b.pincode || '')} · +91 ${esc(b.phone)}</div></div><div class="next" style="align-items:flex-end"><span class="pill st-${b.status}" style="margin:0">${ST[b.status].label}</span>${nextBar(b)}</div></div>`).join('') || '<p class="meta">No bookings shown (check the filters).</p>'}</div>
 <div class="dt-f">${!past && !blocked ? `<button class="btn" data-act="add" data-date="${date}" data-slot="${slot}">+ Add booking in this slot</button>` : ''}${blocked ? `<button class="btn ghost" data-act="unblock" data-date="${date}" data-slot="${slot}">Unblock slot</button>` : !past ? `<button class="btn warn" data-act="block" data-date="${date}" data-slot="${slot}">Block slot (no new bookings)</button>` : ''}</div>`;
   }
   let slotOpen = null;
@@ -751,34 +839,48 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
 
   // ---------- sample collected (vial no.) ----------
   let vialCtx = null;
-  function openVial(id, edit) {
+  // then = the step to carry on with once the sample is marked collected (when jumping ahead from the steps pop-up)
+  const THEN_LBL = { received: 'send "Sample received"', upload: 'upload reports', send: 'send reports' };
+  function openVial(id, edit, then) {
     const b = findB(id); if (!b) return;
-    vialCtx = { id, edit, force: false };
+    vialCtx = { id, edit, force: false, then: then || null };
+    $('#vialTitle').textContent = edit ? (b.vial_no ? 'Edit vial number' : 'Add vial number') : 'Sample collected';
     $('#vialSub').textContent = `${b.name} · ${fmtD(b.date)}, ${slotLabel(b.slot)}`;
+    const notes = [];
+    if (!edit && then) notes.push(`The sample has to be marked collected first – then you'll ${THEN_LBL[then]}.`);
+    if (!edit && b.status === 'payment_submitted') notes.push('This also marks the payment as verified.');
+    $('#vialNote').textContent = notes.join(' '); $('#vialNote').hidden = !notes.length;
+    $('#vialSkip').hidden = !!edit;
     $('#vialNo').value = b.vial_no || ''; $('#vialErr').textContent = '';
-    $('#vialSave').textContent = edit ? 'Save vial number' : 'Save & mark collected';
+    $('#vialSave').textContent = edit ? 'Save vial number' : then ? 'Save & continue' : 'Save & mark collected';
     $('#vialEg').textContent = (b.vial_no || 'AB1234') + '.pdf';
     $$('dialog[open]').forEach((x) => x.close());
     $('#vialDlg').showModal(); setTimeout(() => $('#vialNo').focus(), 50);
   }
   $('#vialNo').oninput = () => { if (vialCtx) vialCtx.force = false; $('#vialEg').textContent = (norm($('#vialNo').value) || 'AB1234') + '.pdf'; };
-  $('#vialForm').onsubmit = async (e) => {
-    e.preventDefault();
-    const v = $('#vialNo').value.trim(); if (!v) { $('#vialErr').textContent = 'Enter the vial number.'; return; }
-    const { id, edit, force } = vialCtx;
-    $('#vialSave').disabled = true;
+  async function saveVial(noVial) {
+    const v = noVial ? '' : $('#vialNo').value.trim();
+    if (!v && !noVial) { $('#vialErr').textContent = 'Enter the vial number (or continue without it).'; return; }
+    const { id, edit, force, then } = vialCtx;
+    $('#vialSave').disabled = $('#vialSkip').disabled = true;
     try {
       if (edit) await post(`/api/admin/bookings/${id}/vial`, { vial_no: v, force });
-      else await post(`/api/admin/bookings/${id}/status`, { status: 'collected', vial_no: v, force });
+      else await post(`/api/admin/bookings/${id}/status`, { status: 'collected', vial_no: v, no_vial: noVial || undefined, force });
       $('#vialDlg').close();
       await refreshAll();
       const b = findB(id);
-      if (!edit && b) { toast('Sample collected ✓ – once the centre confirms, send "Sample received" to the patient'); openDetail(id); }
-      else toast('Vial number saved');
+      if (edit || !b) toast('Vial number saved');
+      else if (then) { toast(noVial ? 'Sample collected ✓ (add the vial no. later)' : 'Sample collected ✓'); runStep(id, then); }
+      else { toast(noVial ? 'Sample collected ✓ – add the vial no. when you have it' : 'Sample collected ✓ – once the centre confirms, send "Sample received" to the patient'); openDetail(id); }
     } catch (err) {
       $('#vialErr').textContent = err.message + (err.code === 'dup_vial' ? ' Click save again to use it anyway.' : '');
       if (err.code === 'dup_vial') vialCtx.force = true;
-    } finally { $('#vialSave').disabled = false; }
+    } finally { $('#vialSave').disabled = $('#vialSkip').disabled = false; }
+  }
+  $('#vialForm').onsubmit = (e) => { e.preventDefault(); saveVial(false); };
+  $('#vialSkip').onclick = () => {
+    if (!confirm('Mark the sample collected without a vial number?\n\nThe vial no. is needed to match the reports – the booking will show "vial no. missing" until you add it.')) return;
+    saveVial(true);
   };
 
   // ---------- reports of one patient ----------
@@ -802,7 +904,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     const reps = reportsOf(b), can = AFTER_COLLECT.includes(b.status);
     if (!repPicked) repPicked = new Set(reps.filter((r) => !r.sent_at).map((r) => r.id));
     $('#repTitle').textContent = `Reports · ${b.name}`;
-    $('#repSub').textContent = `${testNames(b)}${b.vial_no ? ' · vial ' + b.vial_no : ''} · +91 ${b.phone}`;
+    $('#repSub').textContent = `${testNames(b)}${b.vial_no ? ' · vial ' + b.vial_no : ' · ⚠ vial no. missing'} · +91 ${b.phone}`;
     $('#repList').innerHTML = reps.length ? `<ul class="rp-l">${reps.map((r) => `<li class="rp">
 <label><input type="checkbox" data-rp="${r.id}" ${repPicked.has(r.id) ? 'checked' : ''}><span><b>📄 ${esc(r.name)}</b><small>${kb(r.size)} · uploaded ${when(r.created_at)}${r.sent_at ? ` · <span class="m-ok">sent ${when(r.sent_at)}</span>` : ' · not sent yet'}</small></span></label>
 <span class="rp-a"><button type="button" class="btn ghost sm" data-act="rp-view" data-rid="${r.id}">View</button><button type="button" class="btn warn sm" data-act="rp-del" data-rid="${r.id}" aria-label="Delete ${esc(r.name)}">Delete</button></span></li>`).join('')}</ul>` : '<p class="meta" style="margin:0 0 10px">No reports uploaded yet.</p>';
@@ -848,7 +950,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   }
   async function deleteReportFile(rid) {
     const b = findB(repId), f = b && reportsOf(b).find((r) => r.id === rid);
-    if (!confirm(`Delete "${f ? f.name : 'this report'}"? The patient's link to it will stop working.`)) return;
+    if (!confirm(`Delete "${f ? f.name : 'this report'}"? It will be removed from our records.`)) return;
     try { await api(`/api/admin/reports/${rid}`, { method: 'DELETE' }); repPicked && repPicked.delete(rid); await refreshAll(); renderRepDlg(); toast('Report deleted'); }
     catch (e) { $('#repErr').textContent = e.message; }
   }
@@ -1035,6 +1137,10 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     else if (a === 'collect') openVial(id, false);
     else if (a === 'vial-edit') openVial(id, true);
     else if (a === 'reports') openReports(id);
+    else if (a === 'steps') openSteps(id);
+    else if (a === 'step') runStep(id, el.dataset.key);
+    else if (a === 'step-mark') markStep(id, el.dataset.kind, false);
+    else if (a === 'step-unmark') markStep(id, el.dataset.kind, true);
     else if (a === 'rp-view') viewReportFile(Number(el.dataset.rid));
     else if (a === 'rp-del') deleteReportFile(Number(el.dataset.rid));
     else if (a === 'tests-edit') { const b = findB(id); if (b) openForm('tests', b); }

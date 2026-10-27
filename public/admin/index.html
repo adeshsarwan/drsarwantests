@@ -209,12 +209,20 @@
 <!-- sample collected: vial no. -->
 <dialog id="vialDlg" class="dlg" style="max-width:min(94vw,420px)">
 <form id="vialForm" novalidate>
-<div class="dlg-h"><b>Sample collected</b><div class="meta" id="vialSub"></div></div>
+<div class="dlg-h"><b id="vialTitle">Sample collected</b><div class="meta" id="vialSub"></div></div>
+<p class="note" id="vialNote" hidden></p>
 <div class="dlg-b"><div class="fld"><label for="vialNo">Vial number</label><input id="vialNo" class="inp" autocomplete="off" placeholder="As written on the tube / requisition" style="text-transform:uppercase;font-size:18px;letter-spacing:1px"></div>
 <p class="meta" style="margin:8px 0 0">Ask the collection centre to name each report PDF with this vial number, e.g. <b id="vialEg">AB1234.pdf</b>, so reports match automatically.</p></div>
 <p class="err" id="vialErr" style="padding:0 18px;margin:0"></p>
-<div class="dlg-f"><button class="btn blue" id="vialSave" style="flex:1">Save &amp; mark collected</button><button type="button" class="btn ghost" data-close="vialDlg">Cancel</button></div>
+<div class="dlg-f"><button class="btn blue" id="vialSave" style="flex:1">Save &amp; mark collected</button><button type="button" class="btn ghost" data-close="vialDlg">Cancel</button>
+<button type="button" class="lnk-b" id="vialSkip">Continue without vial no.</button></div>
 </form>
+</dialog>
+
+<!-- every step of one booking (do any step, mark done, see skipped) -->
+<dialog id="stepsDlg" class="dlg" style="max-width:min(96vw,620px)">
+<div id="stepsBody"></div>
+<div class="dlg-f" style="padding-top:0"><button class="btn ghost" data-close="stepsDlg" style="flex:1">Close</button></div>
 </dialog>
 
 <!-- reports of one patient -->
@@ -225,6 +233,7 @@
 <label class="drop" id="repDrop"><input type="file" id="repFiles" accept="application/pdf,.pdf" multiple hidden><b>+ Upload report PDFs</b><span class="meta">Choose one or more files, or drop them here</span></label>
 <p class="meta" id="repLocked" hidden>Mark the sample as collected before uploading reports.</p>
 <p class="err" id="repErr" style="margin:8px 0 0"></p>
+<p class="meta" style="margin:6px 0 0">“Send” opens the patient's WhatsApp chat with the message typed – attach the report PDF in the chat before sending.</p>
 </div>
 <div class="dlg-f"><button type="button" class="btn wa" id="repSend" style="flex:1">Send selected on WhatsApp</button><button type="button" class="btn ghost" id="repDone">Mark job complete</button></div>
 </dialog>

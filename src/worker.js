@@ -595,12 +595,13 @@ async function adminSetStatus(env, req, id) {
   const set = { status, updated_at: now };
   if (status === "collected") {
     const vial = clean(body.vial_no, 40).toUpperCase();
-    if (!vial) return bad("Enter the vial number written on the sample.");
-    if (!body.force) {
+    // vial no. can be added later (no_vial) – the admin shows a "vial no. missing" warning until it is
+    if (!vial && !body.no_vial) return bad("Enter the vial number written on the sample.");
+    if (vial && !body.force) {
       const dup = await env.DB.prepare("SELECT id, name FROM bookings WHERE vial_no=?1 AND id!=?2 LIMIT 1").bind(vial, id).first();
       if (dup) return json({ error: `Vial ${vial} is already used for ${dup.name} (${dup.id}). Check the number.`, code: "dup_vial" }, 409);
     }
-    set.vial_no = vial;
+    set.vial_no = vial || row.vial_no || null;
     set.collected_at = row.collected_at || now;
   }
   if (status === "report_ready" && !(await env.DB.prepare("SELECT 1 FROM report_files WHERE booking_id=?1 LIMIT 1").bind(id).first())) return bad("Upload the report PDF first.");
@@ -702,6 +703,7 @@ async function adminVial(env, req, id) {
 
 // Admin opened WhatsApp with a message. Sending the report completes the job.
 const MSG_KINDS = ["pay", "confirm", "center", "reminder", "slots", "missed", "collected", "report", "chat"];
+const DONE_KINDS = ["confirm", "center", "reminder", "collected"]; // message steps that can be ticked as done by hand
 async function adminSent(env, req, id) {
   const body = await req.json().catch(() => ({}));
   const kind = body.kind;
@@ -713,6 +715,17 @@ async function adminSent(env, req, id) {
     const stmts = ids.map((rid) => env.DB.prepare("UPDATE report_files SET sent_at=NULL WHERE id=?1 AND booking_id=?2").bind(rid, id));
     if (row.status === "completed") stmts.push(env.DB.prepare("UPDATE bookings SET status='report_ready', completed_at=NULL, updated_at=?1 WHERE id=?2").bind(now, id));
     if (stmts.length) await env.DB.batch(stmts);
+    return json({ ok: true });
+  }
+  // a step done outside the system (e.g. message sent on WhatsApp directly) and ticked by hand – and its undo
+  if (kind === "undo-done") {
+    if (!DONE_KINDS.includes(body.target)) return bad("Invalid step");
+    await env.DB.prepare("DELETE FROM msg_log WHERE booking_id=?1 AND kind=?2").bind(id, "done:" + body.target).run();
+    return json({ ok: true });
+  }
+  if (String(kind).startsWith("done:")) {
+    if (!DONE_KINDS.includes(kind.slice(5))) return bad("Invalid step");
+    await env.DB.prepare("INSERT INTO msg_log (booking_id, kind, at) VALUES (?1, ?2, ?3)").bind(id, kind, now).run();
     return json({ ok: true });
   }
   if (!MSG_KINDS.includes(kind)) return bad("Invalid message type");
