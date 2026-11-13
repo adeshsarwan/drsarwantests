@@ -436,3 +436,11 @@ button.stat:hover{border-color:var(--teal);box-shadow:0 0 0 2px #d8ecef}
 .wa-mi .mv button{padding:0 6px;line-height:1.2}
 .wa-f{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;border-top:1px solid var(--line2);padding:10px 0}
 .wa-f:first-child{border-top:0}
+
+/* "Before the test" icon in the Tests table + its tooltip */
+.prep-i{border:1px solid var(--line);background:#fff;border-radius:10px;width:36px;height:32px;font-size:16px;line-height:1;cursor:pointer}
+.prep-i:hover,.prep-i:focus-visible{border-color:var(--teal);background:#eef7f6}
+.prep-i.none{color:#b07a12;background:#fff8e8;border-color:#f0d79a;font-size:14px}
+.tip{position:fixed;z-index:1000;max-width:380px;background:#14233a;color:#fff;border-radius:12px;padding:10px 12px;font-size:13px;line-height:1.5;box-shadow:0 8px 24px rgba(10,20,40,.25);pointer-events:none}
+.tip b{display:block;margin-bottom:4px}
+.tip div+div{margin-top:3px}

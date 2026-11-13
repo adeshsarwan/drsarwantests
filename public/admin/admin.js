@@ -980,7 +980,10 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     const q = ($('#pkgSearch').value || '').trim().toLowerCase();
     const rows = PKGS.filter((p) => !q || (p.name + ' ' + (p.tests || '')).toLowerCase().includes(q));
     $('#pkgBody').innerHTML = rows.length ? rows.map((p) => `<tr class="${p.active ? '' : 'off'}">
-<td><b>${esc(p.name)}</b><span class="tests">${esc(p.tests || '—')}</span>${p.prep ? `<span class="prep"><b>Before the test:</b> ${esc(p.prep).replace(/\n/g, ' ')}</span>` : '<span class="prep none">No "before the test" instructions</span>'}</td>
+<td><b>${esc(p.name)}</b><span class="tests">${esc(p.tests || '—')}</span></td>
+<td style="text-align:center">${p.prep
+  ? `<button type="button" class="prep-i" data-tip="${esc(p.prep)}" data-tip-title="Before the test" data-act="pkg-edit" data-pid="${p.id}" aria-label="Before the test: ${esc(p.prep).replace(/\n/g, ' ')}">📋</button>`
+  : `<button type="button" class="prep-i none" data-tip="No “before the test” instructions yet. Click to add them." data-act="pkg-edit" data-pid="${p.id}" aria-label="No before-the-test instructions – add them">⚠</button>`}</td>
 <td class="num">${p.mrp ? money(p.mrp) : '—'}</td>
 <td class="num"><b>${money(p.price)}</b></td>
 <td class="num">${p.margin != null ? money(p.margin) : '—'}</td>
@@ -988,7 +991,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
 <td class="num">${p.bookings || 0}</td>
 <td>${p.is_default ? '<span class="badge web">Website test</span>' : ''}<span class="badge ${p.active ? 'on' : 'off'}">${p.active ? 'Active' : 'Hidden'}</span></td>
 <td><button type="button" class="btn ghost sm" data-act="pkg-edit" data-pid="${p.id}">Edit</button></td></tr>`).join('')
-      : '<tr><td colspan="8" class="meta" style="padding:18px">No tests match.</td></tr>';
+      : '<tr><td colspan="9" class="meta" style="padding:18px">No tests match.</td></tr>';
     $('#pkgCount').textContent = `${PKGS.filter((p) => p.active).length} active · ${PKGS.filter((p) => !p.active).length} hidden`;
   }
   $('#pkgSearch').oninput = renderPkgs;
@@ -1387,6 +1390,22 @@ ${t.meta !== false ? `<button type="button" class="btn ghost sm" data-act="wa-su
       } else if (a === 'wa-open') showTab('wa');
     } catch (err) { if (msgEl) msgEl.textContent = ''; toast(err.message); }
   }
+
+  // ---------- hover / focus tooltip for anything with data-tip (fixed position, so tables don't clip it) ----------
+  const tipEl = $('#tip');
+  function showTip(el) {
+    tipEl.innerHTML = (el.dataset.tipTitle ? `<b>${esc(el.dataset.tipTitle)}</b>` : '') + esc(el.dataset.tip).split('\n').map((l) => `<div>${l}</div>`).join('');
+    tipEl.hidden = false;
+    const r = el.getBoundingClientRect(), w = tipEl.offsetWidth, h = tipEl.offsetHeight;
+    const left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left + r.width / 2 - w / 2));
+    const top = r.bottom + 8 + h > window.innerHeight ? Math.max(8, r.top - h - 8) : r.bottom + 8;
+    tipEl.style.left = left + 'px'; tipEl.style.top = top + 'px';
+  }
+  const hideTip = () => { tipEl.hidden = true; };
+  document.addEventListener('mouseover', (e) => { const el = e.target.closest('[data-tip]'); if (el) showTip(el); });
+  document.addEventListener('mouseout', (e) => { const el = e.target.closest('[data-tip]'); if (el && !el.contains(e.relatedTarget)) hideTip(); });
+  document.addEventListener('focusin', (e) => { const el = e.target.closest('[data-tip]'); if (el) showTip(el); else hideTip(); });
+  document.addEventListener('scroll', hideTip, true);
 
   // ---------- one click handler for every action (list, calendar, panels, dialogs) ----------
   document.addEventListener('click', (e) => {

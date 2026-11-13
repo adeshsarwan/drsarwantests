@@ -79,7 +79,7 @@
 <div style="display:flex;gap:8px;flex-wrap:wrap"><input id="pkgSearch" class="inp" type="search" placeholder="Search tests…" aria-label="Search tests"><button class="btn sm" data-act="pkg-add">+ Add test</button></div>
 </div>
 <div class="tbl-wrap"><table class="tbl pkg-t">
-<thead><tr><th>Test / package</th><th class="num">MRP</th><th class="num">Price</th><th class="num">Margin</th><th>Target</th><th class="num">Active bookings</th><th>Status</th><th></th></tr></thead>
+<thead><tr><th>Test / package</th><th style="text-align:center">Before test</th><th class="num">MRP</th><th class="num">Price</th><th class="num">Margin</th><th>Target</th><th class="num">Active bookings</th><th>Status</th><th></th></tr></thead>
 <tbody id="pkgBody"></tbody>
 </table></div>
 <p class="meta" id="pkgCount" style="margin:10px 0 0"></p>
@@ -366,6 +366,7 @@
 </form>
 </dialog>
 
+<div id="tip" class="tip" role="tooltip" hidden></div>
 <script src="/shared/msgs.js"></script>
 <script src="/admin/admin.js"></script>
 </body>
