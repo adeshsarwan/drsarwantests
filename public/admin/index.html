@@ -30,6 +30,8 @@
 <button type="button" class="tab" data-tab="bookings" aria-current="page">Bookings</button>
 <button type="button" class="tab" data-tab="calendar">Calendar</button>
 <button type="button" class="tab" data-tab="tests">Tests</button>
+<button type="button" class="tab" data-tab="centres">Centres</button>
+<button type="button" class="tab" data-tab="users">Users</button>
 </nav>
 </div>
 <div class="top-r">
@@ -79,6 +81,36 @@
 <tbody id="pkgBody"></tbody>
 </table></div>
 <p class="meta" id="pkgCount" style="margin:10px 0 0"></p>
+</div>
+</main>
+
+<!-- ================= CENTRES TAB ================= -->
+<main id="view-centres" class="wrap" style="padding-bottom:40px" hidden>
+<div class="card">
+<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+<div><h2 class="h2" style="margin:0">Collection centres</h2><p class="meta" style="margin:4px 0 0">Who collects samples and makes reports. <b>WhatsApp numbers</b> are the phones allowed to use the centre's WhatsApp menu; booking details go to the first number. Logins for the centre portal are in the <b>Users</b> tab.</p></div>
+<button class="btn sm" data-act="centre-add">+ Add centre</button>
+</div>
+<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>Centre</th><th>Address</th><th>WhatsApp numbers</th><th class="num">Logins</th><th class="num">Open jobs</th><th>Status</th><th></th></tr></thead>
+<tbody id="centreBody"></tbody>
+</table></div>
+</div>
+</main>
+
+<!-- ================= USERS TAB ================= -->
+<main id="view-users" class="wrap" style="padding-bottom:40px" hidden>
+<div class="card">
+<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+<div><h2 class="h2" style="margin:0">Users</h2><p class="meta" style="margin:4px 0 0" id="userNote"></p></div>
+<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+<div class="seg" role="group" aria-label="User type"><button type="button" data-act="users-role" data-role="centre">Centre logins</button><button type="button" data-act="users-role" data-role="patient">Patients</button></div>
+<input id="userSearch" class="inp" type="search" placeholder="Search name or phone…" aria-label="Search users">
+<button class="btn sm" data-act="user-add" id="userAddBtn">+ Add centre login</button>
+</div>
+</div>
+<div class="tbl-wrap"><table class="tbl"><thead id="userHead"></thead><tbody id="userBody"></tbody></table></div>
+<p class="meta" id="userCount" style="margin:10px 0 0"></p>
 </div>
 </main>
 
@@ -175,6 +207,7 @@
 <div class="fld wide add-only"><label for="fState">State</label><select id="fState" name="state" class="inp"><option value="">Select state</option><option>Andaman and Nicobar Islands</option><option>Andhra Pradesh</option><option>Arunachal Pradesh</option><option>Assam</option><option>Bihar</option><option>Chandigarh</option><option>Chhattisgarh</option><option>Dadra and Nagar Haveli and Daman and Diu</option><option>Delhi</option><option>Goa</option><option>Gujarat</option><option>Haryana</option><option>Himachal Pradesh</option><option>Jammu and Kashmir</option><option>Jharkhand</option><option>Karnataka</option><option>Kerala</option><option>Ladakh</option><option>Lakshadweep</option><option>Madhya Pradesh</option><option>Maharashtra</option><option>Manipur</option><option>Meghalaya</option><option>Mizoram</option><option>Nagaland</option><option>Odisha</option><option>Puducherry</option><option>Punjab</option><option>Rajasthan</option><option>Sikkim</option><option>Tamil Nadu</option><option>Telangana</option><option>Tripura</option><option>Uttar Pradesh</option><option>Uttarakhand</option><option>West Bengal</option></select></div>
 <div class="fld slot-f"><label for="fDate">Date</label><input id="fDate" name="date" type="date" class="inp"></div>
 <div class="fld slot-f"><label for="fSlot">Slot</label><select id="fSlot" name="slot" class="inp"></select></div>
+<div class="fld add-only"><label for="fDob">Date of birth <span class="meta">(for the reports portal)</span></label><input id="fDob" name="dob" type="date" class="inp"></div>
 <div class="fld wide add-only"><label for="fNotes">Notes (optional)</label><input id="fNotes" name="notes" class="inp" autocomplete="off" placeholder="e.g. day of cycle, doctor's name, landmark"></div>
 <label class="fld wide fee-only fee-box" hidden><span><input type="checkbox" id="fFee" name="feePaid"> <b id="fFeeLbl">₹300 visit fee received</b></span><span class="meta">The patient missed the last visit. Rebook only after the fee is paid.</span></label>
 </div>
@@ -233,6 +266,56 @@
 <p class="meta" style="margin:6px 0 0">“Send” opens the patient's WhatsApp chat with the message typed – attach the report PDF in the chat before sending.</p>
 </div>
 <div class="dlg-f"><button type="button" class="btn wa" id="repSend" style="flex:1">Send selected on WhatsApp</button><button type="button" class="btn ghost" id="repDone">Mark job complete</button></div>
+</dialog>
+
+<!-- add / edit collection centre -->
+<dialog id="centreDlg" class="dlg" style="max-width:min(94vw,600px)">
+<form id="centreForm" novalidate>
+<div class="dlg-h"><b id="centreTitle">Add centre</b><div class="meta">Booking details are sent to the first WhatsApp number.</div></div>
+<div class="dlg-b fgrid">
+<div class="fld wide"><label for="cName">Centre name</label><input id="cName" name="name" class="inp" autocomplete="off" required></div>
+<div class="fld"><label for="cContact">Contact person</label><input id="cContact" name="contact_name" class="inp" autocomplete="off"></div>
+<div class="fld"><label for="cPin">Pincode</label><input id="cPin" name="pincode" class="inp" inputmode="numeric" maxlength="6" autocomplete="off"></div>
+<div class="fld wide"><label for="cAddr">Address</label><input id="cAddr" name="address" class="inp" autocomplete="off"></div>
+<div class="fld wide"><label for="cCity">City</label><input id="cCity" name="city" class="inp" autocomplete="off"></div>
+<div class="fld wide"><span class="lbl" style="font-weight:600">WhatsApp numbers <span class="meta">(people who can use the centre's WhatsApp menu)</span></span>
+<div id="cNums" style="display:flex;flex-direction:column;gap:6px;margin-top:6px"></div>
+<button type="button" class="btn ghost sm" data-act="centre-num-add" style="margin-top:8px;align-self:flex-start">+ Add number</button></div>
+<div class="fld wide"><label for="cNotes">Notes</label><input id="cNotes" name="notes" class="inp" autocomplete="off"></div>
+<label class="fld wide chk"><span><input type="checkbox" id="cActive" name="active" checked> <b>Active</b> – can be given new bookings</span></label>
+</div>
+<p class="err" id="centreErr" style="padding:0 18px;margin:0"></p>
+<div class="dlg-f"><button class="btn" id="centreSave" style="flex:1">Save centre</button><button type="button" class="btn warn" id="centreDel" hidden>Delete</button><button type="button" class="btn ghost" data-close="centreDlg">Cancel</button></div>
+</form>
+</dialog>
+
+<!-- add / edit user -->
+<dialog id="userDlg" class="dlg" style="max-width:min(94vw,520px)">
+<form id="userForm" novalidate>
+<div class="dlg-h"><b id="userTitle">Add centre login</b><div class="meta" id="userSub"></div></div>
+<div class="dlg-b fgrid">
+<div class="fld wide"><label for="uName">Name</label><input id="uName" name="name" class="inp" autocomplete="off" required></div>
+<div class="fld c-only"><label for="uUser">Username</label><input id="uUser" name="username" class="inp" autocomplete="off" autocapitalize="none" spellcheck="false"></div>
+<div class="fld c-only"><label for="uCentre">Centre</label><select id="uCentre" name="centre_id" class="inp"></select></div>
+<div class="fld"><label for="uPhone">Mobile</label><input id="uPhone" name="phone" class="inp" inputmode="numeric" autocomplete="off"></div>
+<div class="fld p-only"><label for="uDob">Date of birth</label><input id="uDob" name="dob" type="date" class="inp"></div>
+<div class="fld c-only"><label for="uPw" id="uPwLbl">Password</label><input id="uPw" name="password" type="text" class="inp" autocomplete="new-password" spellcheck="false"><button type="button" class="lnk-b" data-act="user-genpw" style="align-self:flex-start;padding-left:0">Make a password</button></div>
+<label class="fld wide chk"><span><input type="checkbox" id="uActive" name="active" checked> <b>Active</b> – <span id="uActiveLbl">can sign in</span></span></label>
+</div>
+<p class="err" id="userErr" style="padding:0 18px;margin:0"></p>
+<div class="dlg-f"><button class="btn" id="userSave" style="flex:1">Save</button><button type="button" class="btn warn" id="userDel" hidden>Delete</button><button type="button" class="btn ghost" data-close="userDlg">Cancel</button></div>
+</form>
+</dialog>
+
+<!-- assign collection centre -->
+<dialog id="assignDlg" class="dlg" style="max-width:min(94vw,440px)">
+<form id="assignForm" novalidate>
+<div class="dlg-h"><b>Collection centre</b><div class="meta" id="assignSub"></div></div>
+<div class="dlg-b"><div class="fld"><label for="assignSel">Which centre will collect this sample?</label><select id="assignSel" class="inp"></select></div>
+<p class="meta" style="margin:8px 0 0">The centre sees this booking in its portal once it's assigned.</p></div>
+<p class="err" id="assignErr" style="padding:0 18px;margin:0"></p>
+<div class="dlg-f"><button class="btn" id="assignSave" style="flex:1">Save</button><button type="button" class="btn ghost" data-close="assignDlg">Cancel</button></div>
+</form>
 </dialog>
 
 <script src="/admin/admin.js"></script>

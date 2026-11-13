@@ -84,6 +84,7 @@
   };
   let tab = pref.get('tab', 'bookings');
   let PKGS = [];
+  let CENTRES = [];
   let detailId = null;
 
   const findB = (id) => (cal.data && cal.data.bookings.find((b) => b.id === id)) || (data && data.bookings.find((b) => b.id === id));
@@ -105,13 +106,17 @@
     $('#view-bookings').hidden = name !== 'bookings';
     $('#view-calendar').hidden = name !== 'calendar';
     $('#view-tests').hidden = name !== 'tests';
+    $('#view-centres').hidden = name !== 'centres';
+    $('#view-users').hidden = name !== 'users';
     if (name === 'calendar') loadCal().catch((e) => toast(e.message));
     if (name === 'tests') loadPkgs().catch((e) => toast(e.message));
+    if (name === 'centres') loadCentres().catch((e) => toast(e.message));
+    if (name === 'users') loadUsers().catch((e) => toast(e.message));
   }
   $$('.tab').forEach((t) => (t.onclick = () => showTab(t.getAttribute('data-tab'))));
 
   async function refreshAll() {
-    await Promise.all([load(), loadPkgs().catch(() => {})]);
+    await Promise.all([load(), loadPkgs().catch(() => {}), loadCentres().catch(() => {})]);
     if (tab === 'calendar' || cal.data) await loadCal();
     if (detailId && $('#detailDlg').open) { const b = findB(detailId); if (b) $('#detailBody').innerHTML = detailHTML(b); }
     else if (slotOpen && $('#detailDlg').open && cal.data) $('#detailBody').innerHTML = slotListHTML(slotOpen.date, slotOpen.slot);
@@ -152,6 +157,9 @@
   };
   const testLine = (b) => (testsOf(b).length ? `<span class="test-l">🧪 ${esc(testNames(b))}</span>` : '');
   const PAID_LIKE = ['confirmed', 'collected', 'report_ready', 'completed'];
+  // the booking's collection centre and the WhatsApp number its details go to (first number of the centre)
+  const centreOf = (b) => CENTRES.find((c) => c.id === b.centre_id) || null;
+  const centrePhone = (b) => { const c = centreOf(b); return c && c.numbers.length ? c.numbers[0].phone : ''; };
   const AFTER_COLLECT = ['collected', 'report_ready', 'completed'];
 
   // The process, step by step (also drives the "next step" button everywhere).
@@ -170,7 +178,11 @@
           ? `<button type="button" class="btn sm" data-act="status" data-id="${b.id}" data-st="confirmed">Confirm payment</button>${b.has_proof ? `<button type="button" class="btn ghost sm" data-act="shot" data-id="${b.id}">Screenshot</button>` : ''}`
           : W('pay', 'Payment reminder') },
       M('confirm', 'confirm', 'Booking confirmation sent to patient', 'Send confirmation'),
-      M('center', 'center', `Booking sent to collection centre (${CFG.centerPhone || '8368143677'})`, 'Send to centre'),
+      { key: 'assign', label: centreOf(b) ? `Collection centre: ${centreOf(b).name}` : 'Collection centre chosen', btn: 'Choose centre', cls: '',
+        done: !!b.centre_id, at: null, avail: PAID_LIKE.includes(s),
+        act: `<button type="button" class="btn sm" data-act="assign-open" data-id="${b.id}">Choose centre</button>`,
+        again: `<button type="button" class="btn ghost sm" data-act="assign-open" data-id="${b.id}">Change</button>` },
+      M('center', 'center', `Booking sent to collection centre${centrePhone(b) ? ` (${centrePhone(b)})` : ''}`, 'Send to centre'),
       M('reminder', 'reminder', 'Visit reminder sent to patient', 'Send reminder'),
       { key: 'collect', label: AFTER_COLLECT.includes(s) ? (b.vial_no ? `Sample collected · vial ${b.vial_no}` : 'Sample collected · ⚠ vial no. missing') : 'Sample collected (enter vial no.)',
         btn: 'Sample collected', cls: 'blue', done: AFTER_COLLECT.includes(s), at: b.collected_at, avail: s === 'confirmed',
@@ -256,6 +268,7 @@
   async function runStep(id, key) {
     let b = findB(id); if (!b) return;
     const needsSample = ['received', 'upload', 'send'].includes(key) && !AFTER_COLLECT.includes(b.status);
+    if (key === 'assign') { openAssign(id); return; }
     if (key === 'collect' || needsSample) { openVial(id, false, key === 'collect' ? null : key); return; }
     if (b.status === 'payment_submitted') {
       if (!confirm(`${b.name}'s payment isn't verified yet.\n\nMark the payment as verified and continue?`)) return;
@@ -307,7 +320,7 @@
         const fs = files && files.length ? files : reportsOf(b).filter((f) => !f.sent_at);
         return [hi, `Your report${fs.length === 1 ? ' is' : 's are'} ready 📄 Sending the PDF${fs.length === 1 ? '' : 's'} here:`, '',
           ...fs.map((f) => `• ${f.name.replace(/\.pdf$/i, '')}`), '', b.vial_no ? `Vial no.: ${b.vial_no}` : null,
-          `Please share ${fs.length === 1 ? 'it' : 'them'} with your doctor. Questions? Reply here or call 8368143677.`, sign].filter((x) => x !== null).join('\n');
+          `Please share ${fs.length === 1 ? 'it' : 'them'} with your doctor. Questions? Reply here or call 8368143677.`, '', 'You can open your reports any time on https://drsarwantests.com/reports/ with your mobile number and date of birth.', sign].filter((x) => x !== null).join('\n');
       }
       default: return '';
     }
@@ -319,6 +332,7 @@
       `📍 Address: ${fullAddr(b)}`, `💳 Payment of ${money(b.amount)} received. Thank you!`,
       t.length > 1 ? `🧪 Tests:\n${t.map((x) => `   – ${x.name}`).join('\n')}` : `🧪 Test: ${t[0] ? t[0].name : 'Blood test'}${t[0] && pkgFor(t[0]) && pkgFor(t[0]).tests ? ` (${pkgFor(t[0]).tests})` : ''}`, '',
       ...(prepOf(b) ? ['Before the test:', prepOf(b), '(If your doctor gave you different instructions, follow your doctor.)', ''] : []),
+      '📄 Your reports will also be on https://drsarwantests.com/reports/ (sign in with your mobile number and date of birth).', '',
       'Need to reschedule? Call/WhatsApp 8368143677.'].join('\n');
   }
 
@@ -365,7 +379,10 @@
     const b = findB(id); if (!b) return;
     if (kind === 'chat') { openWhatsApp(b.phone, ''); return; }
     if (kind === 'report') { openReports(id); return; }
-    if (kind === 'center') { openWhatsApp(CFG.centerPhone || '8368143677', msgText(b, 'center')); logSent(b, 'center'); return; }
+    if (kind === 'center') {
+      if (!centrePhone(b)) { toast(b.centre_id ? 'This centre has no WhatsApp number – add one in the Centres tab' : 'Choose the collection centre first'); if (!b.centre_id) openAssign(id, 'center'); return; }
+      openWhatsApp(centrePhone(b), msgText(b, 'center')); logSent(b, 'center'); return;
+    }
     if (NEEDS_SLOTS.includes(kind)) {
       openMsg({ b, kind, title: MSG[kind], sub: `To ${b.name} · +91 ${b.phone}`, text: 'Finding free slots…' });
       const sug = await suggestSlots(b);
@@ -430,6 +447,7 @@ ${b.fee_paid_at ? `<div class="meta">Visit fee ${money(b.fee_due)} received ${wh
 <div class="dt-sec"><div class="dt-k" style="display:flex;justify-content:space-between;align-items:center">Tests (${t.length})${b.status !== 'cancelled' ? `<button type="button" class="btn ghost sm" data-act="tests-edit" data-id="${b.id}">Edit tests</button>` : ''}</div>
 <ul class="tl">${t.map((x) => `<li><b>${esc(x.name)}</b><span>${money(x.price)}</span></li>`).join('') || '<li class="meta">No test recorded</li>'}</ul>
 <div class="pay"><div style="min-width:0;flex:1"><b>${money(b.amount)}</b><div class="meta">${payNote}${b.utr ? ` · UTR ${esc(b.utr)}` : ''}${t.some((x) => x.margin != null) ? ` · margin ${money(marginOf(b))}` : ''}</div></div>${b.has_proof ? `<button type="button" class="btn ghost sm" data-act="shot" data-id="${b.id}">Screenshot</button>` : ''}</div></div>
+${b.status !== 'blocked' ? `<div class="dt-sec"><div class="dt-k" style="display:flex;justify-content:space-between;align-items:center">Collection centre<button type="button" class="btn ghost sm" data-act="assign-open" data-id="${b.id}">${b.centre_id ? 'Change' : 'Choose'}</button></div><div style="margin-top:2px">${centreOf(b) ? `<b>${esc(centreOf(b).name)}</b>${centrePhone(b) ? ` <span class="meta">· ${esc(centrePhone(b))}</span>` : ''}` : '<span class="meta">Not chosen yet</span>'}</div></div>` : ''}
 ${stepsCompact(b) ? `<div class="dt-sec"><div class="dt-k">Steps</div>${stepsCompact(b)}</div>` : ''}
 <div class="dt-sec"><div class="dt-k" style="display:flex;justify-content:space-between;align-items:center">Reports (${reps.length})${AFTER_COLLECT.includes(b.status) ? `<button type="button" class="btn ghost sm" data-act="reports" data-id="${b.id}">${reps.length ? 'Manage / send' : 'Upload'}</button>` : ''}</div>
 ${reps.length ? `<ul class="rl">${reps.map((r) => `<li>📄 ${esc(r.name)} <span class="${r.sent_at ? 'm-ok' : 'meta'}">${r.sent_at ? 'sent ' + when(r.sent_at) : 'not sent'}</span></li>`).join('')}</ul>` : `<div class="meta">${AFTER_COLLECT.includes(b.status) ? 'No reports uploaded yet.' : 'Reports can be uploaded after the sample is collected.'}</div>`}</div>
@@ -437,6 +455,7 @@ ${reps.length ? `<ul class="rl">${reps.map((r) => `<li>📄 ${esc(r.name)} <span
 <div class="dt-links"><a class="call" href="tel:+91${esc(b.phone)}">Call</a><a class="wa" href="#" data-act="wa" data-kind="chat" data-id="${b.id}">WhatsApp</a><a href="${mapUrl(b)}" target="_blank" rel="noopener">Map</a></div>
 <div><div class="dt-k">Collection address</div><div style="margin-top:2px;line-height:1.45">${esc(b.address)}<br><b>${esc(b.city || '')}</b>${b.state ? ', ' + esc(b.state) : ''} – ${esc(b.pincode)}</div></div>
 <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">${b.cycle ? `<div><div class="dt-k">Cycle</div><div style="margin-top:2px">${esc(b.cycle)}</div></div>` : ''}<div><div class="dt-k">Source</div><div style="margin-top:2px">${esc(srcLabel(b.source))}</div></div></div>
+${b.dob ? `<div><div class="dt-k">Date of birth</div><div style="margin-top:2px">${fmt(b.dob, { day: 'numeric', month: 'short', year: 'numeric' })}</div></div>` : ''}
 ${b.notes ? `<div><div class="dt-k">Notes</div><div style="margin-top:2px">${esc(b.notes)}</div></div>` : ''}
 </div>
 ${f.length ? `<div class="dt-f">${f.join('')}</div>` : ''}`;
@@ -1120,6 +1139,163 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     finally { btn.disabled = false; }
   };
 
+  // ================= COLLECTION CENTRES =================
+  async function loadCentres() {
+    const r = await api('/api/admin/centres');
+    CENTRES = r.centres;
+    if (tab === 'centres') renderCentres();
+  }
+  function renderCentres() {
+    $('#centreBody').innerHTML = CENTRES.length ? CENTRES.map((c) => `<tr class="${c.active ? '' : 'off'}">
+<td><b>${esc(c.name)}</b>${c.contact_name ? `<small>${esc(c.contact_name)}</small>` : ''}</td>
+<td class="addr">${esc([c.address, c.city, c.pincode].filter(Boolean).join(', ')) || '<span class="meta">—</span>'}</td>
+<td>${c.numbers.length ? c.numbers.map((n, i) => `<div style="white-space:nowrap">${esc(n.phone)}${n.name ? ` <span class="meta">${esc(n.name)}</span>` : ''}${i === 0 ? ' <span class="meta">· gets bookings</span>' : ''}</div>`).join('') : '<span class="meta">No number</span>'}</td>
+<td class="num">${c.users || 0}</td><td class="num">${c.open_jobs || 0}</td>
+<td><span class="pill ${c.active ? 'st-confirmed' : 'st-cancelled'}" style="margin:0">${c.active ? 'Active' : 'Off'}</span></td>
+<td><button type="button" class="btn ghost sm" data-act="centre-edit" data-cid="${c.id}">Edit</button></td></tr>`).join('')
+      : '<tr><td colspan="7" class="meta">No centres yet.</td></tr>';
+  }
+  let centreEditing = null;
+  function addNumRow(n, focus) {
+    const row = document.createElement('div');
+    row.className = 'num-row'; row.style.cssText = 'display:flex;gap:6px;align-items:center';
+    row.innerHTML = `<input class="inp n-phone" inputmode="numeric" placeholder="10-digit mobile" style="flex:1;min-width:0" value="${esc(n.phone || '')}" aria-label="WhatsApp number">
+<input class="inp n-name" placeholder="Name (optional)" style="flex:1;min-width:0" value="${esc(n.name || '')}" aria-label="Person's name">
+<button type="button" class="ibtn" data-act="centre-num-del" aria-label="Remove number">×</button>`;
+    $('#cNums').appendChild(row);
+    if (focus) row.querySelector('.n-phone').focus();
+  }
+  function openCentre(id) {
+    const c = id ? CENTRES.find((x) => x.id === id) : null;
+    centreEditing = c ? c.id : null;
+    $('#centreForm').reset(); $('#centreErr').textContent = ''; $('#cNums').innerHTML = '';
+    $('#centreTitle').textContent = c ? `Edit ${c.name}` : 'Add centre';
+    if (c) { $('#cName').value = c.name; $('#cContact').value = c.contact_name || ''; $('#cPin').value = c.pincode || ''; $('#cAddr').value = c.address || ''; $('#cCity').value = c.city || ''; $('#cNotes').value = c.notes || ''; $('#cActive').checked = !!c.active; }
+    (c && c.numbers.length ? c.numbers : [{}]).forEach((n) => addNumRow(n));
+    $('#centreDel').hidden = !c;
+    $('#centreDlg').showModal(); setTimeout(() => $('#cName').focus(), 50);
+  }
+  $('#centreForm').onsubmit = async (e) => {
+    e.preventDefault(); $('#centreErr').textContent = '';
+    const fd = Object.fromEntries(new FormData($('#centreForm')).entries());
+    fd.active = $('#cActive').checked;
+    fd.numbers = $$('#cNums .num-row').map((r) => ({ phone: r.querySelector('.n-phone').value.trim(), name: r.querySelector('.n-name').value.trim() })).filter((n) => n.phone);
+    $('#centreSave').disabled = true;
+    try {
+      await post(centreEditing ? `/api/admin/centres/${centreEditing}` : '/api/admin/centres', fd);
+      $('#centreDlg').close(); toast(centreEditing ? 'Centre updated' : 'Centre added');
+      await loadCentres(); if (data) renderBookings(); if (cal.data) renderCal();
+    } catch (err) { $('#centreErr').textContent = err.message; }
+    finally { $('#centreSave').disabled = false; }
+  };
+  $('#centreDel').onclick = async () => {
+    const c = CENTRES.find((x) => x.id === centreEditing); if (!c) return;
+    if (!confirm(`Delete ${c.name}?`)) return;
+    try { await api(`/api/admin/centres/${c.id}`, { method: 'DELETE' }); $('#centreDlg').close(); toast('Centre deleted'); await loadCentres(); }
+    catch (err) { $('#centreErr').textContent = err.message; }
+  };
+
+  // pick the collection centre for a booking (then = message step to carry on with)
+  let assign = null;
+  function openAssign(id, then) {
+    const b = findB(id); if (!b) return;
+    assign = { id, then };
+    const opts = CENTRES.filter((c) => c.active || c.id === b.centre_id);
+    $('#assignSel').innerHTML = `<option value="">— Not chosen yet —</option>` + opts.map((c) => `<option value="${c.id}"${c.id === b.centre_id ? ' selected' : ''}>${esc(c.name)}${c.city ? ' · ' + esc(c.city) : ''}</option>`).join('');
+    if (!b.centre_id && opts.length === 1) $('#assignSel').value = String(opts[0].id);
+    $('#assignSub').textContent = `${b.name} · ${fmtD(b.date)}, ${slotLabel(b.slot)} · ${b.city || b.pincode}`;
+    $('#assignErr').textContent = '';
+    $('#assignDlg').showModal();
+  }
+  $('#assignForm').onsubmit = async (e) => {
+    e.preventDefault(); if (!assign) return;
+    const v = $('#assignSel').value;
+    $('#assignSave').disabled = true;
+    try {
+      await post(`/api/admin/bookings/${assign.id}/centre`, { centre_id: v ? Number(v) : null });
+      $('#assignDlg').close(); toast(v ? 'Centre chosen' : 'Centre removed');
+      const { id, then } = assign; assign = null;
+      await refreshAll();
+      if (v && then) sendWa(id, then);
+    } catch (err) { $('#assignErr').textContent = err.message; }
+    finally { $('#assignSave').disabled = false; }
+  };
+
+  // ================= USERS =================
+  let userRole = 'centre', USERS = [], userEditing = null;
+  const genPw = () => { const a = 'abcdefghjkmnpqrstuvwxyz23456789'; const r = crypto.getRandomValues(new Uint8Array(10)); return Array.from(r, (x) => a[x % a.length]).join(''); };
+  function renderUsersHead() {
+    $$('[data-act="users-role"]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.role === userRole)));
+    $('#userAddBtn').hidden = userRole !== 'centre';
+    $('#userNote').innerHTML = userRole === 'centre'
+      ? 'Logins for the <b>centre portal</b> (drsarwantests.com/centre) – the centre sees its bookings, marks samples collected and uploads reports.'
+      : 'Created automatically from bookings. Patients open <b>drsarwantests.com/reports</b> with their mobile number and date of birth.';
+    $('#userHead').innerHTML = userRole === 'centre'
+      ? '<tr><th>Name</th><th>Username</th><th>Centre</th><th>Mobile</th><th>Last sign-in</th><th>Status</th><th></th></tr>'
+      : '<tr><th>Patient</th><th>Mobile</th><th>Date of birth</th><th class="num">Bookings</th><th class="num">Reports</th><th>Last sign-in</th><th>Status</th><th></th></tr>';
+  }
+  async function loadUsers() {
+    renderUsersHead();
+    const q = ($('#userSearch').value || '').trim();
+    const r = await api(`/api/admin/users?role=${userRole}${userRole === 'patient' && q ? '&q=' + encodeURIComponent(q) : ''}`);
+    USERS = r.users; renderUsers();
+  }
+  function renderUsers() {
+    const q = ($('#userSearch').value || '').trim().toLowerCase();
+    const rows = USERS.filter((u) => !q || `${u.name} ${u.phone || ''} ${u.username || ''} ${u.centre_name || ''}`.toLowerCase().includes(q));
+    const st = (u) => `<span class="pill ${u.active ? 'st-confirmed' : 'st-cancelled'}" style="margin:0">${u.active ? 'Active' : 'Blocked'}</span>`;
+    const last = (u) => (u.last_login_at ? when(u.last_login_at) : '<span class="meta">Never</span>');
+    $('#userBody').innerHTML = rows.length ? rows.map((u) => userRole === 'centre'
+      ? `<tr class="${u.active ? '' : 'off'}"><td><b>${esc(u.name)}</b></td><td>${esc(u.username)}</td><td>${esc(u.centre_name || '—')}</td><td>${esc(u.phone || '—')}</td><td>${last(u)}</td><td>${st(u)}</td><td><button type="button" class="btn ghost sm" data-act="user-edit" data-uid="${u.id}">Edit</button></td></tr>`
+      : `<tr class="${u.active ? '' : 'off'}"><td><b>${esc(u.name)}</b>${u.last_date ? `<small>Last booking ${fmtD(u.last_date)}</small>` : ''}</td><td>${esc(u.phone)}</td><td>${u.dob ? fmt(u.dob, { day: 'numeric', month: 'short', year: 'numeric' }) : '<span class="meta">Missing – can\'t sign in</span>'}</td><td class="num">${u.bookings}</td><td class="num">${u.reports}</td><td>${last(u)}</td><td>${st(u)}</td><td><button type="button" class="btn ghost sm" data-act="user-edit" data-uid="${u.id}">Edit</button></td></tr>`).join('')
+      : `<tr><td colspan="8" class="meta">${userRole === 'centre' ? 'No centre logins yet. Add one for each person at a centre.' : 'No patients found.'}</td></tr>`;
+    $('#userCount').textContent = userRole === 'patient' ? `${rows.length} patient${rows.length === 1 ? '' : 's'}${rows.length >= 1000 ? ' (first 1,000 – search to narrow)' : ''} · ${rows.filter((u) => !u.dob).length} without date of birth` : `${rows.length} login${rows.length === 1 ? '' : 's'}`;
+  }
+  let ut; $('#userSearch').oninput = () => { if (userRole === 'patient') { clearTimeout(ut); ut = setTimeout(() => loadUsers().catch(() => {}), 300); } else renderUsers(); };
+  function openUser(id) {
+    const u = id ? USERS.find((x) => x.id === id) : null;
+    const patient = u && u.role === 'patient';
+    userEditing = u ? u.id : null;
+    $('#userForm').reset(); $('#userErr').textContent = '';
+    $$('#userForm .c-only').forEach((x) => (x.hidden = patient));
+    $$('#userForm .p-only').forEach((x) => (x.hidden = !patient));
+    $('#uCentre').innerHTML = '<option value="">Choose centre</option>' + CENTRES.map((c) => `<option value="${c.id}">${esc(c.name)}${c.active ? '' : ' (off)'}</option>`).join('');
+    $('#uPhone').readOnly = patient;
+    $('#userTitle').textContent = !u ? 'Add centre login' : patient ? `Patient · ${u.name}` : `Edit ${u.name}`;
+    $('#userSub').textContent = patient ? 'Patients sign in at drsarwantests.com/reports with mobile + date of birth.' : u ? 'Leave the password empty to keep it.' : 'Share the username and password with the person. They sign in at drsarwantests.com/centre.';
+    $('#uPwLbl').textContent = u ? 'New password (optional)' : 'Password';
+    $('#uActiveLbl').textContent = patient ? 'can open the reports portal' : 'can sign in';
+    if (u) { $('#uName').value = u.name; $('#uPhone').value = u.phone || ''; $('#uActive').checked = !!u.active;
+      if (patient) $('#uDob').value = u.dob || ''; else { $('#uUser').value = u.username || ''; $('#uCentre').value = String(u.centre_id || ''); } }
+    else { $('#uPw').value = genPw(); if (CENTRES.length === 1) $('#uCentre').value = String(CENTRES[0].id); }
+    $('#userDel').hidden = !u || patient;
+    $('#userDlg').showModal(); setTimeout(() => $('#uName').focus(), 50);
+  }
+  $('#userForm').onsubmit = async (e) => {
+    e.preventDefault(); $('#userErr').textContent = '';
+    const fd = Object.fromEntries(new FormData($('#userForm')).entries());
+    fd.active = $('#uActive').checked;
+    $('#userSave').disabled = true;
+    try {
+      await post(userEditing ? `/api/admin/users/${userEditing}` : '/api/admin/users', fd);
+      $('#userDlg').close();
+      await loadUsers();
+      if (!userEditing || fd.password) {
+        // show the login once so it can be sent to the person (it can't be read back later)
+        const ph = fd.phone ? fd.phone.replace(/\D/g, '').slice(-10) : '';
+        openMsg({ title: userEditing ? 'Password changed ✓' : 'Login created ✓', sub: ph ? `Send it to ${fd.name} · +91 ${ph}` : 'Copy it and send it to the person', phone: ph,
+          text: [`Hi ${fd.name.split(' ')[0]} 👋`, 'Your login for the Dr. Sarwan Diagnostic Labs centre portal:', '', 'https://drsarwantests.com/centre/', `Username: ${fd.username}`, `Password: ${fd.password}`, '', 'Here you can see your bookings, mark samples collected with the vial no. and upload reports.'].join('\n') });
+      } else toast('Saved');
+    } catch (err) { $('#userErr').textContent = err.message; }
+    finally { $('#userSave').disabled = false; }
+  };
+  $('#userDel').onclick = async () => {
+    const u = USERS.find((x) => x.id === userEditing); if (!u) return;
+    if (!confirm(`Delete the login for ${u.name}?`)) return;
+    try { await api(`/api/admin/users/${u.id}`, { method: 'DELETE' }); $('#userDlg').close(); toast('Login deleted'); await loadUsers(); }
+    catch (err) { $('#userErr').textContent = err.message; }
+  };
+
   // ---------- one click handler for every action (list, calendar, panels, dialogs) ----------
   document.addEventListener('click', (e) => {
     const c = e.target.closest('[data-close]');
@@ -1142,6 +1318,15 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     else if (a === 'rp-del') deleteReportFile(Number(el.dataset.rid));
     else if (a === 'tests-edit') { const b = findB(id); if (b) openForm('tests', b); }
     else if (a === 'pkg-add') openPkg(null);
+    else if (a === 'assign-open') openAssign(id);
+    else if (a === 'centre-add') openCentre(null);
+    else if (a === 'centre-edit') openCentre(Number(el.dataset.cid));
+    else if (a === 'centre-num-add') addNumRow({}, true);
+    else if (a === 'centre-num-del') { el.closest('.num-row').remove(); }
+    else if (a === 'users-role') { userRole = el.dataset.role; renderUsersHead(); loadUsers().catch((x) => toast(x.message)); }
+    else if (a === 'user-add') openUser(null);
+    else if (a === 'user-edit') openUser(Number(el.dataset.uid));
+    else if (a === 'user-genpw') { $('#uPw').value = genPw(); }
     else if (a === 'pkg-edit') openPkg(Number(el.dataset.pid));
     else if (a === 'move') { const b = findB(id); if (b) openForm('move', b); }
     else if (a === 'add') openForm('add', { date: el.dataset.date || (tab === 'calendar' ? cal.anchor : ist()), slot: el.dataset.slot });

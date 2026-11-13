@@ -82,6 +82,9 @@
     if (!(data.city || '').trim() || !(data.state || '').trim()) { err.textContent = 'Please enter your city and state.'; $(data.city ? '#bk-state' : '#bk-city').focus(); return; }
     if (!/^[6-9]\d{9}$/.test((data.phone || '').replace(/\D/g, '').slice(-10))) { err.textContent = 'Please enter a valid 10-digit mobile number.'; $('#bk-phone').focus(); return; }
     if (!/^\d{6}$/.test(data.pincode || '')) { err.textContent = 'Please enter a valid 6-digit pincode.'; $('#bk-pin').focus(); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(data.dob || '') || data.dob > new Date().toISOString().slice(0, 10)) { err.textContent = "Please enter the patient's date of birth."; $('#bk-dob').focus(); return; }
+    if (!data.consent) { err.textContent = 'Please tick the box to get your booking updates and reports on WhatsApp.'; $('#bk-consent').focus(); return; }
+    data.consent = true;
     btn.disabled = true; btn.dataset.t = btn.textContent; btn.textContent = 'Reserving your slot…';
     try {
       state.form = data;

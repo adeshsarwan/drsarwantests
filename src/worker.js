@@ -138,6 +138,21 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS packages (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, tests TEXT, mrp INTEGER, price INTEGER NOT NULL,
     margin INTEGER, target TEXT, prep TEXT, active INTEGER NOT NULL DEFAULT 1, is_default INTEGER NOT NULL DEFAULT 0, sort INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  // collection centres and the WhatsApp numbers allowed to work for each centre
+  `CREATE TABLE IF NOT EXISTS centres (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, address TEXT, city TEXT, pincode TEXT,
+    contact_name TEXT, notes TEXT, active INTEGER NOT NULL DEFAULT 1, is_default INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS centre_numbers (id INTEGER PRIMARY KEY AUTOINCREMENT, centre_id INTEGER NOT NULL, phone TEXT NOT NULL, name TEXT,
+    sort INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS centre_numbers_phone ON centre_numbers(phone)`,
+  // logins: role 'centre' (username + password, belongs to a centre) or 'patient' (created automatically from bookings; logs in with phone + date of birth)
+  `CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, name TEXT NOT NULL, phone TEXT, username TEXT, pass_hash TEXT,
+    centre_id INTEGER, dob TEXT, active INTEGER NOT NULL DEFAULT 1, last_login_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS users_username ON users(username) WHERE username IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS users_by_phone ON users(role, phone)`,
+  `CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, role TEXT NOT NULL, phone TEXT, dob TEXT,
+    created_at TEXT NOT NULL, expires_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS login_fails (k TEXT NOT NULL, at TEXT NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS login_fails_k ON login_fails(k, at)`,
 ];
 
 // Tests / packages from DRSARWAN_TESTS_PACKAGES.xlsx — loaded once into an empty database.
@@ -246,7 +261,8 @@ async function seedPackages(env) {
 }
 let schemaReady = null;
 const NEW_COLS = { city: "TEXT", state: "TEXT", vial_no: "TEXT", collected_at: "TEXT", report_name: "TEXT", report_size: "INTEGER",
-  report_token: "TEXT", report_at: "TEXT", completed_at: "TEXT", fee_due: "INTEGER", fee_paid_at: "TEXT", missed_slot: "TEXT", package_id: "INTEGER", package_name: "TEXT" };
+  report_token: "TEXT", report_at: "TEXT", completed_at: "TEXT", fee_due: "INTEGER", fee_paid_at: "TEXT", missed_slot: "TEXT", package_id: "INTEGER", package_name: "TEXT",
+  centre_id: "INTEGER", patient_id: "INTEGER", consent_at: "TEXT" };
 function ensureSchema(env) {
   if (!schemaReady) {
     schemaReady = (async () => {
@@ -264,6 +280,7 @@ function ensureSchema(env) {
       }
       await seedPackages(env);
       await migrateTestsAndReports(env);
+      await seedAccounts(env);
     })().catch((e) => { schemaReady = null; throw e; });
   }
   return schemaReady;
@@ -351,6 +368,9 @@ async function createBooking(env, req) {
   if (city.length < 2) return bad("Please enter your city / town.");
   if (state.length < 2) return bad("Please enter your state.");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !isBookable(date, slot)) return bad("That slot is no longer available. Please pick another.", 409);
+  // date of birth: used by the patient to open their reports (phone + DOB). Older cached pages may not send it.
+  const dob = b.dob ? cleanDob(b.dob) : null;
+  if (b.dob && !dob) return bad("Please enter a valid date of birth.");
 
   await expireHolds(env);
   const room = await slotRoom(env, date, slot, city);
@@ -371,6 +391,7 @@ async function createBooking(env, req) {
     if (/UNIQUE/i.test(String(e))) return bad("Sorry, someone just booked that slot. Please pick another.", 409);
     throw e;
   }
+  await linkPatient(env, id, name, phone, dob, b.consent === true ? now : null);
   return json({ id, token, date, dateLabel: prettyDate(date), slot, slotLabel: slotLabel(slot), amount: price, testName: pkg ? pkg.name : "", expiresAt: expires,
     upiId: env.UPI_ID || "", upiName: env.UPI_NAME || "Dr. Sarwan Diagnostic Labs", upiQr: env.UPI_QR_STRING || "" }, 201);
 }
@@ -471,6 +492,7 @@ async function adminList(env, url) {
   const { results } = await env.DB.prepare(
     `SELECT id, date, slot, name, phone, address, pincode, city, state, cycle, notes, amount, status, utr, source, created_at, paid_at, updated_at,
        package_id, package_name, vial_no, collected_at, report_name, report_size, report_token, report_at, completed_at, fee_due, fee_paid_at, missed_slot,
+       centre_id, patient_id, consent_at, (SELECT dob FROM users u WHERE u.id = bookings.patient_id) AS dob,
        EXISTS(SELECT 1 FROM payment_proofs p WHERE p.booking_id = bookings.id) AS has_proof,
        (SELECT group_concat(kind || '@' || at, ',') FROM msg_log l WHERE l.booking_id = bookings.id) AS msgs
      FROM bookings WHERE date BETWEEN ?1 AND ?2 ${includeInactive ? "" : "AND status NOT IN ('expired')"}
@@ -499,6 +521,8 @@ async function adminCreate(env, req) {
   if (address.length < 4) return bad("Enter the collection address.");
   if (!/^\d{6}$/.test(pincode)) return bad("Enter a valid 6-digit pincode.");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !SLOTS.includes(slot)) return bad("Pick a date and slot.");
+  const dob = b.dob ? cleanDob(b.dob) : null;
+  if (b.dob && !dob) return bad("Enter a valid date of birth.");
   const pkgs = await pickPackages(env, b);
   if (pkgs.err) return bad(pkgs.err);
   const pkg = pkgs[0];
@@ -520,6 +544,7 @@ async function adminCreate(env, req) {
     if (/UNIQUE/i.test(String(e))) return bad("That slot already has a booking.", 409);
     throw e;
   }
+  await linkPatient(env, id, name, phone, dob, null);
   return json({ ok: true, id }, 201);
 }
 
@@ -844,6 +869,372 @@ async function adminCsv(env, url) {
     "content-disposition": `attachment; filename="bookings_${from}_to_${to}.csv"`, "cache-control": "no-store" } });
 }
 
+// =====================================================================
+// ---- collection centres, users, logins (centre portal + patient portal) ----
+// =====================================================================
+const PAID_STATES = ["confirmed", "collected", "report_ready", "completed", "no_show"]; // what a centre gets to see
+const CENTRE_SESSION_DAYS = 30, PATIENT_SESSION_HOURS = 12;
+
+function cleanDob(v) {
+  const s = String(v ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const d = new Date(s + "T00:00:00Z");
+  if (isNaN(d) || d.toISOString().slice(0, 10) !== s) return null;
+  if (s < "1900-01-01" || s > istParts().date) return null;
+  return s;
+}
+
+// One-time setup: a temporary centre with the current centre number, given all existing paid bookings;
+// and a patient user for every (phone, name) already in the bookings. New bookings link themselves (linkPatient).
+async function seedAccounts(env) {
+  const now = isoNow();
+  const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM centres").first();
+  if (!n || !n.n) {
+    const phone = normPhone(env.CENTER_WHATSAPP || "8368143677") || "8368143677";
+    await env.DB.prepare("INSERT INTO centres (name, address, notes, active, is_default, created_at, updated_at) VALUES (?1, '', ?2, 1, 1, ?3, ?3)")
+      .bind("Main collection centre (temporary)", "Created automatically from the old centre number. Rename it and add the real details.", now).run();
+    const c = await env.DB.prepare("SELECT id FROM centres ORDER BY id LIMIT 1").first();
+    await env.DB.prepare("INSERT OR IGNORE INTO centre_numbers (centre_id, phone, name, sort, created_at) VALUES (?1, ?2, 'Main number', 0, ?3)").bind(c.id, phone, now).run();
+    await env.DB.prepare(`UPDATE bookings SET centre_id=?1 WHERE centre_id IS NULL AND status IN (${PAID_STATES.map((_, i) => "?" + (i + 2)).join(",")})`)
+      .bind(c.id, ...PAID_STATES).run();
+  }
+  await env.DB.prepare(`INSERT INTO users (role, name, phone, active, created_at, updated_at)
+    SELECT 'patient', MAX(b.name), b.phone, 1, MIN(b.created_at), ?1 FROM bookings b
+    WHERE b.patient_id IS NULL AND b.status != 'blocked' AND length(b.phone) = 10
+      AND NOT EXISTS (SELECT 1 FROM users u WHERE u.role='patient' AND u.phone=b.phone AND lower(u.name)=lower(b.name))
+    GROUP BY b.phone, lower(b.name)`).bind(now).run();
+  await env.DB.prepare(`UPDATE bookings SET patient_id = (SELECT u.id FROM users u WHERE u.role='patient' AND u.phone=bookings.phone AND lower(u.name)=lower(bookings.name) ORDER BY u.id LIMIT 1)
+    WHERE patient_id IS NULL AND status != 'blocked'`).run();
+}
+
+// Find or create the patient user for this booking (same phone + same name = same patient; family members share a phone).
+async function linkPatient(env, bookingId, name, phone, dob, consentAt) {
+  const now = isoNow();
+  let u = await env.DB.prepare("SELECT id, dob FROM users WHERE role='patient' AND phone=?1 AND lower(name)=lower(?2) ORDER BY id LIMIT 1").bind(phone, name).first();
+  if (!u) {
+    await env.DB.prepare("INSERT INTO users (role, name, phone, dob, active, created_at, updated_at) VALUES ('patient', ?1, ?2, ?3, 1, ?4, ?4)").bind(name, phone, dob, now).run();
+    u = await env.DB.prepare("SELECT id, dob FROM users WHERE role='patient' AND phone=?1 AND lower(name)=lower(?2) ORDER BY id DESC LIMIT 1").bind(phone, name).first();
+  } else if (dob && u.dob !== dob) {
+    await env.DB.prepare("UPDATE users SET dob=?1, updated_at=?2 WHERE id=?3").bind(dob, now, u.id).run();
+  }
+  await env.DB.prepare("UPDATE bookings SET patient_id=?1, consent_at=COALESCE(consent_at, ?2) WHERE id=?3").bind(u.id, consentAt, bookingId).run();
+}
+
+// ---- passwords (PBKDF2-SHA256) and session tokens (only a SHA-256 of the token is stored) ----
+const hex = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, "0")).join("");
+const unhex = (s) => new Uint8Array(String(s).match(/../g).map((h) => parseInt(h, 16)));
+const PBKDF2_ITER = 100000; // the most Workers allow
+async function pbkdf2(pw, salt, iter) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw), "PBKDF2", false, ["deriveBits"]);
+  return hex(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: iter }, key, 256));
+}
+async function hashPassword(pw) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  return `pbkdf2$${PBKDF2_ITER}$${hex(salt)}$${await pbkdf2(pw, salt, PBKDF2_ITER)}`;
+}
+async function verifyPassword(pw, stored) {
+  const [alg, iter, salt, want] = String(stored || "").split("$");
+  if (alg !== "pbkdf2" || !salt || !want) return false;
+  return safeEqual(await pbkdf2(pw, unhex(salt), parseInt(iter, 10)), want);
+}
+const sha256 = async (s) => hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)));
+
+// ---- brute-force protection: 8 failed tries per account (or 30 per IP) in 15 minutes ----
+async function loginBlocked(env, keys) {
+  const since = new Date(Date.now() - 15 * 60000).toISOString();
+  await env.DB.prepare("DELETE FROM login_fails WHERE at < ?1").bind(since).run();
+  for (const [k, max] of keys) {
+    const r = await env.DB.prepare("SELECT COUNT(*) AS n FROM login_fails WHERE k=?1 AND at >= ?2").bind(k, since).first();
+    if (r && r.n >= max) return true;
+  }
+  return false;
+}
+async function loginFailed(env, keys) {
+  const now = isoNow();
+  await env.DB.batch(keys.map(([k]) => env.DB.prepare("INSERT INTO login_fails (k, at) VALUES (?1, ?2)").bind(k, now)));
+}
+const ipOf = (req) => req.headers.get("cf-connecting-ip") || "local";
+
+async function newSession(env, user, ms, extra = {}) {
+  const token = randId(40, "abcdefghijklmnopqrstuvwxyz0123456789"), now = isoNow();
+  await env.DB.prepare("DELETE FROM sessions WHERE expires_at < ?1").bind(now).run();
+  await env.DB.prepare("INSERT INTO sessions (token_hash, user_id, role, phone, dob, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)")
+    .bind(await sha256(token), user.id, user.role, extra.phone || null, extra.dob || null, now, new Date(Date.now() + ms).toISOString()).run();
+  await env.DB.prepare("UPDATE users SET last_login_at=?1 WHERE id=?2").bind(now, user.id).run();
+  return token;
+}
+async function getSession(env, req, role) {
+  const token = String(req.headers.get("x-session") || "").trim();
+  if (!/^[a-z0-9]{40}$/.test(token)) return null;
+  const s = await env.DB.prepare(`SELECT s.token_hash, s.phone AS s_phone, s.dob AS s_dob, u.* FROM sessions s JOIN users u ON u.id = s.user_id
+    WHERE s.token_hash=?1 AND s.expires_at > ?2 AND s.role=?3 AND u.active=1`).bind(await sha256(token), isoNow(), role).first();
+  return s || null;
+}
+async function logoutSession(env, req) {
+  const token = String(req.headers.get("x-session") || "").trim();
+  if (token) await env.DB.prepare("DELETE FROM sessions WHERE token_hash=?1").bind(await sha256(token)).run();
+  return json({ ok: true });
+}
+
+// ---- admin: collection centres ----
+async function centresWithNumbers(env) {
+  const [{ results: cs }, { results: nums }, { results: counts }] = await Promise.all([
+    env.DB.prepare("SELECT * FROM centres ORDER BY active DESC, name").all(),
+    env.DB.prepare("SELECT id, centre_id, phone, name FROM centre_numbers ORDER BY centre_id, sort, id").all(),
+    env.DB.prepare(`SELECT c.id,
+        (SELECT COUNT(*) FROM bookings b WHERE b.centre_id=c.id AND b.status IN ('confirmed','collected','report_ready')) AS open_jobs,
+        (SELECT COUNT(*) FROM bookings b WHERE b.centre_id=c.id) AS all_jobs,
+        (SELECT COUNT(*) FROM users u WHERE u.centre_id=c.id AND u.role='centre') AS users
+      FROM centres c`).all(),
+  ]);
+  return cs.map((c) => ({ ...c, numbers: nums.filter((n) => n.centre_id === c.id), ...(counts.find((x) => x.id === c.id) || {}) }));
+}
+async function adminCentres(env) { return json({ centres: await centresWithNumbers(env) }); }
+
+function readCentre(b) {
+  const name = clean(b.name, 120);
+  if (name.length < 2) return { err: "Enter the centre's name." };
+  const pin = clean(b.pincode, 6);
+  if (pin && !/^\d{6}$/.test(pin)) return { err: "Pincode must be 6 digits." };
+  const numbers = [], seen = new Set();
+  for (const n of Array.isArray(b.numbers) ? b.numbers : []) {
+    const raw = clean(n && n.phone, 20);
+    if (!raw) continue;
+    const phone = normPhone(raw);
+    if (!phone) return { err: `${raw} is not a valid 10-digit mobile number.` };
+    if (seen.has(phone)) return { err: `${phone} is listed twice.` };
+    seen.add(phone);
+    numbers.push({ phone, name: clean(n.name, 60) });
+  }
+  return { name, address: clean(b.address, 300), city: clean(b.city, 60), pincode: pin, contact_name: clean(b.contact_name, 80),
+    notes: clean(b.notes, 500), active: b.active === false || b.active === 0 || b.active === "0" ? 0 : 1, numbers };
+}
+async function adminSaveCentre(env, req, id) {
+  const c = readCentre(await req.json().catch(() => ({})));
+  if (c.err) return bad(c.err);
+  if (c.numbers.length) {
+    const { results: taken } = await env.DB.prepare(`SELECT n.phone, c.name FROM centre_numbers n JOIN centres c ON c.id = n.centre_id
+      WHERE n.phone IN (${c.numbers.map((_, i) => "?" + (i + 2)).join(",")}) AND n.centre_id != ?1`).bind(id || 0, ...c.numbers.map((n) => n.phone)).all();
+    if (taken.length) return bad(`${taken[0].phone} is already registered under ${taken[0].name}.`, 409);
+  }
+  const now = isoNow();
+  if (id) {
+    const cur = await env.DB.prepare("SELECT id FROM centres WHERE id=?1").bind(id).first();
+    if (!cur) return bad("Centre not found", 404);
+    await env.DB.prepare("UPDATE centres SET name=?1, address=?2, city=?3, pincode=?4, contact_name=?5, notes=?6, active=?7, updated_at=?8 WHERE id=?9")
+      .bind(c.name, c.address, c.city, c.pincode, c.contact_name, c.notes, c.active, now, id).run();
+  } else {
+    const r = await env.DB.prepare("INSERT INTO centres (name, address, city, pincode, contact_name, notes, active, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)")
+      .bind(c.name, c.address, c.city, c.pincode, c.contact_name, c.notes, c.active, now).run();
+    id = r.meta.last_row_id;
+  }
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM centre_numbers WHERE centre_id=?1").bind(id),
+    ...c.numbers.map((n, i) => env.DB.prepare("INSERT INTO centre_numbers (centre_id, phone, name, sort, created_at) VALUES (?1, ?2, ?3, ?4, ?5)").bind(id, n.phone, n.name, i, now)),
+  ]);
+  return json({ ok: true, id });
+}
+async function adminDeleteCentre(env, id) {
+  const c = (await centresWithNumbers(env)).find((x) => x.id === id);
+  if (!c) return bad("Centre not found", 404);
+  if (c.all_jobs) return bad(`${c.all_jobs} booking(s) were handled by this centre, so it can't be deleted. Untick "Active" to hide it instead.`, 409);
+  if (c.users) return bad("Delete or move this centre's logins (Users tab) first.", 409);
+  await env.DB.batch([env.DB.prepare("DELETE FROM centre_numbers WHERE centre_id=?1").bind(id), env.DB.prepare("DELETE FROM centres WHERE id=?1").bind(id)]);
+  return json({ ok: true });
+}
+// Operator picks which centre does this booking (null = not assigned yet).
+async function adminAssignCentre(env, req, id) {
+  const b = await req.json().catch(() => ({}));
+  const cid = b.centre_id === null || b.centre_id === "" ? null : parseInt(b.centre_id, 10);
+  if (cid !== null) {
+    const c = await env.DB.prepare("SELECT id, active FROM centres WHERE id=?1").bind(cid || 0).first();
+    if (!c) return bad("Centre not found", 404);
+    if (!c.active) return bad("That centre is switched off. Turn it on in the Centres tab first.", 409);
+  }
+  const r = await env.DB.prepare("UPDATE bookings SET centre_id=?1, updated_at=?2 WHERE id=?3 AND status != 'blocked'").bind(cid, isoNow(), id).run();
+  if (!r.meta.changes) return bad("Booking not found", 404);
+  return json({ ok: true });
+}
+
+// ---- admin: users ----
+async function adminUsers(env, url) {
+  const role = url.searchParams.get("role") === "patient" ? "patient" : "centre";
+  const q = clean(url.searchParams.get("q"), 60).toLowerCase();
+  if (role === "centre") {
+    const { results } = await env.DB.prepare(`SELECT u.id, u.role, u.name, u.phone, u.username, u.centre_id, u.active, u.last_login_at, u.created_at, c.name AS centre_name
+      FROM users u LEFT JOIN centres c ON c.id = u.centre_id WHERE u.role='centre' ORDER BY u.active DESC, c.name, u.name`).all();
+    return json({ users: results });
+  }
+  const like = "%" + q.replace(/[%_]/g, "") + "%";
+  const { results } = await env.DB.prepare(`SELECT u.id, u.role, u.name, u.phone, u.dob, u.active, u.last_login_at, u.created_at,
+      COUNT(b.id) AS bookings, MAX(b.date) AS last_date,
+      (SELECT COUNT(*) FROM report_files f JOIN bookings x ON x.id = f.booking_id WHERE x.patient_id = u.id AND f.sent_at IS NOT NULL) AS reports
+    FROM users u LEFT JOIN bookings b ON b.patient_id = u.id AND b.status NOT IN ('blocked','expired')
+    WHERE u.role='patient' AND (?1 = '%%' OR lower(u.name) LIKE ?1 OR u.phone LIKE ?1)
+    GROUP BY u.id ORDER BY MAX(COALESCE(b.created_at, u.created_at)) DESC LIMIT 1000`).bind(like).all();
+  return json({ users: results });
+}
+async function adminSaveUser(env, req, id) {
+  const b = await req.json().catch(() => ({}));
+  const now = isoNow();
+  const cur = id ? await env.DB.prepare("SELECT * FROM users WHERE id=?1").bind(id).first() : null;
+  if (id && !cur) return bad("User not found", 404);
+  const role = cur ? cur.role : "centre"; // patients are only created from bookings
+  const name = clean(b.name, 80);
+  if (name.length < 2) return bad("Enter the name.");
+  const active = b.active === false || b.active === 0 || b.active === "0" ? 0 : 1;
+  const phone = b.phone ? normPhone(b.phone) : null;
+  if (b.phone && !phone) return bad("Enter a valid 10-digit mobile number.");
+  if (role === "patient") {
+    const dob = b.dob ? cleanDob(b.dob) : null;
+    if (b.dob && !dob) return bad("Enter a valid date of birth.");
+    await env.DB.prepare("UPDATE users SET name=?1, dob=?2, active=?3, updated_at=?4 WHERE id=?5").bind(name, dob, active, now, id).run();
+    return json({ ok: true, id });
+  }
+  const username = clean(b.username, 40).toLowerCase();
+  if (!/^[a-z0-9._-]{3,40}$/.test(username)) return bad("Username: 3–40 letters, numbers, dot, dash or underscore (no spaces).");
+  const centreId = parseInt(b.centre_id, 10);
+  if (!(await env.DB.prepare("SELECT 1 FROM centres WHERE id=?1").bind(centreId || 0).first())) return bad("Pick the user's collection centre.");
+  const pw = String(b.password || "");
+  if (!cur && pw.length < 8) return bad("Set a password of at least 8 characters.");
+  if (pw && pw.length < 8) return bad("The new password must be at least 8 characters.");
+  const dup = await env.DB.prepare("SELECT id FROM users WHERE username=?1 AND id != ?2").bind(username, id || 0).first();
+  if (dup) return bad("That username is already taken.", 409);
+  const hash = pw ? await hashPassword(pw) : null;
+  if (cur) {
+    await env.DB.prepare("UPDATE users SET name=?1, phone=?2, username=?3, centre_id=?4, active=?5, pass_hash=COALESCE(?6, pass_hash), updated_at=?7 WHERE id=?8")
+      .bind(name, phone, username, centreId, active, hash, now, id).run();
+    if (hash || !active) await env.DB.prepare("DELETE FROM sessions WHERE user_id=?1").bind(id).run(); // sign them out everywhere
+    return json({ ok: true, id });
+  }
+  const r = await env.DB.prepare("INSERT INTO users (role, name, phone, username, pass_hash, centre_id, active, created_at, updated_at) VALUES ('centre', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)")
+    .bind(name, phone, username, hash, centreId, active, now).run();
+  return json({ ok: true, id: r.meta.last_row_id }, 201);
+}
+async function adminDeleteUser(env, id) {
+  const u = await env.DB.prepare("SELECT role FROM users WHERE id=?1").bind(id).first();
+  if (!u) return bad("User not found", 404);
+  if (u.role === "patient") return bad("Patients come from bookings and can't be deleted. Untick “Active” to block their portal login.", 409);
+  await env.DB.batch([env.DB.prepare("DELETE FROM sessions WHERE user_id=?1").bind(id), env.DB.prepare("DELETE FROM users WHERE id=?1").bind(id)]);
+  return json({ ok: true });
+}
+
+// ---- centre portal ----
+async function centreLogin(env, req) {
+  const b = await req.json().catch(() => ({}));
+  const username = clean(b.username, 40).toLowerCase(), pw = String(b.password || "");
+  const keys = [["c:" + username, 8], ["ip:" + ipOf(req), 30]];
+  if (await loginBlocked(env, keys)) return bad("Too many wrong tries. Please wait 15 minutes.", 429);
+  const u = await env.DB.prepare("SELECT * FROM users WHERE role='centre' AND username=?1 AND active=1").bind(username).first();
+  if (!u || !(await verifyPassword(pw, u.pass_hash))) { await loginFailed(env, keys); return bad("Wrong username or password.", 401); }
+  const c = await env.DB.prepare("SELECT id, name, active FROM centres WHERE id=?1").bind(u.centre_id).first();
+  if (!c || !c.active) return bad("Your centre is not active. Please contact Dr. Sarwan Diagnostic Labs.", 403);
+  const token = await newSession(env, u, CENTRE_SESSION_DAYS * 86400000);
+  return json({ token, user: { name: u.name, username: u.username }, centre: { id: c.id, name: c.name } });
+}
+async function centreBookingRow(env, user, id) {
+  return await env.DB.prepare(`SELECT * FROM bookings WHERE id=?1 AND centre_id=?2 AND status IN (${PAID_STATES.map((_, i) => "?" + (i + 3)).join(",")})`)
+    .bind(id, user.centre_id, ...PAID_STATES).first();
+}
+async function centreBookings(env, user, url) {
+  const today = istParts().date;
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get("from") || "") ? url.searchParams.get("from") : addDays(today, -30);
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get("to") || "") ? url.searchParams.get("to") : addDays(today, BOOK_DAYS_AHEAD);
+  const c = await env.DB.prepare("SELECT id, name FROM centres WHERE id=?1").bind(user.centre_id).first();
+  const { results } = await env.DB.prepare(`SELECT id, date, slot, name, phone, address, pincode, city, state, cycle, notes, status, vial_no, collected_at, package_name
+    FROM bookings WHERE centre_id=?1 AND date BETWEEN ?2 AND ?3 AND status IN (${PAID_STATES.map((_, i) => "?" + (i + 4)).join(",")}) ORDER BY date, slot`)
+    .bind(user.centre_id, from, to, ...PAID_STATES).all();
+  const ids = results.map((r) => r.id);
+  let tests = [], files = [];
+  if (ids.length) {
+    const ph = ids.map((_, i) => "?" + (i + 1)).join(",");
+    [{ results: tests }, { results: files }] = await Promise.all([
+      env.DB.prepare(`SELECT booking_id, name FROM booking_tests WHERE booking_id IN (${ph}) ORDER BY id`).bind(...ids).all(),
+      env.DB.prepare(`SELECT id, booking_id, name, size, created_at FROM report_files WHERE booking_id IN (${ph}) ORDER BY id`).bind(...ids).all(),
+    ]);
+  }
+  for (const r of results) {
+    r.slot_label = slotLabel(r.slot);
+    r.tests = tests.filter((t) => t.booking_id === r.id).map((t) => t.name);
+    r.reports = files.filter((f) => f.booking_id === r.id).map(({ booking_id, ...f }) => f);
+  }
+  return json({ centre: c, user: { name: user.name, username: user.username }, from, to, bookings: results });
+}
+async function centreCollected(env, user, req, id) {
+  const row = await centreBookingRow(env, user, id);
+  if (!row) return bad("Booking not found", 404);
+  const b = await req.json().catch(() => ({}));
+  const vial = clean(b.vial_no, 40).toUpperCase();
+  if (!vial) return bad("Enter the vial number written on the sample.");
+  const dup = await env.DB.prepare("SELECT id FROM bookings WHERE vial_no=?1 AND id!=?2 LIMIT 1").bind(vial, id).first();
+  if (dup) return bad(`Vial ${vial} is already used for another booking. Check the number.`, 409);
+  const now = isoNow();
+  if (row.status === "confirmed") {
+    await env.DB.prepare("UPDATE bookings SET status='collected', vial_no=?1, collected_at=COALESCE(collected_at, ?2), updated_at=?2 WHERE id=?3 AND status='confirmed'").bind(vial, now, id).run();
+  } else if (["collected", "report_ready", "completed"].includes(row.status)) {
+    await env.DB.prepare("UPDATE bookings SET vial_no=?1, updated_at=?2 WHERE id=?3").bind(vial, now, id).run(); // correcting the vial no.
+  } else return bad("This booking can't be marked collected.", 409);
+  return json({ ok: true });
+}
+async function centreUpload(env, user, req, id) {
+  if (!(await centreBookingRow(env, user, id))) return bad("Booking not found", 404);
+  const r = await adminUploadReport(env, req, id); // same rules and same workflow step as the admin upload
+  if (!r.ok) return r;
+  const j = await r.json();
+  return json({ ok: true, id: j.id }); // the centre doesn't get the patient's download link
+}
+async function centreReportFile(env, user, rid) {
+  const f = await env.DB.prepare("SELECT f.*, b.name AS patient FROM report_files f JOIN bookings b ON b.id = f.booking_id WHERE f.id=?1 AND b.centre_id=?2").bind(rid, user.centre_id).first();
+  return f ? fileResponse(env, f, f.patient) : bad("Report not found", 404);
+}
+
+// ---- patient portal (phone + date of birth) ----
+const PATIENT_STATUS = {
+  pending: "Waiting for payment", payment_submitted: "Payment being checked", confirmed: "Booked – collection scheduled",
+  collected: "Sample collected – report in progress", report_ready: "Report in progress", completed: "Report ready",
+  no_show: "Missed visit – please contact us", cancelled: "Cancelled", expired: "Not paid (expired)",
+};
+async function patientLogin(env, req) {
+  const b = await req.json().catch(() => ({}));
+  const phone = normPhone(b.phone), dob = cleanDob(b.dob);
+  if (!phone) return bad("Enter your 10-digit mobile number.");
+  if (!dob) return bad("Enter your date of birth.");
+  const keys = [["p:" + phone, 8], ["ip:" + ipOf(req), 30]];
+  if (await loginBlocked(env, keys)) return bad("Too many wrong tries. Please wait 15 minutes or WhatsApp us on 8368143677.", 429);
+  const u = await env.DB.prepare("SELECT * FROM users WHERE role='patient' AND phone=?1 AND dob=?2 AND active=1 ORDER BY id LIMIT 1").bind(phone, dob).first();
+  if (!u) { await loginFailed(env, keys); return bad("We couldn't find reports for this mobile number and date of birth. Check both, or WhatsApp us on 8368143677.", 401); }
+  const token = await newSession(env, u, PATIENT_SESSION_HOURS * 3600000, { phone, dob });
+  return json({ token, name: u.name });
+}
+// every patient user with this phone + DOB (a patient can appear under slightly different names)
+const PATIENT_IDS = "SELECT id FROM users WHERE role='patient' AND active=1 AND phone=?1 AND dob=?2";
+async function patientBookings(env, s) {
+  const { results } = await env.DB.prepare(`SELECT id, date, slot, name, status, package_name, vial_no FROM bookings
+    WHERE patient_id IN (${PATIENT_IDS}) AND status NOT IN ('blocked','expired') ORDER BY date DESC, slot DESC LIMIT 100`).bind(s.s_phone, s.s_dob).all();
+  const ids = results.map((r) => r.id);
+  let tests = [], files = [];
+  if (ids.length) {
+    const ph = ids.map((_, i) => "?" + (i + 1)).join(",");
+    [{ results: tests }, { results: files }] = await Promise.all([
+      env.DB.prepare(`SELECT booking_id, name FROM booking_tests WHERE booking_id IN (${ph}) ORDER BY id`).bind(...ids).all(),
+      // a report shows here once the lab has released (sent) it – the same moment the WhatsApp step is done
+      env.DB.prepare(`SELECT id, booking_id, name, size, sent_at FROM report_files WHERE booking_id IN (${ph}) AND sent_at IS NOT NULL ORDER BY id`).bind(...ids).all(),
+    ]);
+  }
+  for (const r of results) {
+    r.slot_label = slotLabel(r.slot);
+    r.status_label = PATIENT_STATUS[r.status] || r.status;
+    r.tests = tests.filter((t) => t.booking_id === r.id).map((t) => t.name);
+    r.reports = files.filter((f) => f.booking_id === r.id).map(({ booking_id, ...f }) => f);
+  }
+  return json({ name: s.name, bookings: results });
+}
+async function patientReportFile(env, s, rid) {
+  const f = await env.DB.prepare(`SELECT f.*, b.name AS patient FROM report_files f JOIN bookings b ON b.id = f.booking_id
+    WHERE f.id=?3 AND f.sent_at IS NOT NULL AND b.status NOT IN ('cancelled','blocked') AND b.patient_id IN (${PATIENT_IDS})`).bind(s.s_phone, s.s_dob, rid).first();
+  return f ? fileResponse(env, f, f.patient) : bad("Report not found", 404);
+}
+
 // ---- router ----
 export default {
   async fetch(req, env, ctx) {
@@ -896,6 +1287,47 @@ export default {
           if (m && req.method === "POST") return adminSent(env, req, m[1]);
           m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/status$/);
           if (m && req.method === "POST") return adminSetStatus(env, req, m[1]);
+          m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/centre$/);
+          if (m && req.method === "POST") return adminAssignCentre(env, req, m[1]);
+          if (p === "/api/admin/centres" && req.method === "GET") return adminCentres(env);
+          if (p === "/api/admin/centres" && req.method === "POST") return adminSaveCentre(env, req, null);
+          m = p.match(/^\/api\/admin\/centres\/(\d{1,9})$/);
+          if (m && req.method === "POST") return adminSaveCentre(env, req, Number(m[1]));
+          if (m && req.method === "DELETE") return adminDeleteCentre(env, Number(m[1]));
+          if (p === "/api/admin/users" && req.method === "GET") return adminUsers(env, url);
+          if (p === "/api/admin/users" && req.method === "POST") return adminSaveUser(env, req, null);
+          m = p.match(/^\/api\/admin\/users\/(\d{1,9})$/);
+          if (m && req.method === "POST") return adminSaveUser(env, req, Number(m[1]));
+          if (m && req.method === "DELETE") return adminDeleteUser(env, Number(m[1]));
+          return bad("Not found", 404);
+        }
+
+        // collection-centre portal (username + password)
+        if (p === "/api/centre/login" && req.method === "POST") return centreLogin(env, req);
+        if (p.startsWith("/api/centre/")) {
+          if (p === "/api/centre/logout" && req.method === "POST") return logoutSession(env, req);
+          const user = await getSession(env, req, "centre");
+          if (!user) return bad("Please sign in again.", 401);
+          if (p === "/api/centre/bookings" && req.method === "GET") return centreBookings(env, user, url);
+          m = p.match(/^\/api\/centre\/bookings\/(DSL-[A-Z0-9]{6})\/collected$/);
+          if (m && req.method === "POST") return centreCollected(env, user, req, m[1]);
+          m = p.match(/^\/api\/centre\/bookings\/(DSL-[A-Z0-9]{6})\/reports$/);
+          if (m && req.method === "POST") return centreUpload(env, user, req, m[1]);
+          m = p.match(/^\/api\/centre\/reports\/(\d{1,9})$/);
+          if (m && req.method === "GET") return centreReportFile(env, user, Number(m[1]));
+          return bad("Not found", 404);
+        }
+
+        // patient portal (mobile number + date of birth)
+        if (p === "/api/patient/login" && req.method === "POST") return patientLogin(env, req);
+        if (p.startsWith("/api/patient/")) {
+          if (p === "/api/patient/logout" && req.method === "POST") return logoutSession(env, req);
+          const s = await getSession(env, req, "patient");
+          if (!s) return bad("Please sign in again.", 401);
+          if (p === "/api/patient/bookings" && req.method === "GET") return patientBookings(env, s);
+          m = p.match(/^\/api\/patient\/reports\/(\d{1,9})$/);
+          if (m && req.method === "GET") return patientReportFile(env, s, Number(m[1]));
+          return bad("Not found", 404);
         }
         return bad("Not found", 404);
       }

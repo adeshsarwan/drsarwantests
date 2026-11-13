@@ -20,6 +20,25 @@ Landing page + home-collection booking system for Dr. Sarwan Diagnostic Labs
 
 Unpaid bookings never block a slot and are marked expired after 2 hours.
 
+## Collection centres, users and portals
+- **Centres tab** (`/admin`): add / edit collection centres – name, address, contact person and the **WhatsApp numbers**
+  of the people who work for the centre (these will be allowed to use the centre's WhatsApp menu; booking details go to the first number).
+  On first run a *Main collection centre (temporary)* is created with the old centre number (`CENTER_WHATSAPP`, default 8368143677)
+  and given all existing paid bookings – rename it and fill in the real details.
+- **Choosing the centre**: after the payment is confirmed, open a booking → *Collection centre* → **Choose**
+  (also a step in *All steps*). *Send to centre* then goes to that centre's first number.
+- **Users tab**:
+  - *Centre logins* – create a username + password for each person at a centre. The login message pops up ready to send on WhatsApp
+    (the password can't be seen again later; set a new one if it's lost).
+  - *Patients* – created automatically from bookings (same mobile + same name = same patient). Add or fix the date of birth here
+    if a patient can't sign in. Untick *Active* to block a patient's portal access.
+- **Centre portal** – `drsarwantests.com/centre/`: the centre signs in with its username and password, sees only the bookings given to it,
+  marks a sample collected with the vial no. and uploads report PDFs. These are the same steps as in `/admin`.
+- **Patient portal** – `drsarwantests.com/reports/`: patients sign in with mobile number + date of birth and open their reports.
+  A report shows there once it's been sent (the *Reports sent to patient* step).
+- The website booking form now asks for the patient's **date of birth** and a **WhatsApp consent** tick.
+- Logins are protected against guessing: 8 wrong tries on one account (or 30 from one IP) lock it for 15 minutes.
+
 ## One-time Cloudflare setup
 1. **Create the database**: Cloudflare dashboard → Storage & Databases → D1 → Create →
    name `drsarwantests-bookings`. Copy its **Database ID** into `wrangler.jsonc`
