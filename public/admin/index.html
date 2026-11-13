@@ -139,6 +139,7 @@
 <div><h2 class="h2" style="margin:0">Collection centres</h2><p class="meta" style="margin:4px 0 0">Who collects samples and makes reports. <b>WhatsApp numbers</b> are the phones allowed to use the centre's WhatsApp menu; booking details go to the first number. Logins for the centre portal are in the <b>Users</b> tab.</p></div>
 <button class="btn sm" data-act="centre-add">+ Add centre</button>
 </div>
+<p class="meta" id="centreNote" style="margin:10px 0 0;background:#eef7f6;border-radius:10px;padding:8px 12px"></p>
 <div class="tbl-wrap"><table class="tbl">
 <thead><tr><th>Centre</th><th>Address</th><th>WhatsApp numbers</th><th class="num">Logins</th><th class="num">Open jobs</th><th>Status</th><th></th></tr></thead>
 <tbody id="centreBody"></tbody>
@@ -331,6 +332,7 @@
 <button type="button" class="btn ghost sm" data-act="centre-num-add" style="margin-top:8px;align-self:flex-start">+ Add number</button></div>
 <div class="fld wide"><label for="cNotes">Notes</label><input id="cNotes" name="notes" class="inp" autocomplete="off"></div>
 <label class="fld wide chk"><span><input type="checkbox" id="cActive" name="active" checked> <b>Active</b> – can be given new bookings</span></label>
+<label class="fld wide chk"><span><input type="checkbox" id="cDefault" name="is_default"> <b>Default</b> – paid bookings go here automatically</span></label>
 </div>
 <p class="err" id="centreErr" style="padding:0 18px;margin:0"></p>
 <div class="dlg-f"><button class="btn" id="centreSave" style="flex:1">Save centre</button><button type="button" class="btn warn" id="centreDel" hidden>Delete</button><button type="button" class="btn ghost" data-close="centreDlg">Cancel</button></div>

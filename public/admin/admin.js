@@ -1148,8 +1148,11 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     if (tab === 'centres') renderCentres();
   }
   function renderCentres() {
+    $('#centreNote').innerHTML = CENTRES.some((c) => c.is_default && c.active)
+      ? `New bookings go to <b>${esc(CENTRES.find((c) => c.is_default && c.active).name)}</b> automatically once the payment is approved. Change it on any booking with <b>Collection centre → Change</b>.`
+      : 'No default centre: after the payment is approved, choose the centre for each booking (or mark a centre as <b>Default</b> to do it automatically).';
     $('#centreBody').innerHTML = CENTRES.length ? CENTRES.map((c) => `<tr class="${c.active ? '' : 'off'}">
-<td><b>${esc(c.name)}</b>${c.contact_name ? `<small>${esc(c.contact_name)}</small>` : ''}</td>
+<td><b>${esc(c.name)}</b>${c.is_default ? ' <span class="badge web" title="New paid bookings go here automatically">Default</span>' : ''}${c.contact_name ? `<small>${esc(c.contact_name)}</small>` : ''}</td>
 <td class="addr">${esc([c.address, c.city, c.pincode].filter(Boolean).join(', ')) || '<span class="meta">—</span>'}</td>
 <td>${c.numbers.length ? c.numbers.map((n, i) => `<div style="white-space:nowrap">${esc(n.phone)}${n.name ? ` <span class="meta">${esc(n.name)}</span>` : ''}${i === 0 ? ' <span class="meta">· gets bookings</span>' : ''}</div>`).join('') : '<span class="meta">No number</span>'}</td>
 <td class="num">${c.users || 0}</td><td class="num">${c.open_jobs || 0}</td>
@@ -1173,6 +1176,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     $('#centreForm').reset(); $('#centreErr').textContent = ''; $('#cNums').innerHTML = '';
     $('#centreTitle').textContent = c ? `Edit ${c.name}` : 'Add centre';
     if (c) { $('#cName').value = c.name; $('#cContact').value = c.contact_name || ''; $('#cPin').value = c.pincode || ''; $('#cAddr').value = c.address || ''; $('#cCity').value = c.city || ''; $('#cNotes').value = c.notes || ''; $('#cActive').checked = !!c.active; }
+    $('#cDefault').checked = c ? !!c.is_default : !CENTRES.some((x) => x.is_default && x.active);
     (c && c.numbers.length ? c.numbers : [{}]).forEach((n) => addNumRow(n));
     $('#centreDel').hidden = !c;
     $('#centreDlg').showModal(); setTimeout(() => $('#cName').focus(), 50);
@@ -1181,6 +1185,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     e.preventDefault(); $('#centreErr').textContent = '';
     const fd = Object.fromEntries(new FormData($('#centreForm')).entries());
     fd.active = $('#cActive').checked;
+    fd.is_default = $('#cDefault').checked;
     fd.numbers = $$('#cNums .num-row').map((r) => ({ phone: r.querySelector('.n-phone').value.trim(), name: r.querySelector('.n-name').value.trim() })).filter((n) => n.phone);
     $('#centreSave').disabled = true;
     try {

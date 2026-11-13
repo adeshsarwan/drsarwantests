@@ -562,6 +562,7 @@ async function adminCreate(env, req) {
     throw e;
   }
   await linkPatient(env, id, name, phone, dob, null);
+  if (status === "confirmed") { await autoAssign(env, id); later(req, waEvent(env, "confirmed", id)); }
   return json({ ok: true, id }, 201);
 }
 
@@ -666,7 +667,10 @@ async function adminSetStatus(env, req, id) {
     if (/UNIQUE/i.test(String(e))) return bad("That slot is already taken by another booking.", 409);
     throw e;
   }
-  if (status === "confirmed" && row.status !== "confirmed") later(req, waEvent(env, "confirmed", id));
+  if (status === "confirmed" && row.status !== "confirmed") {
+    await autoAssign(env, id); // payment approved → the default centre gets it (if no centre was chosen yet)
+    later(req, waEvent(env, "confirmed", id));
+  }
   if (status === "collected" && row.status === "confirmed") later(req, waEvent(env, "collected", id));
   return json({ ok: true });
 }
@@ -1004,7 +1008,7 @@ async function logoutSession(env, req) {
 // ---- admin: collection centres ----
 async function centresWithNumbers(env) {
   const [{ results: cs }, { results: nums }, { results: counts }] = await Promise.all([
-    env.DB.prepare("SELECT * FROM centres ORDER BY active DESC, name").all(),
+    env.DB.prepare("SELECT * FROM centres ORDER BY active DESC, is_default DESC, name").all(),
     env.DB.prepare("SELECT id, centre_id, phone, name FROM centre_numbers ORDER BY centre_id, sort, id").all(),
     env.DB.prepare(`SELECT c.id,
         (SELECT COUNT(*) FROM bookings b WHERE b.centre_id=c.id AND b.status IN ('confirmed','collected','report_ready')) AS open_jobs,
@@ -1032,11 +1036,13 @@ function readCentre(b) {
     numbers.push({ phone, name: clean(n.name, 60) });
   }
   return { name, address: clean(b.address, 300), city: clean(b.city, 60), pincode: pin, contact_name: clean(b.contact_name, 80),
-    notes: clean(b.notes, 500), active: b.active === false || b.active === 0 || b.active === "0" ? 0 : 1, numbers };
+    notes: clean(b.notes, 500), active: b.active === false || b.active === 0 || b.active === "0" ? 0 : 1,
+    is_default: b.is_default === true || b.is_default === 1 || b.is_default === "1" || b.is_default === "on" ? 1 : 0, numbers };
 }
 async function adminSaveCentre(env, req, id) {
   const c = readCentre(await req.json().catch(() => ({})));
   if (c.err) return bad(c.err);
+  if (c.is_default && !c.active) return bad("A switched-off centre can't be the default. Tick “Active” or untick “Default”.");
   if (c.numbers.length) {
     const { results: taken } = await env.DB.prepare(`SELECT n.phone, c.name FROM centre_numbers n JOIN centres c ON c.id = n.centre_id
       WHERE n.phone IN (${c.numbers.map((_, i) => "?" + (i + 2)).join(",")}) AND n.centre_id != ?1`).bind(id || 0, ...c.numbers.map((n) => n.phone)).all();
@@ -1046,13 +1052,14 @@ async function adminSaveCentre(env, req, id) {
   if (id) {
     const cur = await env.DB.prepare("SELECT id FROM centres WHERE id=?1").bind(id).first();
     if (!cur) return bad("Centre not found", 404);
-    await env.DB.prepare("UPDATE centres SET name=?1, address=?2, city=?3, pincode=?4, contact_name=?5, notes=?6, active=?7, updated_at=?8 WHERE id=?9")
-      .bind(c.name, c.address, c.city, c.pincode, c.contact_name, c.notes, c.active, now, id).run();
+    await env.DB.prepare("UPDATE centres SET name=?1, address=?2, city=?3, pincode=?4, contact_name=?5, notes=?6, active=?7, is_default=?8, updated_at=?9 WHERE id=?10")
+      .bind(c.name, c.address, c.city, c.pincode, c.contact_name, c.notes, c.active, c.is_default, now, id).run();
   } else {
-    const r = await env.DB.prepare("INSERT INTO centres (name, address, city, pincode, contact_name, notes, active, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)")
-      .bind(c.name, c.address, c.city, c.pincode, c.contact_name, c.notes, c.active, now).run();
+    const r = await env.DB.prepare("INSERT INTO centres (name, address, city, pincode, contact_name, notes, active, is_default, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)")
+      .bind(c.name, c.address, c.city, c.pincode, c.contact_name, c.notes, c.active, c.is_default, now).run();
     id = r.meta.last_row_id;
   }
+  if (c.is_default) await env.DB.prepare("UPDATE centres SET is_default=0 WHERE id != ?1").bind(id).run(); // only one default
   await env.DB.batch([
     env.DB.prepare("DELETE FROM centre_numbers WHERE centre_id=?1").bind(id),
     ...c.numbers.map((n, i) => env.DB.prepare("INSERT INTO centre_numbers (centre_id, phone, name, sort, created_at) VALUES (?1, ?2, ?3, ?4, ?5)").bind(id, n.phone, n.name, i, now)),
@@ -1081,6 +1088,13 @@ async function adminAssignCentre(env, req, id) {
   await assignCentre(env, id, cid);
   if (cid && cid !== cur.centre_id) later(req, waEvent(env, "assigned", id));
   return json({ ok: true });
+}
+// a paid booking without a centre goes to the default centre (Centres tab → "Default"), if there is an active one
+async function autoAssign(env, id) {
+  const b = await env.DB.prepare("SELECT centre_id FROM bookings WHERE id=?1").bind(id).first();
+  if (!b || b.centre_id) return;
+  const c = await env.DB.prepare("SELECT id FROM centres WHERE is_default=1 AND active=1 ORDER BY id LIMIT 1").first();
+  if (c) await assignCentre(env, id, c.id);
 }
 async function assignCentre(env, id, cid) {
   // a new centre starts fresh: not yet accepted, no collector, booking details not yet sent to it
