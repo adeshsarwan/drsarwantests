@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>My reports · Dr. Sarwan Diagnostic Labs</title>
+<link rel="icon" href="/assets/logo.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800;900&family=Figtree:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/admin/admin.css">
+<style>
+.bk{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px;margin-top:12px}
+.bk-h{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start}
+.bk-when{font-family:Archivo,sans-serif;font-weight:800;font-size:16px}
+.bk-l{margin-top:6px;color:#3b4a68}
+.rep{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;border:1px solid var(--line2);border-radius:12px;padding:10px 12px;margin-top:10px;background:#f8fafc}
+.help{margin-top:18px;background:#fff;border-radius:16px;padding:14px 16px;color:#3b4a68;font-size:14px}
+</style>
+</head>
+<body>
+
+<div id="login" hidden>
+<img src="/assets/logo.png" alt="Dr. Sarwan Diagnostic Labs" style="height:44px">
+<h1 style="margin-top:14px">See your reports</h1>
+<p class="meta" style="margin:6px 0 0">Use the mobile number and date of birth given when you booked.</p>
+<form id="loginForm">
+<label for="ph" style="display:block;margin-top:14px;font-weight:600">Mobile number</label>
+<input id="ph" type="tel" inputmode="numeric" autocomplete="tel" placeholder="10-digit mobile" required>
+<label for="dob" style="display:block;margin-top:12px;font-weight:600">Date of birth</label>
+<input id="dob" type="date" required>
+<p class="err" id="loginErr"></p>
+<button class="btn" style="width:100%">Show my reports</button>
+<p class="meta" style="margin-top:12px">Trouble signing in? WhatsApp or call <a href="https://wa.me/918368143677">8368143677</a>.</p>
+</form>
+</div>
+
+<div id="app" hidden>
+<header class="top">
+<div class="top-l"><img src="/assets/logo.png" alt="Dr. Sarwan Diagnostic Labs" class="top-logo"></div>
+<div class="top-r"><button class="btn ghost sm" id="logout">Sign out</button></div>
+</header>
+<main class="wrap" style="padding:18px 16px 40px;max-width:680px">
+<h1 id="hello"></h1>
+<p class="meta" style="margin:6px 0 0">Your tests with Dr. Sarwan Diagnostic Labs. Reports appear here as soon as they're ready.</p>
+<div id="list"></div>
+<div class="help">Questions about a report? Please show it to your doctor. For anything else, WhatsApp or call us on <a href="https://wa.me/918368143677">8368143677</a>.</div>
+</main>
+</div>
+
+<div class="toast" id="toast" role="status"></div>
+<script src="/reports/reports.js"></script>
+</body>
+</html>

@@ -41,3 +41,13 @@ CREATE TABLE IF NOT EXISTS packages (id INTEGER PRIMARY KEY AUTOINCREMENT, name 
   margin INTEGER, target TEXT, active INTEGER NOT NULL DEFAULT 1, is_default INTEGER NOT NULL DEFAULT 0, sort INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 -- (The Worker creates / upgrades all of this automatically; this file is for reference.)
+-- Collection centres, logins and sessions (centre portal + patient portal). bookings also gets centre_id, patient_id, consent_at.
+CREATE TABLE IF NOT EXISTS centres (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, address TEXT, city TEXT, pincode TEXT,
+  contact_name TEXT, notes TEXT, active INTEGER NOT NULL DEFAULT 1, is_default INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS centre_numbers (id INTEGER PRIMARY KEY AUTOINCREMENT, centre_id INTEGER NOT NULL, phone TEXT NOT NULL, name TEXT, sort INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS centre_numbers_phone ON centre_numbers(phone);
+CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, name TEXT NOT NULL, phone TEXT, username TEXT, pass_hash TEXT,
+  centre_id INTEGER, dob TEXT, active INTEGER NOT NULL DEFAULT 1, last_login_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS users_username ON users(username) WHERE username IS NOT NULL;
+CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, role TEXT NOT NULL, phone TEXT, dob TEXT, created_at TEXT NOT NULL, expires_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS login_fails (k TEXT NOT NULL, at TEXT NOT NULL);

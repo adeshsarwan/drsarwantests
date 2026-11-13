@@ -84,6 +84,8 @@
   };
   let tab = pref.get('tab', 'bookings');
   let PKGS = [];
+  let CENTRES = [];
+  let WA = null; // WhatsApp settings, message texts, menus (Admin → WhatsApp)
   let detailId = null;
 
   const findB = (id) => (cal.data && cal.data.bookings.find((b) => b.id === id)) || (data && data.bookings.find((b) => b.id === id));
@@ -105,13 +107,19 @@
     $('#view-bookings').hidden = name !== 'bookings';
     $('#view-calendar').hidden = name !== 'calendar';
     $('#view-tests').hidden = name !== 'tests';
+    $('#view-centres').hidden = name !== 'centres';
+    $('#view-users').hidden = name !== 'users';
+    $('#view-wa').hidden = name !== 'wa';
     if (name === 'calendar') loadCal().catch((e) => toast(e.message));
     if (name === 'tests') loadPkgs().catch((e) => toast(e.message));
+    if (name === 'centres') loadCentres().catch((e) => toast(e.message));
+    if (name === 'users') loadUsers().catch((e) => toast(e.message));
+    if (name === 'wa') loadWa().catch((e) => toast(e.message));
   }
   $$('.tab').forEach((t) => (t.onclick = () => showTab(t.getAttribute('data-tab'))));
 
   async function refreshAll() {
-    await Promise.all([load(), loadPkgs().catch(() => {})]);
+    await Promise.all([load(), loadPkgs().catch(() => {}), loadCentres().catch(() => {}), loadWa().catch(() => {})]);
     if (tab === 'calendar' || cal.data) await loadCal();
     if (detailId && $('#detailDlg').open) { const b = findB(detailId); if (b) $('#detailBody').innerHTML = detailHTML(b); }
     else if (slotOpen && $('#detailDlg').open && cal.data) $('#detailBody').innerHTML = slotListHTML(slotOpen.date, slotOpen.slot);
@@ -152,6 +160,9 @@
   };
   const testLine = (b) => (testsOf(b).length ? `<span class="test-l">🧪 ${esc(testNames(b))}</span>` : '');
   const PAID_LIKE = ['confirmed', 'collected', 'report_ready', 'completed'];
+  // the booking's collection centre and the WhatsApp number its details go to (first number of the centre)
+  const centreOf = (b) => CENTRES.find((c) => c.id === b.centre_id) || null;
+  const centrePhone = (b) => { const c = centreOf(b); return c && c.numbers.length ? c.numbers[0].phone : ''; };
   const AFTER_COLLECT = ['collected', 'report_ready', 'completed'];
 
   // The process, step by step (also drives the "next step" button everywhere).
@@ -170,7 +181,16 @@
           ? `<button type="button" class="btn sm" data-act="status" data-id="${b.id}" data-st="confirmed">Confirm payment</button>${b.has_proof ? `<button type="button" class="btn ghost sm" data-act="shot" data-id="${b.id}">Screenshot</button>` : ''}`
           : W('pay', 'Payment reminder') },
       M('confirm', 'confirm', 'Booking confirmation sent to patient', 'Send confirmation'),
-      M('center', 'center', `Booking sent to collection centre (${CFG.centerPhone || '8368143677'})`, 'Send to centre'),
+      { key: 'assign', label: centreOf(b) ? `Collection centre: ${centreOf(b).name}` : 'Collection centre chosen', btn: 'Choose centre', cls: '',
+        done: !!b.centre_id, at: null, avail: PAID_LIKE.includes(s),
+        act: `<button type="button" class="btn sm" data-act="assign-open" data-id="${b.id}">Choose centre</button>`,
+        again: `<button type="button" class="btn ghost sm" data-act="assign-open" data-id="${b.id}">Change</button>` },
+      M('center', 'center', `Booking sent to collection centre${centrePhone(b) ? ` (${centrePhone(b)})` : ''}`, 'Send to centre'),
+      { key: 'centre_ok', msg: 'centre_ok', btn: 'Mark accepted', cls: '',
+        label: b.centre_status === 'accepted' ? `Centre accepted${b.collector_info ? ' · collector ' + b.collector_info : ''}` : b.centre_status === 'declined' && !b.centre_id ? 'Centre declined – choose another centre' : 'Centre accepted the visit',
+        done: b.centre_status === 'accepted' || !!sent.centre_ok, hand: b.centre_status !== 'accepted' && !!sent.manual.centre_ok, at: b.centre_status === 'accepted' ? null : sent.centre_ok,
+        avail: PAID_LIKE.includes(s) && !!b.centre_id, act: `<button type="button" class="btn sm" data-act="step-mark" data-kind="centre_ok" data-id="${b.id}">Mark accepted</button>`, again: '' },
+      M('collector', 'collector', b.collector_info ? `Collector details sent to patient (${b.collector_info})` : 'Collector details sent to patient', 'Send to patient'),
       M('reminder', 'reminder', 'Visit reminder sent to patient', 'Send reminder'),
       { key: 'collect', label: AFTER_COLLECT.includes(s) ? (b.vial_no ? `Sample collected · vial ${b.vial_no}` : 'Sample collected · ⚠ vial no. missing') : 'Sample collected (enter vial no.)',
         btn: 'Sample collected', cls: 'blue', done: AFTER_COLLECT.includes(s), at: b.collected_at, avail: s === 'confirmed',
@@ -236,7 +256,7 @@
       const cls = st.done ? 'done' : st.skipped ? 'skip' : st === cur ? 'cur' : locked ? 'wait' : '';
       const sub = st.done ? (st.at ? when(st.at) + (st.hand ? ' · ticked by hand' : '') : '') : st.skipped ? 'Skipped' : locked ? 'After payment' : '';
       const doBtn = `<button type="button" class="btn ${st === cur ? st.cls : 'ghost'} sm" data-act="step" data-key="${st.key}" data-id="${b.id}">${st.skipped ? 'Do it now' : st.btn}</button>`;
-      const markBtn = st.msg ? `<button type="button" class="btn ghost sm" data-act="step-mark" data-kind="${st.msg}" data-id="${b.id}">Mark done</button>` : '';
+      const markBtn = st.msg && st.key !== 'centre_ok' ? `<button type="button" class="btn ghost sm" data-act="step-mark" data-kind="${st.msg}" data-id="${b.id}">Mark done</button>` : '';
       const acts = st.done ? (st.hand ? `<button type="button" class="btn ghost sm" data-act="step-unmark" data-kind="${st.msg}" data-id="${b.id}">Undo</button>` : st.again || '')
         : locked ? '' : st.key === 'pay' ? st.act : doBtn + markBtn;
       return `<li class="stp ${cls}"><span class="n" aria-hidden="true">${st.done ? '✓' : st.skipped ? '↷' : i + 1}</span>
@@ -256,6 +276,8 @@
   async function runStep(id, key) {
     let b = findB(id); if (!b) return;
     const needsSample = ['received', 'upload', 'send'].includes(key) && !AFTER_COLLECT.includes(b.status);
+    if (key === 'assign') { openAssign(id); return; }
+    if (key === 'centre_ok') { markStep(id, 'centre_ok', false); return; }
     if (key === 'collect' || needsSample) { openVial(id, false, key === 'collect' ? null : key); return; }
     if (b.status === 'payment_submitted') {
       if (!confirm(`${b.name}'s payment isn't verified yet.\n\nMark the payment as verified and continue?`)) return;
@@ -278,49 +300,21 @@
   const MSG = {
     pay: 'Payment reminder', confirm: 'Booking confirmation', center: 'Booking details to collection centre', reminder: 'Visit reminder', slots: 'Suggest new slots',
     missed: 'Missed visit · fee & new slots', collected: 'Sample received at lab', report: 'Reports', chat: 'Open chat',
+    collector: 'Collector details to patient', centre_ok: 'Centre accepted', prep: 'How to prepare',
   };
   const NEEDS_SLOTS = ['slots', 'missed'];
   const dayWord = (d) => (d === ist() ? 'today' : d === addDays(ist(), 1) ? 'tomorrow' : 'on ' + fmtD(d));
 
+  // texts come from /shared/msgs.js (+ edits in Admin → WhatsApp) – the server uses the same ones for automatic sending
+  const tmplBody = (kind) => { const t = ((WA && WA.templates) || DSLMsg.TEMPLATES).find((x) => x.key === kind); return t ? t.body : ''; };
   function msgText(b, kind, sug, files) {
-    const hi = `Hi ${b.name.split(' ')[0]} 👋`;
-    const sign = '— Dr. Sarwan Diagnostic Labs · 8368143677';
-    const list = (sug || []).map((s, i) => `${i + 1}) ${fmtD(s.date)}, ${slotLabel(s.slot)}`).join('\n');
-    const tests = testNames(b) || 'home blood test';
-    switch (kind) {
-      case 'pay': return [hi, `We received your request for *${tests}* on *${fmtD(b.date)}, ${slotLabel(b.slot)}*, but your payment hasn't reached us yet.`, '',
-        `Your slot is reserved only after payment. Please pay *${money(b.amount || CFG.amount)}* by UPI to *${CFG.upiId || 'our UPI ID'}* and reply here with the payment screenshot.`, '',
-        'Want a different time? Just reply here.', sign].join('\n');
-      case 'confirm': return confirmText(b);
-      case 'center': return ['📋 *New home collection* – Dr. Sarwan Diagnostic Labs', '',
-        `Ref: ${b.id}`, `Patient: ${b.name} · +91 ${b.phone}`, `Date: ${fmt(b.date, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}`, `Time: ${slotLabel(b.slot)}`,
-        `Address: ${fullAddr(b)}`, `Map: ${mapUrl(b)}`, `Tests: ${tests}`, b.notes ? `Notes: ${b.notes}` : null, '', 'Please confirm the visit. 🙏'].filter((x) => x !== null).join('\n');
-      case 'reminder': return [hi, `Reminder: our phlebotomist will visit you *${dayWord(b.date)}, ${slotLabel(b.slot)}* for your *${tests}*.`, `📍 ${fullAddr(b)}`, '',
-        ...(prepOf(b) ? ['Before the test:', prepOf(b), ''] : []), 'Need to change the time? Reply here.', sign].join('\n');
-      case 'slots': return [hi, (isPast(b.date, b.slot) || OCCUPY.includes(b.status)) ? `We need to find you a new time for your home blood test.` : `The slot you picked (${fmtD(b.date)}, ${slotLabel(b.slot)}) is no longer available.`, '',
-        'These slots are free:', list || '(no free slots in the next few days – please call us)', '', 'Reply with the number of the slot that suits you and we\'ll book it.', sign].join('\n');
-      case 'missed': return [hi, `Our phlebotomist reached your address ${b.missed_slot ? `on ${fmtD(b.missed_slot.slice(0, 10))} at ${fmtT(slotMin(b.missed_slot.slice(11)))}` : ''} but couldn't reach you, so the sample could not be collected.`, '',
-        `To rebook, a visit fee of *${money(b.fee_due || CFG.visitFee)}* applies. Please pay it by UPI to *${CFG.upiId || 'our UPI ID'}* and send the screenshot here with the slot you want:`, list || '(please call us for a slot)', sign].join('\n');
-      case 'collected': return [hi, 'Your blood sample has reached our lab ✅', b.vial_no ? `Vial no.: *${b.vial_no}*` : null, '',
-        "We'll send your reports here on WhatsApp as soon as they're ready.", sign].filter((x) => x !== null).join('\n');
-      case 'report': {
-        const fs = files && files.length ? files : reportsOf(b).filter((f) => !f.sent_at);
-        return [hi, `Your report${fs.length === 1 ? ' is' : 's are'} ready 📄 Sending the PDF${fs.length === 1 ? '' : 's'} here:`, '',
-          ...fs.map((f) => `• ${f.name.replace(/\.pdf$/i, '')}`), '', b.vial_no ? `Vial no.: ${b.vial_no}` : null,
-          `Please share ${fs.length === 1 ? 'it' : 'them'} with your doctor. Questions? Reply here or call 8368143677.`, sign].filter((x) => x !== null).join('\n');
-      }
-      default: return '';
-    }
+    if (kind === 'chat') return '';
+    const tests = testsOf(b).map((t) => { const p = pkgFor(t); return { name: t.name, includes: p ? p.tests || '' : '', prep: p ? p.prep || '' : undefined }; });
+    const v = DSLMsg.vars(b, { tests, cfg: { amount: CFG.amount, upiId: CFG.upiId, visitFee: CFG.visitFee }, centre: centreOf(b),
+      files: files || (kind === 'report' ? reportsOf(b).filter((f) => !f.sent_at) : []), sug, kind });
+    return DSLMsg.render(tmplBody(kind), v);
   }
-  function confirmText(b) {
-    const t = testsOf(b);
-    return [`Hi ${b.name}! 👋`, 'Your home blood test with *Dr. Sarwan Diagnostic Labs* is *confirmed* ✅', '',
-      `🧾 Booking ref: ${b.id}`, `📅 Date: ${fmt(b.date, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}`, `⏰ Time: ${slotLabel(b.slot)}`,
-      `📍 Address: ${fullAddr(b)}`, `💳 Payment of ${money(b.amount)} received. Thank you!`,
-      t.length > 1 ? `🧪 Tests:\n${t.map((x) => `   – ${x.name}`).join('\n')}` : `🧪 Test: ${t[0] ? t[0].name : 'Blood test'}${t[0] && pkgFor(t[0]) && pkgFor(t[0]).tests ? ` (${pkgFor(t[0]).tests})` : ''}`, '',
-      ...(prepOf(b) ? ['Before the test:', prepOf(b), '(If your doctor gave you different instructions, follow your doctor.)', ''] : []),
-      'Need to reschedule? Call/WhatsApp 8368143677.'].join('\n');
-  }
+  const confirmText = (b) => msgText(b, 'confirm');
 
   async function suggestSlots(b, n = 3) {
     const start = b.date > ist() && b.status !== 'no_show' ? b.date : ist();
@@ -365,7 +359,21 @@
     const b = findB(id); if (!b) return;
     if (kind === 'chat') { openWhatsApp(b.phone, ''); return; }
     if (kind === 'report') { openReports(id); return; }
-    if (kind === 'center') { openWhatsApp(CFG.centerPhone || '8368143677', msgText(b, 'center')); logSent(b, 'center'); return; }
+    if (WA && WA.auto && !NEEDS_SLOTS.includes(kind) && !(kind === 'center' && !b.centre_id)) {
+      // automatic: the server sends it through the WhatsApp API; if it can't, the same text opens here to send by hand
+      try {
+        const r = await post(`/api/admin/bookings/${id}/send`, { kind });
+        if (r.sent) { toast(`${MSG[kind]} sent on WhatsApp ✓`); await refreshAll(); return; }
+        const to = kind === 'center' ? centrePhone(b) : b.phone;
+        openMsg({ b, kind, title: MSG[kind], sub: `Couldn't send automatically: ${r.error || 'API not available'} – send it by hand`, text: msgText(b, kind), phone: to });
+        if (kind === 'center' && $('#msgDlg').dataset) $('#msgDlg').dataset.phone = to;
+        return;
+      } catch (e) { toast(e.message); return; }
+    }
+    if (kind === 'center') {
+      if (!centrePhone(b)) { toast(b.centre_id ? 'This centre has no WhatsApp number – add one in the Centres tab' : 'Choose the collection centre first'); if (!b.centre_id) openAssign(id, 'center'); return; }
+      openWhatsApp(centrePhone(b), msgText(b, 'center')); logSent(b, 'center'); return;
+    }
     if (NEEDS_SLOTS.includes(kind)) {
       openMsg({ b, kind, title: MSG[kind], sub: `To ${b.name} · +91 ${b.phone}`, text: 'Finding free slots…' });
       const sug = await suggestSlots(b);
@@ -430,6 +438,7 @@ ${b.fee_paid_at ? `<div class="meta">Visit fee ${money(b.fee_due)} received ${wh
 <div class="dt-sec"><div class="dt-k" style="display:flex;justify-content:space-between;align-items:center">Tests (${t.length})${b.status !== 'cancelled' ? `<button type="button" class="btn ghost sm" data-act="tests-edit" data-id="${b.id}">Edit tests</button>` : ''}</div>
 <ul class="tl">${t.map((x) => `<li><b>${esc(x.name)}</b><span>${money(x.price)}</span></li>`).join('') || '<li class="meta">No test recorded</li>'}</ul>
 <div class="pay"><div style="min-width:0;flex:1"><b>${money(b.amount)}</b><div class="meta">${payNote}${b.utr ? ` · UTR ${esc(b.utr)}` : ''}${t.some((x) => x.margin != null) ? ` · margin ${money(marginOf(b))}` : ''}</div></div>${b.has_proof ? `<button type="button" class="btn ghost sm" data-act="shot" data-id="${b.id}">Screenshot</button>` : ''}</div></div>
+${b.status !== 'blocked' ? `<div class="dt-sec"><div class="dt-k" style="display:flex;justify-content:space-between;align-items:center">Collection centre<button type="button" class="btn ghost sm" data-act="assign-open" data-id="${b.id}">${b.centre_id ? 'Change' : 'Choose'}</button></div><div style="margin-top:2px">${centreOf(b) ? `<b>${esc(centreOf(b).name)}</b>${centrePhone(b) ? ` <span class="meta">· ${esc(centrePhone(b))}</span>` : ''}` : '<span class="meta">Not chosen yet</span>'}</div></div>` : ''}
 ${stepsCompact(b) ? `<div class="dt-sec"><div class="dt-k">Steps</div>${stepsCompact(b)}</div>` : ''}
 <div class="dt-sec"><div class="dt-k" style="display:flex;justify-content:space-between;align-items:center">Reports (${reps.length})${AFTER_COLLECT.includes(b.status) ? `<button type="button" class="btn ghost sm" data-act="reports" data-id="${b.id}">${reps.length ? 'Manage / send' : 'Upload'}</button>` : ''}</div>
 ${reps.length ? `<ul class="rl">${reps.map((r) => `<li>📄 ${esc(r.name)} <span class="${r.sent_at ? 'm-ok' : 'meta'}">${r.sent_at ? 'sent ' + when(r.sent_at) : 'not sent'}</span></li>`).join('')}</ul>` : `<div class="meta">${AFTER_COLLECT.includes(b.status) ? 'No reports uploaded yet.' : 'Reports can be uploaded after the sample is collected.'}</div>`}</div>
@@ -437,6 +446,7 @@ ${reps.length ? `<ul class="rl">${reps.map((r) => `<li>📄 ${esc(r.name)} <span
 <div class="dt-links"><a class="call" href="tel:+91${esc(b.phone)}">Call</a><a class="wa" href="#" data-act="wa" data-kind="chat" data-id="${b.id}">WhatsApp</a><a href="${mapUrl(b)}" target="_blank" rel="noopener">Map</a></div>
 <div><div class="dt-k">Collection address</div><div style="margin-top:2px;line-height:1.45">${esc(b.address)}<br><b>${esc(b.city || '')}</b>${b.state ? ', ' + esc(b.state) : ''} – ${esc(b.pincode)}</div></div>
 <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">${b.cycle ? `<div><div class="dt-k">Cycle</div><div style="margin-top:2px">${esc(b.cycle)}</div></div>` : ''}<div><div class="dt-k">Source</div><div style="margin-top:2px">${esc(srcLabel(b.source))}</div></div></div>
+${b.dob ? `<div><div class="dt-k">Date of birth</div><div style="margin-top:2px">${fmt(b.dob, { day: 'numeric', month: 'short', year: 'numeric' })}</div></div>` : ''}
 ${b.notes ? `<div><div class="dt-k">Notes</div><div style="margin-top:2px">${esc(b.notes)}</div></div>` : ''}
 </div>
 ${f.length ? `<div class="dt-f">${f.join('')}</div>` : ''}`;
@@ -928,9 +938,17 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
   drop.addEventListener('dragleave', () => drop.classList.remove('over'));
   drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); addRepFiles(e.dataTransfer.files); });
-  $('#repSend').onclick = () => {
+  $('#repSend').onclick = async () => {
     const b = findB(repId); if (!b) return;
     const files = reportsOf(b).filter((r) => repPicked.has(r.id)); if (!files.length) return;
+    if (WA && WA.auto) { // the patient gets a "reports ready" message and receives the PDFs after a date-of-birth check
+      $('#repSend').disabled = true;
+      try {
+        const r = await post(`/api/admin/bookings/${b.id}/send`, { kind: 'report', reportIds: files.map((f) => f.id) });
+        if (r.sent) { $('#repDlg').close(); toast('Patient told on WhatsApp ✓ They get the PDFs after a date-of-birth check.'); await refreshAll(); return; }
+        toast(`Couldn't send automatically (${r.error || 'API not available'}) – sending by hand`);
+      } catch (e) { toast(e.message); return; } finally { $('#repSend').disabled = false; }
+    }
     openWhatsApp(b.phone, msgText(b, 'report', null, files));
     $('#repDlg').close();
     logSent(b, 'report', { reportIds: files.map((f) => f.id) });
@@ -1120,6 +1138,256 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     finally { btn.disabled = false; }
   };
 
+  // ================= COLLECTION CENTRES =================
+  async function loadCentres() {
+    const r = await api('/api/admin/centres');
+    CENTRES = r.centres;
+    if (tab === 'centres') renderCentres();
+  }
+  function renderCentres() {
+    $('#centreBody').innerHTML = CENTRES.length ? CENTRES.map((c) => `<tr class="${c.active ? '' : 'off'}">
+<td><b>${esc(c.name)}</b>${c.contact_name ? `<small>${esc(c.contact_name)}</small>` : ''}</td>
+<td class="addr">${esc([c.address, c.city, c.pincode].filter(Boolean).join(', ')) || '<span class="meta">—</span>'}</td>
+<td>${c.numbers.length ? c.numbers.map((n, i) => `<div style="white-space:nowrap">${esc(n.phone)}${n.name ? ` <span class="meta">${esc(n.name)}</span>` : ''}${i === 0 ? ' <span class="meta">· gets bookings</span>' : ''}</div>`).join('') : '<span class="meta">No number</span>'}</td>
+<td class="num">${c.users || 0}</td><td class="num">${c.open_jobs || 0}</td>
+<td><span class="pill ${c.active ? 'st-confirmed' : 'st-cancelled'}" style="margin:0">${c.active ? 'Active' : 'Off'}</span></td>
+<td><button type="button" class="btn ghost sm" data-act="centre-edit" data-cid="${c.id}">Edit</button></td></tr>`).join('')
+      : '<tr><td colspan="7" class="meta">No centres yet.</td></tr>';
+  }
+  let centreEditing = null;
+  function addNumRow(n, focus) {
+    const row = document.createElement('div');
+    row.className = 'num-row'; row.style.cssText = 'display:flex;gap:6px;align-items:center';
+    row.innerHTML = `<input class="inp n-phone" inputmode="numeric" placeholder="10-digit mobile" style="flex:1;min-width:0" value="${esc(n.phone || '')}" aria-label="WhatsApp number">
+<input class="inp n-name" placeholder="Name (optional)" style="flex:1;min-width:0" value="${esc(n.name || '')}" aria-label="Person's name">
+<button type="button" class="ibtn" data-act="centre-num-del" aria-label="Remove number">×</button>`;
+    $('#cNums').appendChild(row);
+    if (focus) row.querySelector('.n-phone').focus();
+  }
+  function openCentre(id) {
+    const c = id ? CENTRES.find((x) => x.id === id) : null;
+    centreEditing = c ? c.id : null;
+    $('#centreForm').reset(); $('#centreErr').textContent = ''; $('#cNums').innerHTML = '';
+    $('#centreTitle').textContent = c ? `Edit ${c.name}` : 'Add centre';
+    if (c) { $('#cName').value = c.name; $('#cContact').value = c.contact_name || ''; $('#cPin').value = c.pincode || ''; $('#cAddr').value = c.address || ''; $('#cCity').value = c.city || ''; $('#cNotes').value = c.notes || ''; $('#cActive').checked = !!c.active; }
+    (c && c.numbers.length ? c.numbers : [{}]).forEach((n) => addNumRow(n));
+    $('#centreDel').hidden = !c;
+    $('#centreDlg').showModal(); setTimeout(() => $('#cName').focus(), 50);
+  }
+  $('#centreForm').onsubmit = async (e) => {
+    e.preventDefault(); $('#centreErr').textContent = '';
+    const fd = Object.fromEntries(new FormData($('#centreForm')).entries());
+    fd.active = $('#cActive').checked;
+    fd.numbers = $$('#cNums .num-row').map((r) => ({ phone: r.querySelector('.n-phone').value.trim(), name: r.querySelector('.n-name').value.trim() })).filter((n) => n.phone);
+    $('#centreSave').disabled = true;
+    try {
+      await post(centreEditing ? `/api/admin/centres/${centreEditing}` : '/api/admin/centres', fd);
+      $('#centreDlg').close(); toast(centreEditing ? 'Centre updated' : 'Centre added');
+      await loadCentres(); if (data) renderBookings(); if (cal.data) renderCal();
+    } catch (err) { $('#centreErr').textContent = err.message; }
+    finally { $('#centreSave').disabled = false; }
+  };
+  $('#centreDel').onclick = async () => {
+    const c = CENTRES.find((x) => x.id === centreEditing); if (!c) return;
+    if (!confirm(`Delete ${c.name}?`)) return;
+    try { await api(`/api/admin/centres/${c.id}`, { method: 'DELETE' }); $('#centreDlg').close(); toast('Centre deleted'); await loadCentres(); }
+    catch (err) { $('#centreErr').textContent = err.message; }
+  };
+
+  // pick the collection centre for a booking (then = message step to carry on with)
+  let assign = null;
+  function openAssign(id, then) {
+    const b = findB(id); if (!b) return;
+    assign = { id, then };
+    const opts = CENTRES.filter((c) => c.active || c.id === b.centre_id);
+    $('#assignSel').innerHTML = `<option value="">— Not chosen yet —</option>` + opts.map((c) => `<option value="${c.id}"${c.id === b.centre_id ? ' selected' : ''}>${esc(c.name)}${c.city ? ' · ' + esc(c.city) : ''}</option>`).join('');
+    if (!b.centre_id && opts.length === 1) $('#assignSel').value = String(opts[0].id);
+    $('#assignSub').textContent = `${b.name} · ${fmtD(b.date)}, ${slotLabel(b.slot)} · ${b.city || b.pincode}`;
+    $('#assignErr').textContent = '';
+    $('#assignDlg').showModal();
+  }
+  $('#assignForm').onsubmit = async (e) => {
+    e.preventDefault(); if (!assign) return;
+    const v = $('#assignSel').value;
+    $('#assignSave').disabled = true;
+    try {
+      await post(`/api/admin/bookings/${assign.id}/centre`, { centre_id: v ? Number(v) : null });
+      $('#assignDlg').close(); toast(v ? 'Centre chosen' : 'Centre removed');
+      const { id, then } = assign; assign = null;
+      await refreshAll();
+      if (v && then) sendWa(id, then);
+    } catch (err) { $('#assignErr').textContent = err.message; }
+    finally { $('#assignSave').disabled = false; }
+  };
+
+  // ================= USERS =================
+  let userRole = 'centre', USERS = [], userEditing = null;
+  const genPw = () => { const a = 'abcdefghjkmnpqrstuvwxyz23456789'; const r = crypto.getRandomValues(new Uint8Array(10)); return Array.from(r, (x) => a[x % a.length]).join(''); };
+  function renderUsersHead() {
+    $$('[data-act="users-role"]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.role === userRole)));
+    $('#userAddBtn').hidden = userRole !== 'centre';
+    $('#userNote').innerHTML = userRole === 'centre'
+      ? 'Logins for the <b>centre portal</b> (drsarwantests.com/centre) – the centre sees its bookings, marks samples collected and uploads reports.'
+      : 'Created automatically from bookings. Patients open <b>drsarwantests.com/reports</b> with their mobile number and date of birth.';
+    $('#userHead').innerHTML = userRole === 'centre'
+      ? '<tr><th>Name</th><th>Username</th><th>Centre</th><th>Mobile</th><th>Last sign-in</th><th>Status</th><th></th></tr>'
+      : '<tr><th>Patient</th><th>Mobile</th><th>Date of birth</th><th class="num">Bookings</th><th class="num">Reports</th><th>Last sign-in</th><th>Status</th><th></th></tr>';
+  }
+  async function loadUsers() {
+    renderUsersHead();
+    const q = ($('#userSearch').value || '').trim();
+    const r = await api(`/api/admin/users?role=${userRole}${userRole === 'patient' && q ? '&q=' + encodeURIComponent(q) : ''}`);
+    USERS = r.users; renderUsers();
+  }
+  function renderUsers() {
+    const q = ($('#userSearch').value || '').trim().toLowerCase();
+    const rows = USERS.filter((u) => !q || `${u.name} ${u.phone || ''} ${u.username || ''} ${u.centre_name || ''}`.toLowerCase().includes(q));
+    const st = (u) => `<span class="pill ${u.active ? 'st-confirmed' : 'st-cancelled'}" style="margin:0">${u.active ? 'Active' : 'Blocked'}</span>`;
+    const last = (u) => (u.last_login_at ? when(u.last_login_at) : '<span class="meta">Never</span>');
+    $('#userBody').innerHTML = rows.length ? rows.map((u) => userRole === 'centre'
+      ? `<tr class="${u.active ? '' : 'off'}"><td><b>${esc(u.name)}</b></td><td>${esc(u.username)}</td><td>${esc(u.centre_name || '—')}</td><td>${esc(u.phone || '—')}</td><td>${last(u)}</td><td>${st(u)}</td><td><button type="button" class="btn ghost sm" data-act="user-edit" data-uid="${u.id}">Edit</button></td></tr>`
+      : `<tr class="${u.active ? '' : 'off'}"><td><b>${esc(u.name)}</b>${u.last_date ? `<small>Last booking ${fmtD(u.last_date)}</small>` : ''}</td><td>${esc(u.phone)}</td><td>${u.dob ? fmt(u.dob, { day: 'numeric', month: 'short', year: 'numeric' }) : '<span class="meta">Missing – can\'t sign in</span>'}</td><td class="num">${u.bookings}</td><td class="num">${u.reports}</td><td>${last(u)}</td><td>${st(u)}</td><td><button type="button" class="btn ghost sm" data-act="user-edit" data-uid="${u.id}">Edit</button></td></tr>`).join('')
+      : `<tr><td colspan="8" class="meta">${userRole === 'centre' ? 'No centre logins yet. Add one for each person at a centre.' : 'No patients found.'}</td></tr>`;
+    $('#userCount').textContent = userRole === 'patient' ? `${rows.length} patient${rows.length === 1 ? '' : 's'}${rows.length >= 1000 ? ' (first 1,000 – search to narrow)' : ''} · ${rows.filter((u) => !u.dob).length} without date of birth` : `${rows.length} login${rows.length === 1 ? '' : 's'}`;
+  }
+  let ut; $('#userSearch').oninput = () => { if (userRole === 'patient') { clearTimeout(ut); ut = setTimeout(() => loadUsers().catch(() => {}), 300); } else renderUsers(); };
+  function openUser(id) {
+    const u = id ? USERS.find((x) => x.id === id) : null;
+    const patient = u && u.role === 'patient';
+    userEditing = u ? u.id : null;
+    $('#userForm').reset(); $('#userErr').textContent = '';
+    $$('#userForm .c-only').forEach((x) => (x.hidden = patient));
+    $$('#userForm .p-only').forEach((x) => (x.hidden = !patient));
+    $('#uCentre').innerHTML = '<option value="">Choose centre</option>' + CENTRES.map((c) => `<option value="${c.id}">${esc(c.name)}${c.active ? '' : ' (off)'}</option>`).join('');
+    $('#uPhone').readOnly = patient;
+    $('#userTitle').textContent = !u ? 'Add centre login' : patient ? `Patient · ${u.name}` : `Edit ${u.name}`;
+    $('#userSub').textContent = patient ? 'Patients sign in at drsarwantests.com/reports with mobile + date of birth.' : u ? 'Leave the password empty to keep it.' : 'Share the username and password with the person. They sign in at drsarwantests.com/centre.';
+    $('#uPwLbl').textContent = u ? 'New password (optional)' : 'Password';
+    $('#uActiveLbl').textContent = patient ? 'can open the reports portal' : 'can sign in';
+    if (u) { $('#uName').value = u.name; $('#uPhone').value = u.phone || ''; $('#uActive').checked = !!u.active;
+      if (patient) $('#uDob').value = u.dob || ''; else { $('#uUser').value = u.username || ''; $('#uCentre').value = String(u.centre_id || ''); } }
+    else { $('#uPw').value = genPw(); if (CENTRES.length === 1) $('#uCentre').value = String(CENTRES[0].id); }
+    $('#userDel').hidden = !u || patient;
+    $('#userDlg').showModal(); setTimeout(() => $('#uName').focus(), 50);
+  }
+  $('#userForm').onsubmit = async (e) => {
+    e.preventDefault(); $('#userErr').textContent = '';
+    const fd = Object.fromEntries(new FormData($('#userForm')).entries());
+    fd.active = $('#uActive').checked;
+    $('#userSave').disabled = true;
+    try {
+      await post(userEditing ? `/api/admin/users/${userEditing}` : '/api/admin/users', fd);
+      $('#userDlg').close();
+      await loadUsers();
+      if (!userEditing || fd.password) {
+        // show the login once so it can be sent to the person (it can't be read back later)
+        const ph = fd.phone ? fd.phone.replace(/\D/g, '').slice(-10) : '';
+        openMsg({ title: userEditing ? 'Password changed ✓' : 'Login created ✓', sub: ph ? `Send it to ${fd.name} · +91 ${ph}` : 'Copy it and send it to the person', phone: ph,
+          text: [`Hi ${fd.name.split(' ')[0]} 👋`, 'Your login for the Dr. Sarwan Diagnostic Labs centre portal:', '', 'https://drsarwantests.com/centre/', `Username: ${fd.username}`, `Password: ${fd.password}`, '', 'Here you can see your bookings, mark samples collected with the vial no. and upload reports.'].join('\n') });
+      } else toast('Saved');
+    } catch (err) { $('#userErr').textContent = err.message; }
+    finally { $('#userSave').disabled = false; }
+  };
+  $('#userDel').onclick = async () => {
+    const u = USERS.find((x) => x.id === userEditing); if (!u) return;
+    if (!confirm(`Delete the login for ${u.name}?`)) return;
+    try { await api(`/api/admin/users/${u.id}`, { method: 'DELETE' }); $('#userDlg').close(); toast('Login deleted'); await loadUsers(); }
+    catch (err) { $('#userErr').textContent = err.message; }
+  };
+
+  // ================= WHATSAPP =================
+  async function loadWa() {
+    WA = await api('/api/admin/wa');
+    renderWaBanner();
+    if (tab === 'wa') renderWa();
+  }
+  function renderWaBanner() {
+    const el = $('#waBanner'); if (!el || !WA) return;
+    const n = WA.failed.length;
+    el.classList.toggle('down', WA.down);
+    el.hidden = !n && !WA.down;
+    el.innerHTML = `<span>${WA.down ? `⚠ <b>WhatsApp API paused</b> – ${esc(WA.settings.wa_down_reason || '')}. Messages are waiting to be sent by hand. ` : ''}${n ? `✋ <b>${n} WhatsApp message${n === 1 ? '' : 's'}</b> couldn't be sent automatically.` : ''}</span><button type="button" class="btn sm" data-act="wa-open">Send by hand</button>`;
+  }
+  const META_ST = { APPROVED: ['Approved ✓', 'st-confirmed'], PENDING: ['Waiting for WhatsApp', 'st-pending'], IN_APPEAL: ['In appeal', 'st-pending'], REJECTED: ['Rejected', 'st-no_show'], PAUSED: ['Paused', 'st-no_show'], DISABLED: ['Disabled', 'st-no_show'] };
+  const ROLE_T = { patient: 'Patient', centre: 'Collection centre', team: 'Our team' };
+  const OUT_ST = { sent: ['Sent', 'st-collected'], delivered: ['Delivered', 'st-confirmed'], read: ['Read ✓✓', 'st-confirmed'], failed: ['Failed', 'st-no_show'], manual: ['Sent by hand', 'st-completed'], dismissed: ['Not needed', 'st-cancelled'] };
+  function renderWa() {
+    if (!WA) return;
+    const S = WA.settings;
+    $('#waMode').value = S.wa_mode; $('#waPhoneId').value = S.wa_phone_id || ''; $('#waWaba').value = S.wa_waba_id || '';
+    $('#waTeam').value = S.team_numbers || ''; $('#waAutoRep').checked = S.auto_reports === '1';
+    const st = WA.down ? ['API paused', 'st-no_show'] : WA.auto ? ['Automatic – on', 'st-confirmed'] : WA.ready ? ['Ready · manual mode', 'st-pending'] : ['Manual (API not set up)', 'st-cancelled'];
+    $('#waState').className = 'pill ' + st[1]; $('#waState').textContent = st[0];
+    $('#waResume').hidden = !WA.down;
+    const sec = (k) => (WA.secrets[k] ? `<b style="color:#17694a">✓ ${k}</b>` : `<b style="color:#a33a1f">✗ ${k}</b>`);
+    $('#waSetup').innerHTML = `Cloudflare secrets: ${sec('WA_TOKEN')} · ${sec('WA_APP_SECRET')} · ${sec('WA_VERIFY_TOKEN')}<br>
+Webhook URL for Meta → WhatsApp → Configuration: <code>${esc(WA.webhook)}</code> (verify token = your WA_VERIFY_TOKEN; subscribe to <b>messages</b>)${WA.down ? `<br><b style="color:#a33a1f">Paused: ${esc(S.wa_down_reason)}</b>` : ''}`;
+    // send by hand
+    $('#waFail').innerHTML = WA.failed.length ? WA.failed.map((f) => `<div class="wa-f"><div><b>${esc(MSG[f.kind] || (WA.templates.find((t) => t.key === f.kind) || {}).label || f.kind)}</b> → ${esc(ROLE_T[f.to_role] || '')} ${f.to_phone ? '+91 ' + esc(f.to_phone) : ''}${f.patient ? ` · ${esc(f.patient)}` : ''} <span class="meta">${f.booking_id ? esc(f.booking_id) + ' · ' : ''}${when(f.created_at)}</span><br><small class="meta">${esc(f.error || '')}</small></div>
+<div style="display:flex;gap:6px"><button type="button" class="btn wa sm" data-act="wa-hand" data-oid="${f.id}">Send</button><button type="button" class="btn ghost sm" data-act="wa-dismiss" data-oid="${f.id}">Not needed</button></div></div>`).join('')
+      : '<p class="meta" style="margin:0">Nothing waiting ✓</p>';
+    $('#waVars').innerHTML = WA.vars.map(([k, d]) => `<code>{{${k}}}</code> ${esc(d)}`).join(' · ');
+    $('#waTexts').innerHTML = WA.templates.map((t) => {
+      const ms = t.meta === false ? ['Only inside an open chat', 'st-cancelled'] : META_ST[t.wa_status] || ['Not sent for approval', 'st-cancelled'];
+      const changed = t.wa_body && t.wa_body !== t.body && t.meta !== false;
+      return `<div class="wa-t" data-key="${t.key}"><div class="wa-t-h"><div><b>${esc(t.label)}</b> <span class="meta">→ ${ROLE_T[t.to]}${t.buttons.length ? ' · buttons: ' + t.buttons.map((x) => esc(x.text)).join(', ') : ''}</span></div>
+<span><span class="pill ${ms[1]}" style="margin:0">${ms[0]}</span>${t.wa_name && t.meta !== false ? ` <code class="meta">${t.wa_name}</code>` : ''}</span></div>
+${t.wa_reason ? `<p class="err" style="margin:6px 0 0">WhatsApp: ${esc(t.wa_reason)}</p>` : ''}${changed ? '<p class="meta" style="margin:6px 0 0;color:#8a5a00">Edited since it was sent for approval – WhatsApp still uses the approved version until you send it again.</p>' : ''}
+<textarea class="inp" data-body="${t.key}" spellcheck="true">${esc(t.body)}</textarea>
+<div class="acts"><button type="button" class="btn sm" data-act="wa-tsave" data-key="${t.key}">Save text</button>${t.custom ? `<button type="button" class="btn ghost sm" data-act="wa-treset" data-key="${t.key}">Back to default</button>` : ''}
+${t.meta !== false ? `<button type="button" class="btn ghost sm" data-act="wa-submit" data-key="${t.key}">${t.wa_id ? 'Send again for approval' : 'Send for approval'}</button>` : ''}<span class="meta" data-tmsg="${t.key}"></span></div></div>`;
+    }).join('');
+    // menus
+    $('#waMenus').innerHTML = Object.keys(WA.actions).map((role) => {
+      const items = WA.menus.filter((m) => m.role === role);
+      Object.keys(WA.actions[role]).forEach((a) => { if (!items.some((m) => m.action === a)) items.push({ role, action: a, title: WA.actions[role][a], description: '', active: 0 }); });
+      return `<div class="wa-menu" data-role="${role}"><b>${ROLE_T[role]} menu</b>${items.map((m) => `<div class="wa-mi" data-action="${m.action}">
+<input type="checkbox" ${m.active ? 'checked' : ''} aria-label="Show this option" style="margin-top:9px">
+<div style="display:flex;flex-direction:column;gap:4px"><input class="inp mt" maxlength="24" value="${esc(m.title)}" aria-label="Title"><input class="inp md" maxlength="72" value="${esc(m.description || '')}" placeholder="Short description" aria-label="Description"><small class="meta">Does: ${esc(WA.actions[role][m.action])}</small></div>
+<div class="mv"><button type="button" class="ibtn" data-act="wa-mup" aria-label="Move up">↑</button><button type="button" class="ibtn" data-act="wa-mdown" aria-label="Move down">↓</button></div></div>`).join('')}
+<div style="margin-top:10px;display:flex;gap:8px;align-items:center"><button type="button" class="btn sm" data-act="wa-msave" data-role="${role}">Save ${ROLE_T[role].toLowerCase()} menu</button><span class="meta" data-mmsg="${role}"></span></div></div>`;
+    }).join('');
+    $('#waRecent').innerHTML = WA.recent.length ? WA.recent.map((o) => `<tr><td>${when(o.created_at)}</td><td>${o.booking_id ? esc(o.booking_id) : ''}${o.patient ? `<small>${esc(o.patient)}</small>` : ''}</td><td>${esc(MSG[o.kind] || o.kind)}</td>
+<td>${esc(ROLE_T[o.to_role] || '')}<small>${o.to_phone ? '+91 ' + esc(o.to_phone) : ''}</small></td><td><span class="pill ${(OUT_ST[o.status] || ['', ''])[1]}" style="margin:0">${(OUT_ST[o.status] || [o.status])[0]}</span>${o.error && o.status === 'failed' ? `<small>${esc(o.error)}</small>` : ''}</td></tr>`).join('')
+      : '<tr><td colspan="5" class="meta">No messages sent through the API yet.</td></tr>';
+  }
+  $('#waForm').onsubmit = async (e) => {
+    e.preventDefault(); $('#waErr').textContent = '';
+    const fd = Object.fromEntries(new FormData($('#waForm')).entries());
+    fd.auto_reports = $('#waAutoRep').checked;
+    $('#waSave').disabled = true;
+    try { await post('/api/admin/wa/settings', fd); await loadWa(); toast('WhatsApp settings saved'); }
+    catch (err) { $('#waErr').textContent = err.message; } finally { $('#waSave').disabled = false; }
+  };
+  async function waAct(a, el) {
+    const key = el.dataset.key, msgEl = key ? $(`[data-tmsg="${key}"]`) : null;
+    try {
+      if (a === 'wa-test') { const r = await post('/api/admin/wa/test', {}); toast(`Connected ✓ ${r.phone.display_phone_number || ''} · ${r.phone.verified_name || ''} · quality ${r.phone.quality_rating || '—'}`); await loadWa(); }
+      else if (a === 'wa-resume') { await post('/api/admin/wa/settings', { resume: true }); await loadWa(); toast('API resumed'); }
+      else if (a === 'wa-sync') { const r = await post('/api/admin/wa/sync', {}); await loadWa(); toast(`Approvals checked (${r.found} found on WhatsApp)`); }
+      else if (a === 'wa-tsave') { await post(`/api/admin/wa/templates/${key}`, { body: $(`[data-body="${key}"]`).value }); await loadWa(); toast('Text saved'); }
+      else if (a === 'wa-treset') { if (!confirm('Go back to the default text?')) return; await api(`/api/admin/wa/templates/${key}`, { method: 'DELETE' }); await loadWa(); toast('Default text restored'); }
+      else if (a === 'wa-submit') {
+        const body = $(`[data-body="${key}"]`).value, t = WA.templates.find((x) => x.key === key);
+        if (body !== t.body) await post(`/api/admin/wa/templates/${key}`, { body });
+        if (msgEl) msgEl.textContent = 'Sending…';
+        const r = await post(`/api/admin/wa/templates/${key}/submit`, {}); await loadWa(); toast(`Sent for approval – status: ${r.status}`);
+      } else if (a === 'wa-mup' || a === 'wa-mdown') {
+        const row = el.closest('.wa-mi'), sib = a === 'wa-mup' ? row.previousElementSibling : row.nextElementSibling;
+        if (sib && sib.classList.contains('wa-mi')) (a === 'wa-mup' ? sib.before(row) : sib.after(row));
+      } else if (a === 'wa-msave') {
+        const role = el.dataset.role, box = $(`.wa-menu[data-role="${role}"]`);
+        const items = $$('.wa-mi', box).map((r) => ({ action: r.dataset.action, title: $('.mt', r).value.trim(), description: $('.md', r).value.trim(), active: $('input[type=checkbox]', r).checked }));
+        await post('/api/admin/wa/menu', { role, items }); await loadWa(); toast('Menu saved');
+      } else if (a === 'wa-hand' || a === 'wa-dismiss') {
+        const f = WA.failed.find((x) => x.id === Number(el.dataset.oid)); if (!f) return;
+        if (a === 'wa-hand') openWhatsApp(f.to_phone, f.text);
+        await post(`/api/admin/wa/outbox/${f.id}`, { action: a === 'wa-hand' ? 'done' : 'dismiss' });
+        await Promise.all([loadWa(), load()]); toast(a === 'wa-hand' ? 'Opened in WhatsApp – marked as sent' : 'Removed');
+      } else if (a === 'wa-open') showTab('wa');
+    } catch (err) { if (msgEl) msgEl.textContent = ''; toast(err.message); }
+  }
+
   // ---------- one click handler for every action (list, calendar, panels, dialogs) ----------
   document.addEventListener('click', (e) => {
     const c = e.target.closest('[data-close]');
@@ -1141,7 +1409,17 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     else if (a === 'rp-view') viewReportFile(Number(el.dataset.rid));
     else if (a === 'rp-del') deleteReportFile(Number(el.dataset.rid));
     else if (a === 'tests-edit') { const b = findB(id); if (b) openForm('tests', b); }
+    else if (a.startsWith('wa-')) waAct(a, el);
     else if (a === 'pkg-add') openPkg(null);
+    else if (a === 'assign-open') openAssign(id);
+    else if (a === 'centre-add') openCentre(null);
+    else if (a === 'centre-edit') openCentre(Number(el.dataset.cid));
+    else if (a === 'centre-num-add') addNumRow({}, true);
+    else if (a === 'centre-num-del') { el.closest('.num-row').remove(); }
+    else if (a === 'users-role') { userRole = el.dataset.role; renderUsersHead(); loadUsers().catch((x) => toast(x.message)); }
+    else if (a === 'user-add') openUser(null);
+    else if (a === 'user-edit') openUser(Number(el.dataset.uid));
+    else if (a === 'user-genpw') { $('#uPw').value = genPw(); }
     else if (a === 'pkg-edit') openPkg(Number(el.dataset.pid));
     else if (a === 'move') { const b = findB(id); if (b) openForm('move', b); }
     else if (a === 'add') openForm('add', { date: el.dataset.date || (tab === 'calendar' ? cal.anchor : ist()), slot: el.dataset.slot });

@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Centre portal · Dr. Sarwan Diagnostic Labs</title>
+<link rel="icon" href="/assets/logo.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800;900&family=Figtree:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/admin/admin.css">
+<style>
+.jobs{display:flex;flex-direction:column;gap:12px;margin-top:14px}
+.job{background:#fff;border:1px solid var(--line);border-radius:16px;padding:14px 16px}
+.job-h{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap}
+.job-when{font-family:Archivo,sans-serif;font-weight:800;font-size:16px}
+.job-name{font-weight:700;font-size:16px;margin-top:6px}
+.job-l{margin-top:4px;color:#3b4a68;line-height:1.45}
+.job-acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;align-items:center}
+.job-reps{margin:10px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
+.job-reps li{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.vial-f{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.vial-f .inp{text-transform:uppercase;letter-spacing:1px;font-size:16px;flex:1;min-width:160px}
+.seg{flex-wrap:wrap}
+.seg button{white-space:nowrap}
+.empty{background:#fff;border:1px dashed #c7d4de;border-radius:16px;padding:28px;text-align:center;color:var(--muted)}
+</style>
+</head>
+<body>
+
+<div id="login" hidden>
+<img src="/assets/logo.png" alt="Dr. Sarwan Diagnostic Labs" style="height:44px">
+<h1 style="margin-top:14px">Collection centre portal</h1>
+<form id="loginForm">
+<label for="un" style="display:block;margin-top:12px;font-weight:600">Username</label>
+<input id="un" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+<label for="pw" style="display:block;margin-top:12px;font-weight:600">Password</label>
+<input id="pw" type="password" autocomplete="current-password" required>
+<p class="err" id="loginErr"></p>
+<button class="btn" style="width:100%">Sign in</button>
+<p class="meta" style="margin-top:12px">Don't have a login? Ask Dr. Sarwan Diagnostic Labs (8368143677).</p>
+</form>
+</div>
+
+<div id="app" hidden>
+<header class="top">
+<div class="top-l"><img src="/assets/logo.png" alt="Dr. Sarwan Diagnostic Labs" class="top-logo"><div><b id="centreName"></b><div class="meta" id="userName"></div></div></div>
+<div class="top-r"><button class="btn ghost sm" id="refresh">Refresh</button><button class="btn ghost sm" id="logout">Sign out</button></div>
+</header>
+<main class="wrap" style="padding:16px 16px 40px;max-width:820px">
+<div class="seg" role="group" aria-label="Show">
+<button type="button" data-f="todo">To do</button>
+<button type="button" data-f="today">Today</button>
+<button type="button" data-f="upcoming">Upcoming</button>
+<button type="button" data-f="all">All (last 30 days)</button>
+</div>
+<p class="meta" id="count" style="margin:10px 0 0"></p>
+<div class="jobs" id="jobs"></div>
+</main>
+</div>
+
+<div class="toast" id="toast" role="status"></div>
+<script src="/centre/centre.js"></script>
+</body>
+</html>
