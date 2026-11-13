@@ -27,7 +27,12 @@
     // Leave empty to turn suggestions off; PIN → city/state works without it.
     "GOOGLE_MAPS_KEY": "AIzaSyBsQx1ICbXF9fCtngGlpI4RE4qwNG80beg"
   },
-  // Secret (set in Cloudflare dashboard → Worker → Settings → Variables and Secrets, type "Secret"):
-  //   ADMIN_PASSWORD – password for drsarwantests.com/admin
+  // Secrets (set in Cloudflare dashboard → Worker → Settings → Variables and Secrets, type "Secret"):
+  //   ADMIN_PASSWORD  – password for drsarwantests.com/admin
+  //   WA_TOKEN        – WhatsApp Cloud API permanent access token (System User)
+  //   WA_APP_SECRET   – Meta app's App Secret (checks webhook calls come from Meta)
+  //   WA_VERIFY_TOKEN – any text; also typed into Meta → WhatsApp → Configuration → Webhook "Verify token"
+  // Every evening at 7 PM IST: WhatsApp visit reminders for tomorrow (only in automatic mode)
+  "triggers": { "crons": ["30 13 * * *"] },
   "observability": { "enabled": true }
 }

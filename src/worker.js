@@ -1,5 +1,7 @@
 // Dr. Sarwan Diagnostic Labs – booking backend
 // Cloudflare Worker + D1. Static site is served from ./public via the ASSETS binding.
+import "../public/shared/msgs.js"; // WhatsApp message texts, shared with the admin page
+const M = globalThis.DSLMsg;
 
 const SLOT_START_MIN = 6 * 60;    // 06:00
 const SLOT_END_MIN = 11 * 60;     // last slot ends at 11:00
@@ -153,6 +155,20 @@ const SCHEMA = [
     created_at TEXT NOT NULL, expires_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS login_fails (k TEXT NOT NULL, at TEXT NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS login_fails_k ON login_fails(k, at)`,
+  // ---- WhatsApp ----
+  `CREATE TABLE IF NOT EXISTS settings (k TEXT PRIMARY KEY, v TEXT)`,
+  // message texts edited in the admin (defaults live in public/shared/msgs.js) + their WhatsApp template status
+  `CREATE TABLE IF NOT EXISTS msg_templates (key TEXT PRIMARY KEY, body TEXT, wa_id TEXT, wa_status TEXT, wa_reason TEXT, wa_body TEXT, updated_at TEXT)`,
+  `CREATE TABLE IF NOT EXISTS menu_items (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, action TEXT NOT NULL, title TEXT NOT NULL,
+    description TEXT, sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1)`,
+  // every message the system tried to send through the API (status follows WhatsApp's delivery reports)
+  `CREATE TABLE IF NOT EXISTS wa_outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, booking_id TEXT, kind TEXT NOT NULL, to_phone TEXT, to_role TEXT,
+    status TEXT NOT NULL, wa_id TEXT, error TEXT, log_id INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS wa_outbox_wa ON wa_outbox(wa_id)`,
+  `CREATE INDEX IF NOT EXISTS wa_outbox_status ON wa_outbox(status, created_at)`,
+  // people who wrote to us: open 24-hour chat window + where they are in a menu
+  `CREATE TABLE IF NOT EXISTS wa_contacts (phone TEXT PRIMARY KEY, name TEXT, last_in_at TEXT, state TEXT, state_data TEXT, state_at TEXT)`,
+  `CREATE TABLE IF NOT EXISTS wa_inbox (id INTEGER PRIMARY KEY AUTOINCREMENT, wa_id TEXT UNIQUE, phone TEXT NOT NULL, type TEXT, body TEXT, at TEXT NOT NULL)`,
 ];
 
 // Tests / packages from DRSARWAN_TESTS_PACKAGES.xlsx — loaded once into an empty database.
@@ -262,7 +278,7 @@ async function seedPackages(env) {
 let schemaReady = null;
 const NEW_COLS = { city: "TEXT", state: "TEXT", vial_no: "TEXT", collected_at: "TEXT", report_name: "TEXT", report_size: "INTEGER",
   report_token: "TEXT", report_at: "TEXT", completed_at: "TEXT", fee_due: "INTEGER", fee_paid_at: "TEXT", missed_slot: "TEXT", package_id: "INTEGER", package_name: "TEXT",
-  centre_id: "INTEGER", patient_id: "INTEGER", consent_at: "TEXT" };
+  centre_id: "INTEGER", patient_id: "INTEGER", consent_at: "TEXT", centre_status: "TEXT", centre_status_at: "TEXT", collector_info: "TEXT" };
 function ensureSchema(env) {
   if (!schemaReady) {
     schemaReady = (async () => {
@@ -281,6 +297,7 @@ function ensureSchema(env) {
       await seedPackages(env);
       await migrateTestsAndReports(env);
       await seedAccounts(env);
+      await seedWa(env);
     })().catch((e) => { schemaReady = null; throw e; });
   }
   return schemaReady;
@@ -492,7 +509,7 @@ async function adminList(env, url) {
   const { results } = await env.DB.prepare(
     `SELECT id, date, slot, name, phone, address, pincode, city, state, cycle, notes, amount, status, utr, source, created_at, paid_at, updated_at,
        package_id, package_name, vial_no, collected_at, report_name, report_size, report_token, report_at, completed_at, fee_due, fee_paid_at, missed_slot,
-       centre_id, patient_id, consent_at, (SELECT dob FROM users u WHERE u.id = bookings.patient_id) AS dob,
+       centre_id, patient_id, consent_at, centre_status, collector_info, (SELECT dob FROM users u WHERE u.id = bookings.patient_id) AS dob,
        EXISTS(SELECT 1 FROM payment_proofs p WHERE p.booking_id = bookings.id) AS has_proof,
        (SELECT group_concat(kind || '@' || at, ',') FROM msg_log l WHERE l.booking_id = bookings.id) AS msgs
      FROM bookings WHERE date BETWEEN ?1 AND ?2 ${includeInactive ? "" : "AND status NOT IN ('expired')"}
@@ -649,6 +666,8 @@ async function adminSetStatus(env, req, id) {
     if (/UNIQUE/i.test(String(e))) return bad("That slot is already taken by another booking.", 409);
     throw e;
   }
+  if (status === "confirmed" && row.status !== "confirmed") later(req, waEvent(env, "confirmed", id));
+  if (status === "collected" && row.status === "confirmed") later(req, waEvent(env, "collected", id));
   return json({ ok: true });
 }
 
@@ -668,6 +687,12 @@ async function adminUploadReport(env, req, id) {
   if (String.fromCharCode(...buf.subarray(0, 5)) !== "%PDF-") return bad("Please upload the report as a PDF.");
   let name = "report.pdf";
   try { name = clean(decodeURIComponent(req.headers.get("x-filename") || "report.pdf"), 120) || name; } catch {}
+  const fid = await storeReport(env, id, buf, name);
+  later(req, waEvent(env, "report", id));
+  return json({ ok: true, id: fid.id, token: fid.token });
+}
+// save a report PDF (bytes already checked) – used by the admin, the centre portal and the centre's WhatsApp upload
+async function storeReport(env, id, buf, name) {
   const now = isoNow(), token = randId(32, "abcdefghijklmnopqrstuvwxyz0123456789");
   await env.DB.prepare("INSERT INTO report_files (booking_id, name, size, token, created_at) VALUES (?1, ?2, ?3, ?4, ?5)").bind(id, name, buf.length, token, now).run();
   const f = await env.DB.prepare("SELECT id FROM report_files WHERE token=?1").bind(token).first();
@@ -676,7 +701,7 @@ async function adminUploadReport(env, req, id) {
     stmts.push(env.DB.prepare("INSERT INTO report_parts (report_id, idx, data) VALUES (?1, ?2, ?3)").bind(f.id, n, b64.slice(i, i + REPORT_CHUNK)));
   stmts.push(env.DB.prepare("UPDATE bookings SET status='report_ready', report_at=?1, completed_at=NULL, updated_at=?1 WHERE id=?2").bind(now, id));
   await env.DB.batch(stmts);
-  return json({ ok: true, id: f.id, token });
+  return { id: f.id, token };
 }
 async function fileResponse(env, f, patient) {
   const { results } = await env.DB.prepare("SELECT data FROM report_parts WHERE report_id=?1 ORDER BY idx").bind(f.id).all();
@@ -727,8 +752,8 @@ async function adminVial(env, req, id) {
 }
 
 // Admin opened WhatsApp with a message. Sending the report completes the job.
-const MSG_KINDS = ["pay", "confirm", "center", "reminder", "slots", "missed", "collected", "report", "chat"];
-const DONE_KINDS = ["confirm", "center", "reminder", "collected"]; // message steps that can be ticked as done by hand
+const MSG_KINDS = ["pay", "confirm", "center", "collector", "reminder", "slots", "missed", "collected", "report", "prep", "chat"];
+const DONE_KINDS = ["confirm", "center", "centre_ok", "collector", "reminder", "collected"]; // message steps that can be ticked as done by hand
 async function adminSent(env, req, id) {
   const body = await req.json().catch(() => ({}));
   const kind = body.kind;
@@ -1051,9 +1076,18 @@ async function adminAssignCentre(env, req, id) {
     if (!c) return bad("Centre not found", 404);
     if (!c.active) return bad("That centre is switched off. Turn it on in the Centres tab first.", 409);
   }
-  const r = await env.DB.prepare("UPDATE bookings SET centre_id=?1, updated_at=?2 WHERE id=?3 AND status != 'blocked'").bind(cid, isoNow(), id).run();
-  if (!r.meta.changes) return bad("Booking not found", 404);
+  const cur = await env.DB.prepare("SELECT centre_id FROM bookings WHERE id=?1 AND status != 'blocked'").bind(id).first();
+  if (!cur) return bad("Booking not found", 404);
+  await assignCentre(env, id, cid);
+  if (cid && cid !== cur.centre_id) later(req, waEvent(env, "assigned", id));
   return json({ ok: true });
+}
+async function assignCentre(env, id, cid) {
+  // a new centre starts fresh: not yet accepted, no collector, booking details not yet sent to it
+  await env.DB.batch([
+    env.DB.prepare("UPDATE bookings SET centre_id=?1, centre_status=NULL, centre_status_at=NULL, collector_info=NULL, updated_at=?2 WHERE id=?3").bind(cid, isoNow(), id),
+    env.DB.prepare("DELETE FROM msg_log WHERE booking_id=?1 AND kind IN ('center','done:center','done:centre_ok','collector','done:collector')").bind(id),
+  ]);
 }
 
 // ---- admin: users ----
@@ -1141,7 +1175,7 @@ async function centreBookings(env, user, url) {
   const from = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get("from") || "") ? url.searchParams.get("from") : addDays(today, -30);
   const to = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get("to") || "") ? url.searchParams.get("to") : addDays(today, BOOK_DAYS_AHEAD);
   const c = await env.DB.prepare("SELECT id, name FROM centres WHERE id=?1").bind(user.centre_id).first();
-  const { results } = await env.DB.prepare(`SELECT id, date, slot, name, phone, address, pincode, city, state, cycle, notes, status, vial_no, collected_at, package_name
+  const { results } = await env.DB.prepare(`SELECT id, date, slot, name, phone, address, pincode, city, state, cycle, notes, status, vial_no, collected_at, package_name, centre_status, collector_info
     FROM bookings WHERE centre_id=?1 AND date BETWEEN ?2 AND ?3 AND status IN (${PAID_STATES.map((_, i) => "?" + (i + 4)).join(",")}) ORDER BY date, slot`)
     .bind(user.centre_id, from, to, ...PAID_STATES).all();
   const ids = results.map((r) => r.id);
@@ -1164,16 +1198,47 @@ async function centreCollected(env, user, req, id) {
   const row = await centreBookingRow(env, user, id);
   if (!row) return bad("Booking not found", 404);
   const b = await req.json().catch(() => ({}));
-  const vial = clean(b.vial_no, 40).toUpperCase();
-  if (!vial) return bad("Enter the vial number written on the sample.");
-  const dup = await env.DB.prepare("SELECT id FROM bookings WHERE vial_no=?1 AND id!=?2 LIMIT 1").bind(vial, id).first();
-  if (dup) return bad(`Vial ${vial} is already used for another booking. Check the number.`, 409);
+  const r = await markCollected(env, row, b.vial_no);
+  if (r.err) return bad(r.err, 409);
+  if (r.collected) later(req, waEvent(env, "collected", id));
+  return json({ ok: true });
+}
+// centre (portal or WhatsApp) gives the vial no.: confirmed → collected, or a correction of the vial no.
+async function markCollected(env, row, vialIn) {
+  const vial = clean(vialIn, 40).toUpperCase().replace(/\s+/g, "");
+  if (!vial) return { err: "Enter the vial number written on the sample." };
+  const dup = await env.DB.prepare("SELECT id FROM bookings WHERE vial_no=?1 AND id!=?2 LIMIT 1").bind(vial, row.id).first();
+  if (dup) return { err: `Vial ${vial} is already used for another booking. Check the number.` };
   const now = isoNow();
   if (row.status === "confirmed") {
-    await env.DB.prepare("UPDATE bookings SET status='collected', vial_no=?1, collected_at=COALESCE(collected_at, ?2), updated_at=?2 WHERE id=?3 AND status='confirmed'").bind(vial, now, id).run();
-  } else if (["collected", "report_ready", "completed"].includes(row.status)) {
-    await env.DB.prepare("UPDATE bookings SET vial_no=?1, updated_at=?2 WHERE id=?3").bind(vial, now, id).run(); // correcting the vial no.
-  } else return bad("This booking can't be marked collected.", 409);
+    await env.DB.prepare("UPDATE bookings SET status='collected', vial_no=?1, collected_at=COALESCE(collected_at, ?2), updated_at=?2 WHERE id=?3 AND status='confirmed'").bind(vial, now, row.id).run();
+    return { ok: true, collected: true, vial };
+  }
+  if (["collected", "report_ready", "completed"].includes(row.status)) {
+    await env.DB.prepare("UPDATE bookings SET vial_no=?1, updated_at=?2 WHERE id=?3").bind(vial, now, row.id).run();
+    return { ok: true, vial };
+  }
+  return { err: "This booking can't be marked collected." };
+}
+// centre takes the job (with the collector's name / mobile / time for the patient) or gives it back
+async function centreAccept(env, user, req, id, what) {
+  const row = await centreBookingRow(env, user, id);
+  if (!row || row.status !== "confirmed") return bad("This booking can't be changed any more.", 409);
+  const now = isoNow();
+  if (what === "decline") {
+    await env.DB.batch([
+      env.DB.prepare("UPDATE bookings SET centre_id=NULL, centre_status='declined', centre_status_at=?1, collector_info=NULL, updated_at=?1 WHERE id=?2").bind(now, id),
+      env.DB.prepare("DELETE FROM msg_log WHERE booking_id=?1 AND kind IN ('center','done:center','done:centre_ok')").bind(id),
+    ]);
+    const c = await env.DB.prepare("SELECT name FROM centres WHERE id=?1").bind(user.centre_id).first();
+    later(req, waEvent(env, "declined", id, { centre: c && c.name }));
+    return json({ ok: true });
+  }
+  const b = await req.json().catch(() => ({}));
+  const info = clean(b.collector, 200);
+  if (info.length < 5) return bad("Enter the collector's name, mobile and arrival time.");
+  await env.DB.prepare("UPDATE bookings SET centre_status='accepted', centre_status_at=COALESCE(centre_status_at, ?1), collector_info=?2, updated_at=?1 WHERE id=?3").bind(now, info, id).run();
+  later(req, waEvent(env, "accepted", id));
   return json({ ok: true });
 }
 async function centreUpload(env, user, req, id) {
@@ -1235,9 +1300,836 @@ async function patientReportFile(env, s, rid) {
   return f ? fileResponse(env, f, f.patient) : bad("Report not found", 404);
 }
 
+// =====================================================================
+// ---- WhatsApp Cloud API: settings, sending (automatic, with manual backup), webhook, bot menus ----
+// =====================================================================
+// Secrets (Cloudflare → Worker → Settings → Variables and Secrets):
+//   WA_TOKEN        – permanent System User access token (whatsapp_business_messaging + whatsapp_business_management)
+//   WA_APP_SECRET   – the Meta app's App Secret (checks that webhook calls really come from Meta)
+//   WA_VERIFY_TOKEN – any text; the same text goes in Meta → WhatsApp → Configuration → Webhook "Verify token"
+// Everything else (phone number ID, mode, team numbers…) is set in Admin → WhatsApp.
+const WA_DEFAULTS = { wa_mode: "manual", wa_phone_id: "", wa_waba_id: "1451717317036973", wa_version: "v25.0",
+  team_numbers: "", auto_reports: "0", wa_down_until: "", wa_down_reason: "" };
+const WA_SETTABLE = ["wa_mode", "wa_phone_id", "wa_waba_id", "wa_version", "team_numbers", "auto_reports"];
+
+async function getSettings(env) {
+  const { results } = await env.DB.prepare("SELECT k, v FROM settings").all();
+  const S = { ...WA_DEFAULTS };
+  for (const r of results) S[r.k] = r.v ?? "";
+  return S;
+}
+async function setSettings(env, obj) {
+  const e = Object.entries(obj);
+  if (e.length) await env.DB.batch(e.map(([k, v]) => env.DB.prepare("INSERT INTO settings (k, v) VALUES (?1, ?2) ON CONFLICT(k) DO UPDATE SET v=excluded.v").bind(k, v == null ? "" : String(v))));
+}
+const teamNumbers = (S) => String(S.team_numbers || "").split(/[,;\s]+/).map((x) => normPhone(x)).filter(Boolean);
+const waReady = (env, S) => !!(env.WA_TOKEN && S.wa_phone_id);
+const waDown = (S) => !!(S.wa_down_until && S.wa_down_until > isoNow());
+const waAuto = (env, S) => S.wa_mode === "auto" && waReady(env, S) && !waDown(S);
+
+class WaError extends Error { constructor(msg, code) { super(msg); this.code = code; } }
+async function graph(env, S, path, { method = "GET", body, form } = {}) {
+  // WA_GRAPH_URL is only for local testing against a fake API
+  const r = await fetch(`${env.WA_GRAPH_URL || "https://graph.facebook.com"}/${S.wa_version || "v25.0"}/${path}`, {
+    method, headers: { authorization: `Bearer ${env.WA_TOKEN}`, ...(body ? { "content-type": "application/json" } : {}) },
+    body: body ? JSON.stringify(body) : form,
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.error) {
+    const e = j.error || {};
+    const msg = (e.error_user_msg || e.message || `WhatsApp API error ${r.status}`) + (e.error_data && e.error_data.details ? ` – ${e.error_data.details}` : "");
+    throw new WaError(msg, e.code || r.status);
+  }
+  return j;
+}
+// errors that mean the whole API is unusable for us (token, payment method, account) → pause 30 minutes; messages go to "send by hand"
+const WA_OUTAGE = [190, 10, 200, 3, 131031, 131042, 131005, 368, 500, 502, 503, 504];
+async function noteOutage(env, e) {
+  if (!WA_OUTAGE.includes(Number(e && e.code))) return;
+  await setSettings(env, { wa_down_until: new Date(Date.now() + 30 * 60000).toISOString(), wa_down_reason: String(e.message).slice(0, 300) });
+}
+async function waSend(env, S, to, payload) {
+  const j = await graph(env, S, `${S.wa_phone_id}/messages`, { method: "POST", body: { messaging_product: "whatsapp", recipient_type: "individual", to: "91" + to, ...payload } });
+  return j.messages && j.messages[0] ? j.messages[0].id : null;
+}
+const waText = (env, S, to, body) => waSend(env, S, to, { type: "text", text: { body: String(body).slice(0, 4096), preview_url: false } });
+const waButtons = (env, S, to, body, buttons) => waSend(env, S, to, { type: "interactive", interactive: { type: "button", body: { text: String(body).slice(0, 1024) },
+  action: { buttons: buttons.slice(0, 3).map((b) => ({ type: "reply", reply: { id: b.id.slice(0, 256), title: b.title.slice(0, 20) } })) } } });
+const waList = (env, S, to, body, button, rows) => waSend(env, S, to, { type: "interactive", interactive: { type: "list", body: { text: String(body).slice(0, 1024) },
+  action: { button: button.slice(0, 20), sections: [{ title: "Choose", rows: rows.slice(0, 10).map((r) => ({ id: r.id.slice(0, 200), title: r.title.slice(0, 24), ...(r.description ? { description: r.description.slice(0, 72) } : {}) })) }] } } });
+async function waMedia(env, S, mediaId) {
+  const meta = await graph(env, S, mediaId);
+  const r = await fetch(meta.url, { headers: { authorization: `Bearer ${env.WA_TOKEN}` } });
+  if (!r.ok) throw new WaError("Could not download the file from WhatsApp", r.status);
+  return { bytes: new Uint8Array(await r.arrayBuffer()), mime: meta.mime_type || r.headers.get("content-type") || "" };
+}
+async function waSendPdf(env, S, to, bytes, filename) {
+  const form = new FormData();
+  form.append("messaging_product", "whatsapp");
+  form.append("type", "application/pdf");
+  form.append("file", new Blob([bytes], { type: "application/pdf" }), filename);
+  const up = await graph(env, S, `${S.wa_phone_id}/media`, { method: "POST", form });
+  return waSend(env, S, to, { type: "document", document: { id: up.id, filename } });
+}
+async function reportBytes(env, rid) {
+  const { results } = await env.DB.prepare("SELECT data FROM report_parts WHERE report_id=?1 ORDER BY idx").bind(rid).all();
+  return Uint8Array.from(atob(results.map((r) => r.data).join("")), (c) => c.charCodeAt(0));
+}
+
+// ---- message texts (defaults in public/shared/msgs.js, edits in msg_templates) ----
+async function templates(env) {
+  const { results } = await env.DB.prepare("SELECT * FROM msg_templates").all();
+  return M.TEMPLATES.map((t) => {
+    const o = results.find((r) => r.key === t.key) || {};
+    return { ...t, default_body: t.body, body: o.body || t.body, custom: !!o.body, wa_id: o.wa_id || null, wa_status: o.wa_status || null, wa_reason: o.wa_reason || null, wa_body: o.wa_body || null };
+  });
+}
+async function bookingFull(env, id) {
+  const b = await env.DB.prepare("SELECT * FROM bookings WHERE id=?1").bind(id).first();
+  if (!b) return null;
+  const [{ results: tests }, { results: files }] = await Promise.all([
+    env.DB.prepare("SELECT t.name, p.tests AS includes, p.prep FROM booking_tests t LEFT JOIN packages p ON p.id = t.package_id WHERE t.booking_id=?1 ORDER BY t.id").bind(id).all(),
+    env.DB.prepare("SELECT id, name, size, sent_at FROM report_files WHERE booking_id=?1 ORDER BY id").bind(id).all(),
+  ]);
+  b.tests = tests; b.files = files;
+  b.centre = b.centre_id ? await env.DB.prepare("SELECT id, name FROM centres WHERE id=?1").bind(b.centre_id).first() : null;
+  const n = b.centre_id ? await env.DB.prepare("SELECT phone FROM centre_numbers WHERE centre_id=?1 ORDER BY sort, id LIMIT 1").bind(b.centre_id).first() : null;
+  b.centre_phone = n ? n.phone : null;
+  return b;
+}
+function msgFor(env, T, b, kind, extra = {}) {
+  const t = T.find((x) => x.key === kind);
+  if (!t) throw new Error("Unknown message " + kind);
+  const v = M.vars(b, { tests: b.tests, cfg: { amount: amount(env), upiId: env.UPI_ID || "", visitFee: visitFee(env) }, centre: b.centre,
+    files: extra.files || (b.files || []).filter((f) => !f.sent_at), sug: extra.sug, kind, alert: extra.alert });
+  return { t, v, text: M.render(t.body, v) };
+}
+async function chatOpen(env, phone) {
+  const c = await env.DB.prepare("SELECT last_in_at FROM wa_contacts WHERE phone=?1").bind(phone).first();
+  return !!(c && c.last_in_at && Date.now() - Date.parse(c.last_in_at) < 23.5 * 3600000);
+}
+// One message to one number: as a normal message if they wrote to us in the last 24 hours, otherwise as the approved template.
+async function sendOne(env, S, b, m, to) {
+  const { t, v, text } = m;
+  const btns = (t.buttons || []).map((x) => ({ id: `a:${x.id}:${b.id}`, title: x.text }));
+  if (await chatOpen(env, to)) {
+    if (btns.length && text.length <= 1024) return waButtons(env, S, to, text, btns);
+    const id = await waText(env, S, to, text);
+    if (btns.length) await waButtons(env, S, to, "Anything else?", btns);
+    return id;
+  }
+  if (t.meta === false) throw new WaError("This message can only go out while the chat is open (the person wrote to us in the last 24 hours).", "window");
+  if (t.wa_status !== "APPROVED") throw new WaError(`The WhatsApp template for “${t.label}” isn't approved yet (${t.wa_status ? t.wa_status.toLowerCase() : "not submitted"}) and the chat isn't open.`, "template");
+  const { params } = M.metaBody(t.wa_body || t.body); // the variables of the version WhatsApp approved
+  const comps = [];
+  if (params.length) comps.push({ type: "body", parameters: params.map((k) => ({ type: "text", parameter_name: k, text: M.oneLine(v[k]).slice(0, 900) })) });
+  (t.buttons || []).forEach((x, i) => comps.push({ type: "button", sub_type: "quick_reply", index: String(i), parameters: [{ type: "payload", payload: `a:${x.id}:${b.id}` }] }));
+  return waSend(env, S, to, { type: "template", template: { name: t.wa_name, language: { code: "en" }, components: comps } });
+}
+// Reports count as sent (and show in the patient portal) once the patient has been told they're ready.
+async function releaseReports(env, b, reportIds) {
+  const now = isoNow();
+  const files = b.files || [];
+  const want = Array.isArray(reportIds) && reportIds.length ? reportIds.map(Number) : files.filter((f) => !f.sent_at).map((f) => f.id);
+  const marked = files.filter((f) => want.includes(f.id) && !f.sent_at).map((f) => f.id);
+  const stmts = marked.map((rid) => env.DB.prepare("UPDATE report_files SET sent_at=?1 WHERE id=?2").bind(now, rid));
+  if (files.length && files.every((f) => f.sent_at || marked.includes(f.id)) && b.status === "report_ready")
+    stmts.push(env.DB.prepare("UPDATE bookings SET status='completed', completed_at=?1, updated_at=?1 WHERE id=?2").bind(now, b.id));
+  if (stmts.length) await env.DB.batch(stmts);
+  return marked;
+}
+
+// Send one of a booking's messages through WhatsApp.
+// → { sent: true } or { manual: true, error } – then it waits in Admin → WhatsApp → "Send by hand" (same text, opened in WhatsApp).
+async function deliver(env, bookingOrId, kind, opts = {}) {
+  const S = opts.S || await getSettings(env);
+  const b = typeof bookingOrId === "string" ? await bookingFull(env, bookingOrId) : bookingOrId;
+  if (!b) return { manual: true, error: "Booking not found" };
+  const T = opts.T || await templates(env);
+  const files = kind === "report" && Array.isArray(opts.reportIds) && opts.reportIds.length ? (b.files || []).filter((f) => opts.reportIds.map(Number).includes(f.id)) : undefined;
+  const m = msgFor(env, T, b, kind, { ...opts, files });
+  const to = opts.to ? [opts.to] : m.t.to === "patient" ? [b.phone] : m.t.to === "centre" ? (b.centre_phone ? [b.centre_phone] : []) : teamNumbers(S);
+  const now = isoNow();
+  const fail = async (error, phone) => {
+    await env.DB.prepare("INSERT INTO wa_outbox (booking_id, kind, to_phone, to_role, status, error, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'failed', ?5, ?6, ?6)")
+      .bind(b.id, kind, phone || null, m.t.to, String(error).slice(0, 500), now).run();
+    return { manual: true, error: String(error) };
+  };
+  if (!waReady(env, S)) return { manual: true, error: "The WhatsApp API isn't set up yet." };
+  if (!to.length) return fail(m.t.to === "centre" ? (b.centre_id ? "This centre has no WhatsApp number." : "No collection centre chosen yet.") : m.t.to === "team" ? "No team numbers in Admin → WhatsApp." : "No mobile number.");
+  if (waDown(S)) return fail(`WhatsApp API paused: ${S.wa_down_reason}`, to[0]);
+  let sent = 0, lastErr = null;
+  for (const phone of to) {
+    try {
+      const waId = await sendOne(env, S, b, m, phone);
+      let logId = null;
+      if (m.t.to !== "team" && !sent) logId = (await env.DB.prepare("INSERT INTO msg_log (booking_id, kind, at) VALUES (?1, ?2, ?3)").bind(b.id, kind, now).run()).meta.last_row_id;
+      await env.DB.prepare("INSERT INTO wa_outbox (booking_id, kind, to_phone, to_role, status, wa_id, log_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'sent', ?5, ?6, ?7, ?7)")
+        .bind(b.id, kind, phone, m.t.to, waId, logId, now).run();
+      sent++;
+    } catch (e) { lastErr = e; await noteOutage(env, e); }
+  }
+  if (sent) {
+    const marked = kind === "report" ? await releaseReports(env, b, opts.reportIds) : [];
+    return { sent: true, marked };
+  }
+  return fail(lastErr ? lastErr.message : "Not sent", to[0]);
+}
+
+// Things that happen in the workflow → the WhatsApp messages that go with them (only in automatic mode).
+async function waEvent(env, ev, id, extra = {}) {
+  const S = await getSettings(env);
+  if (!waAuto(env, S)) return;
+  const b = await bookingFull(env, id);
+  if (!b) return;
+  const T = await templates(env);
+  const done = async (k) => !!(await env.DB.prepare("SELECT 1 FROM msg_log WHERE booking_id=?1 AND kind IN (?2, ?3) LIMIT 1").bind(id, k, "done:" + k).first());
+  const once = async (k, o = {}) => { if (!(await done(k))) await deliver(env, b, k, { S, T, ...o }); };
+  const team = (alert) => deliver(env, b, "team_alert", { S, T, alert });
+  if (ev === "confirmed") {
+    await once("confirm");
+    if (b.centre_id) await once("center"); else await deliver(env, b, "team_paid", { S, T });
+  } else if (ev === "assigned") await once("center");
+  else if (ev === "accepted") await deliver(env, b, "collector", { S, T });
+  else if (ev === "declined") await team(`${extra.centre || "The centre"} can't do this collection – please choose another centre`);
+  else if (ev === "collected") await once("collected");
+  else if (ev === "report") {
+    if (S.auto_reports === "1") await deliver(env, b, "report", { S, T });
+    else await team("Report uploaded – check it and send it to the patient");
+  } else if (ev === "rescheduled") {
+    if (b.centre_id) await deliver(env, b, "center", { S, T });
+    await team(`The patient moved the visit to ${M.fmtDate(b.date)}, ${M.slotLabel(b.slot)}`);
+  } else if (ev === "payment") await team("Payment screenshot received on WhatsApp – please verify");
+}
+
+// Every evening (cron): reminders for tomorrow's visits.
+async function waDaily(env) {
+  const S = await getSettings(env);
+  await env.DB.prepare("DELETE FROM wa_inbox WHERE at < ?1").bind(new Date(Date.now() - 90 * 86400000).toISOString()).run();
+  if (!waAuto(env, S)) return;
+  const tomorrow = addDays(istParts().date, 1);
+  const { results } = await env.DB.prepare(`SELECT id FROM bookings WHERE date=?1 AND status='confirmed'
+    AND NOT EXISTS (SELECT 1 FROM msg_log l WHERE l.booking_id = bookings.id AND l.kind IN ('reminder','done:reminder'))`).bind(tomorrow).all();
+  const T = await templates(env);
+  for (const r of results) await deliver(env, r.id, "reminder", { S, T });
+}
+
+// ---- menus of the WhatsApp bot (titles editable in Admin → WhatsApp) ----
+const MENU_ACTIONS = {
+  patient: { my_bookings: "My bookings", status: "Track my test", prep: "How to prepare", resched: "Change date / time", pay: "Pay for my test", report: "Get my report", book: "Book a new test", talk: "Talk to our team" },
+  centre: { c_new: "New jobs to accept", c_today: "Today's visits", c_vial: "Sample collected", c_upload: "Upload a report", c_jobs: "All open jobs" },
+  team: { o_assign: "Choose centres", o_today: "Today's summary", o_failed: "Messages to send by hand" },
+};
+const MENU_DEFAULTS = [
+  ["patient", "my_bookings", "My bookings", "Date, time and tests"], ["patient", "status", "Track my test", "Where your sample and report are"],
+  ["patient", "prep", "How to prepare", "Fasting and other instructions"], ["patient", "resched", "Change date / time", "Pick a new slot"],
+  ["patient", "pay", "Pay for my test", "UPI details and payment screenshot"], ["patient", "report", "Get my report", "Sent here after a date-of-birth check"],
+  ["patient", "book", "Book a new test", "Open our booking page"], ["patient", "talk", "Talk to our team", "We'll call you back"],
+  ["centre", "c_new", "New jobs to accept", "Accept or decline new visits"], ["centre", "c_today", "Today's visits", "Patients to visit today"],
+  ["centre", "c_vial", "Sample collected", "Enter the vial no."], ["centre", "c_upload", "Upload a report", "Send the report PDF here"],
+  ["centre", "c_jobs", "All open jobs", "Everything not finished yet"],
+  ["team", "o_assign", "Choose centres", "Paid bookings without a centre"], ["team", "o_today", "Today's summary", "Visits, samples and reports"],
+  ["team", "o_failed", "Messages to send by hand", "Messages the API couldn't send"],
+];
+async function seedWa(env) {
+  const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM menu_items").first();
+  if (n && n.n) return;
+  await env.DB.batch(MENU_DEFAULTS.map(([role, action, title, description], i) =>
+    env.DB.prepare("INSERT INTO menu_items (role, action, title, description, sort, active) VALUES (?1, ?2, ?3, ?4, ?5, 1)").bind(role, action, title, description, i)));
+}
+
+// ---- webhook ----
+async function waWebhookVerify(env, url) {
+  if (url.searchParams.get("hub.mode") === "subscribe" && env.WA_VERIFY_TOKEN && safeEqual(url.searchParams.get("hub.verify_token") || "", env.WA_VERIFY_TOKEN))
+    return new Response(url.searchParams.get("hub.challenge") || "", { status: 200, headers: { "content-type": "text/plain" } });
+  return new Response("Forbidden", { status: 403 });
+}
+async function waWebhook(env, req) {
+  if (!env.WA_APP_SECRET) return new Response("WhatsApp is not set up", { status: 503 });
+  const raw = await req.text();
+  const sig = String(req.headers.get("x-hub-signature-256") || "").replace(/^sha256=/, "");
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.WA_APP_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const want = hex(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(raw)));
+  if (!sig || !safeEqual(sig, want)) return new Response("Bad signature", { status: 401 });
+  let body;
+  try { body = JSON.parse(raw); } catch { return new Response("ok"); }
+  later(req, waProcess(env, body)); // answer Meta at once; do the work after
+  return new Response("ok");
+}
+async function waProcess(env, body) {
+  const S = await getSettings(env);
+  for (const en of body.entry || []) for (const ch of en.changes || []) {
+    const v = ch.value || {};
+    if (S.wa_phone_id && v.metadata && v.metadata.phone_number_id && String(v.metadata.phone_number_id) !== String(S.wa_phone_id)) continue;
+    for (const st of v.statuses || []) await waStatus(env, st);
+    for (const msg of v.messages || []) {
+      const c = (v.contacts || []).find((x) => x.wa_id === msg.from);
+      try { await waInbound(env, S, msg, (c && c.profile && c.profile.name) || ""); }
+      catch (e) { console.log("WhatsApp message failed", String(e && e.stack || e)); }
+    }
+  }
+}
+// delivery reports: sent → delivered → read, or failed (then the step is undone and it goes to "send by hand")
+async function waStatus(env, st) {
+  const o = await env.DB.prepare("SELECT * FROM wa_outbox WHERE wa_id=?1").bind(st.id).first();
+  if (!o) return;
+  const rank = { sent: 1, delivered: 2, read: 3 };
+  if (st.status === "failed") {
+    const err = (st.errors || []).map((e) => `${e.title || e.message || "Failed"}${e.error_data && e.error_data.details ? " – " + e.error_data.details : ""}`).join("; ") || "WhatsApp couldn't deliver it";
+    const stmts = [env.DB.prepare("UPDATE wa_outbox SET status='failed', error=?1, updated_at=?2 WHERE id=?3").bind(err.slice(0, 500), isoNow(), o.id)];
+    if (o.log_id) stmts.push(env.DB.prepare("DELETE FROM msg_log WHERE id=?1").bind(o.log_id));
+    await env.DB.batch(stmts);
+  } else if ((rank[st.status] || 0) > (rank[o.status] || 0)) {
+    await env.DB.prepare("UPDATE wa_outbox SET status=?1, updated_at=?2 WHERE id=?3").bind(st.status, isoNow(), o.id).run();
+  }
+}
+
+// ---- the bot: someone wrote to our number ----
+const phone10 = (waId) => String(waId || "").replace(/\D/g, "").slice(-10);
+async function waInbound(env, S, msg, name) {
+  const phone = phone10(msg.from);
+  if (phone.length !== 10) return;
+  const now = isoNow();
+  const text = msg.type === "text" ? String((msg.text && msg.text.body) || "").trim()
+    : msg.type === "interactive" ? String((msg.interactive.button_reply && msg.interactive.button_reply.id) || (msg.interactive.list_reply && msg.interactive.list_reply.id) || "")
+    : msg.type === "button" ? String((msg.button && (msg.button.payload || msg.button.text)) || "") : "";
+  const ins = await env.DB.prepare("INSERT OR IGNORE INTO wa_inbox (wa_id, phone, type, body, at) VALUES (?1, ?2, ?3, ?4, ?5)").bind(msg.id, phone, msg.type, text.slice(0, 1000), now).run();
+  if (!ins.meta.changes) return; // WhatsApp sometimes delivers the same message twice
+  await env.DB.prepare(`INSERT INTO wa_contacts (phone, name, last_in_at) VALUES (?1, ?2, ?3)
+    ON CONFLICT(phone) DO UPDATE SET last_in_at=excluded.last_in_at, name=COALESCE(NULLIF(excluded.name, ''), wa_contacts.name)`).bind(phone, name, now).run();
+  if (!waReady(env, S) || waDown(S)) return;
+  const contact = await env.DB.prepare("SELECT * FROM wa_contacts WHERE phone=?1").bind(phone).first();
+  const who = await waWho(env, S, phone);
+  await new Bot(env, S, phone, who, contact).handle(msg, text);
+}
+async function waWho(env, S, phone) {
+  if (teamNumbers(S).includes(phone)) return { role: "team" };
+  const cn = await env.DB.prepare("SELECT n.centre_id, n.name, c.name AS centre FROM centre_numbers n JOIN centres c ON c.id = n.centre_id WHERE n.phone=?1 AND c.active=1").bind(phone).first();
+  if (cn) return { role: "centre", centre_id: cn.centre_id, centre: cn.centre, name: cn.name };
+  return { role: "patient" };
+}
+const parseDob = (s) => {
+  const t = String(s || "").trim();
+  let m = /^(\d{1,2})[\s./-](\d{1,2})[\s./-](\d{4})$/.exec(t);
+  if (m) return cleanDob(`${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`);
+  m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t);
+  return m ? cleanDob(t) : null;
+};
+const STATUS_LINE = { pending: "Waiting for payment", payment_submitted: "Payment received – being checked", confirmed: "Confirmed – visit scheduled",
+  collected: "Sample collected – report in progress", report_ready: "Report in progress", completed: "Report ready", no_show: "Missed visit – please contact us" };
+const SITE = "https://drsarwantests.com";
+
+class Bot {
+  constructor(env, S, phone, who, contact) { Object.assign(this, { env, S, phone, who, c: contact || {} }); this.db = env.DB; }
+  say(t) { return waText(this.env, this.S, this.phone, t); }
+  buttons(t, b) { return waButtons(this.env, this.S, this.phone, t, b); }
+  list(t, btn, rows) { return waList(this.env, this.S, this.phone, t, btn, rows); }
+  async state(s, data) { await this.db.prepare("UPDATE wa_contacts SET state=?1, state_data=?2, state_at=?3 WHERE phone=?4").bind(s, data == null ? null : String(data), s ? isoNow() : null, this.phone).run(); }
+  team(id, alert) { return deliver(this.env, id, "team_alert", { S: this.S, alert }); }
+
+  async handle(msg, text) {
+    const role = this.who.role;
+    const st = this.c.state && this.c.state_at && Date.now() - Date.parse(this.c.state_at) < 60 * 60000 ? this.c.state : null;
+    if (text.startsWith("a:")) {
+      const [, action, id, extra] = text.split(":");
+      await this.state(null);
+      return this.action(action, id, extra);
+    }
+    if (msg.type === "document" || msg.type === "image") return this.media(msg, st);
+    if (st && text && !/^(menu|hi|hello|hey|start|0|cancel)$/i.test(text)) return this.answer(st, this.c.state_data, text);
+    await this.state(null);
+    return this.menu(true);
+  }
+  async menu(greet) {
+    const role = this.who.role;
+    const { results } = await this.db.prepare("SELECT action, title, description FROM menu_items WHERE role=?1 AND active=1 ORDER BY sort, id LIMIT 10").bind(role).all();
+    const rows = results.filter((r) => MENU_ACTIONS[role][r.action]).map((r) => ({ id: `a:${r.action}`, title: r.title, description: r.description || "" }));
+    const hi = role === "centre" ? `Hi${this.who.name ? " " + this.who.name : ""} 👋 ${this.who.centre} – what would you like to do?`
+      : role === "team" ? "Hi 👋 Dr. Sarwan Diagnostic Labs team menu."
+      : `Hi${this.c.name ? " " + String(this.c.name).split(" ")[0] : ""} 👋 Welcome to *Dr. Sarwan Diagnostic Labs*. How can we help?`;
+    if (!rows.length) return this.say(hi + "\n\nPlease call us on 8368143677.");
+    return this.list(greet ? hi : "What else can we help with?", "Menu", rows);
+  }
+
+  // ---------- patients ----------
+  async bookings(onlyOpen) {
+    const { results } = await this.db.prepare(`SELECT * FROM bookings WHERE phone=?1 AND status NOT IN ('blocked','expired','cancelled')
+      ${onlyOpen ? "AND status IN ('pending','payment_submitted','confirmed') AND date >= ?2" : "AND ?2 = ?2"} ORDER BY date DESC, slot DESC LIMIT 10`).bind(this.phone, addDays(istParts().date, onlyOpen ? 0 : -3650)).all();
+    return results;
+  }
+  async pick(rows, action, prompt) { // more than one booking → let them choose
+    if (rows.length === 1) return rows[0];
+    await this.list(prompt, "Choose", rows.map((b) => ({ id: `a:${action}:${b.id}`, title: `${M.fmtDate(b.date)}`, description: `${M.slotLabel(b.slot)} · ${b.package_name || b.id}` })));
+    return null;
+  }
+  async ownBooking(id) {
+    const b = id ? await this.db.prepare("SELECT * FROM bookings WHERE id=?1 AND phone=?2 AND status != 'blocked'").bind(id, this.phone).first() : null;
+    return b;
+  }
+  async action(a, id, extra) {
+    const role = this.who.role;
+    if (a === "menu") return this.menu(false);
+    if (role === "centre" && a.startsWith("c_")) return this.centreAction(a, id, extra);
+    if (role === "team" && a.startsWith("o_")) return this.teamAction(a, id, extra);
+    if (a.startsWith("c_") || a.startsWith("o_")) return this.menu(false);
+    return this.patientAction(a, id, extra);
+  }
+  async patientAction(a, id, extra) {
+    const env = this.env;
+    if (a === "my_bookings" || a === "status") {
+      const rows = (await this.bookings(false)).slice(0, 5);
+      if (!rows.length) return this.buttons(`We couldn't find a booking for this number.\nBook a home blood test at ${SITE}`, [{ id: "a:book", title: "Book a test" }, { id: "a:talk", title: "Talk to us" }]);
+      const lines = [];
+      for (const b of rows) {
+        const full = await bookingFull(env, b.id);
+        lines.push([`*${M.fmtDate(b.date)}, ${M.slotLabel(b.slot)}*`, `🧪 ${full.tests.map((t) => t.name).join(", ") || b.package_name || "Blood test"}`,
+          `📌 ${STATUS_LINE[b.status] || b.status}`, a === "status" && b.collector_info && b.status === "confirmed" ? `👤 Collector: ${b.collector_info}` : null,
+          a === "status" && b.vial_no ? `🧪 Vial no.: ${b.vial_no}` : null, `Ref ${b.id}`].filter(Boolean).join("\n"));
+      }
+      await this.say(lines.join("\n\n"));
+      return this.menu(false);
+    }
+    if (a === "prep") {
+      let b = id ? await this.ownBooking(id) : null;
+      if (!b) { const rows = await this.bookings(true); b = rows.length ? await this.pick(rows, "prep", "Which test?") : null; if (!b && rows.length) return; }
+      if (!b) return this.say("You don't have an upcoming test. Before most blood tests: fast for 10–12 hours (water is fine) unless your doctor says otherwise. Our team will tell you exactly what to do when you book.");
+      const full = await bookingFull(env, b.id);
+      await this.say(msgFor(env, await templates(env), full, "prep").text);
+      return;
+    }
+    if (a === "book") return this.say(`Book a home blood test here: ${SITE}/#book\nOur phlebotomist comes to your home between 6 and 11 AM.`);
+    if (a === "talk") {
+      const rows = await this.bookings(false);
+      await deliver(env, rows[0] ? rows[0].id : "", "team_alert", { S: this.S, alert: `+91 ${this.phone} (${this.c.name || "patient"}) asked to talk to the team` })
+        .catch(() => {});
+      if (!rows[0]) for (const t of teamNumbers(this.S)) await waText(env, this.S, t, `🔔 +91 ${this.phone} (${this.c.name || "new contact"}) asked to talk to the team on WhatsApp.`).catch(() => {});
+      return this.say("Thanks! Someone from our team will call you shortly. You can also call us on 8368143677.");
+    }
+    if (a === "pay") {
+      let b = id ? await this.ownBooking(id) : null;
+      if (!b) {
+        const { results } = await this.db.prepare(`SELECT * FROM bookings WHERE phone=?1 AND (status IN ('pending','expired') AND date >= ?2 OR (status='no_show' AND fee_due > 0 AND fee_paid_at IS NULL)) ORDER BY created_at DESC LIMIT 5`)
+          .bind(this.phone, istParts().date).all();
+        if (!results.length) return this.say("There's nothing to pay right now ✅ If you've just booked on our website, pay on the booking page or send the payment screenshot here.");
+        b = await this.pick(results, "pay", "Which booking do you want to pay for?");
+        if (!b) return;
+      }
+      const amt = b.status === "no_show" ? b.fee_due : b.amount;
+      await this.state("proof", b.id);
+      return this.say([`Please pay *${M.money(amt)}* by UPI to:`, `*${env.UPI_ID || "our UPI ID"}*`, `(${env.UPI_NAME || "Dr. Sarwan Diagnostic Labs"})`, "",
+        "Then send the payment *screenshot* here. We'll confirm your booking as soon as we've checked it.", "", `Booking ${b.id} · ${M.fmtDate(b.date)}, ${M.slotLabel(b.slot)}`].join("\n"));
+    }
+    if (a === "report") {
+      await this.state("dob", id || "");
+      return this.say("To keep reports private, please reply with the patient's *date of birth* (DD-MM-YYYY), e.g. 14-05-1990.");
+    }
+    if (a === "resched") {
+      let b = id ? await this.ownBooking(id) : null;
+      if (!b) { const rows = await this.bookings(true); if (!rows.length) return this.say("You don't have an upcoming visit to change. Book a new one at " + SITE); b = await this.pick(rows, "resched", "Which visit do you want to move?"); if (!b) return; }
+      if (!["pending", "payment_submitted", "confirmed", "expired"].includes(b.status)) return this.say("This visit can't be moved any more. Please call us on 8368143677.");
+      const today = istParts().date, rows = [];
+      for (let i = 0; i <= BOOK_DAYS_AHEAD && rows.length < 10; i++) {
+        const d = addDays(today, i);
+        let n = 0;
+        for (const s of SLOTS) if (isBookable(d, s) && (await slotRoom(env, d, s, b.city, b.id)).ok) n++;
+        if (n) rows.push({ id: `a:rs_d:${b.id}:${d.replace(/-/g, "")}`, title: M.fmtDate(d), description: `${n} time${n === 1 ? "" : "s"} free` });
+      }
+      if (!rows.length) return this.say("Sorry, there are no free times in the next two weeks. Please call us on 8368143677.");
+      return this.list(`Your visit is on *${M.fmtDate(b.date)}, ${M.slotLabel(b.slot)}*. Pick a new day:`, "Choose day", rows);
+    }
+    if (a === "rs_d" || a === "rs_s") {
+      const b = await this.ownBooking(id);
+      if (!b || !["pending", "payment_submitted", "confirmed", "expired"].includes(b.status)) return this.say("This visit can't be moved any more. Please call us on 8368143677.");
+      const d = String(extra || "").replace(/^(\d{4})(\d{2})(\d{2}).*$/, "$1-$2-$3");
+      if (a === "rs_d") {
+        const rows = [];
+        for (const s of SLOTS) if (isBookable(d, s) && (await slotRoom(env, d, s, b.city, b.id)).ok) rows.push({ id: `a:rs_s:${b.id}:${d.replace(/-/g, "")}${s.replace(":", "")}`, title: M.slotLabel(s) });
+        if (!rows.length) return this.say("That day just filled up. Please pick another day.").then(() => this.patientAction("resched", b.id));
+        return this.list(`Pick a time on *${M.fmtDate(d)}*:`, "Choose time", rows.slice(0, 10));
+      }
+      const t = String(extra || "").slice(8);
+      const slot = `${t.slice(0, 2)}:${t.slice(2, 4)}`;
+      if (!SLOTS.includes(slot) || !isBookable(d, slot)) return this.say("That time isn't available any more. Please pick another.");
+      const room = await slotRoom(env, d, slot, b.city, b.id);
+      if (!room.ok) return this.say(room.msg);
+      try {
+        await env.DB.batch([
+          env.DB.prepare("UPDATE bookings SET date=?1, slot=?2, status=CASE WHEN status='expired' THEN 'pending' ELSE status END, updated_at=?3 WHERE id=?4").bind(d, slot, isoNow(), b.id),
+          env.DB.prepare("DELETE FROM msg_log WHERE booking_id=?1 AND kind IN ('reminder','done:reminder')").bind(b.id),
+        ]);
+      } catch (e) { if (/UNIQUE/i.test(String(e))) return this.say("Someone just took that time. Please pick another."); throw e; }
+      await this.say(`Done ✅ Your visit is now on *${M.fmtDate(d)}, ${M.slotLabel(slot)}*.${b.status === "pending" || b.status === "expired" ? "\n\nYour slot is reserved once the payment is received." : ""}`);
+      if (["payment_submitted", "confirmed"].includes(b.status)) await waEvent(env, "rescheduled", b.id);
+      return;
+    }
+    return this.menu(false);
+  }
+  async answer(st, data, text) {
+    const env = this.env;
+    if (this.who.role === "centre") return this.centreAnswer(st, data, text);
+    if (st === "dob") {
+      const dob = parseDob(text);
+      const tries = (parseInt(String(data || "").split("|")[1] || "0", 10) || 0) + 1;
+      const bid = String(data || "").split("|")[0];
+      const users = dob ? (await this.db.prepare("SELECT id FROM users WHERE role='patient' AND active=1 AND phone=?1 AND dob=?2").bind(this.phone, dob).all()).results : [];
+      if (!users.length) {
+        if (tries >= 3) { await this.state(null); return this.say("That date of birth doesn't match our records. For your safety we've stopped here – please call us on 8368143677."); }
+        await this.state("dob", `${bid}|${tries}`);
+        return this.say(dob ? "That date of birth doesn't match our records for this number. Please check and try again (DD-MM-YYYY)." : "Please send the date of birth like this: 14-05-1990");
+      }
+      await this.state(null);
+      const ids = users.map((u) => u.id);
+      const { results: files } = await this.db.prepare(`SELECT f.id, f.name, b.id AS booking_id, b.date FROM report_files f JOIN bookings b ON b.id = f.booking_id
+        WHERE f.sent_at IS NOT NULL AND b.status NOT IN ('cancelled','blocked') AND b.patient_id IN (${ids.map((_, i) => "?" + (i + 1)).join(",")})
+        ${bid ? `AND b.id = ?${ids.length + 1}` : ""} ORDER BY b.date DESC, f.id LIMIT 6`).bind(...ids, ...(bid ? [bid] : [])).all();
+      if (!files.length) return this.say("Your report isn't ready yet. We'll send it here as soon as it is 🙏");
+      await this.say(`Here ${files.length === 1 ? "is your report" : "are your reports"} 📄`);
+      for (const f of files) await waSendPdf(env, this.S, this.phone, await reportBytes(env, f.id), `${f.name.replace(/\.pdf$/i, "")}.pdf`);
+      return this.say(`Please share ${files.length === 1 ? "it" : "them"} with your doctor. You can also open your reports at ${SITE}/reports/`);
+    }
+    return this.menu(true);
+  }
+  async media(msg, st) {
+    const env = this.env;
+    if (this.who.role === "centre") return this.centreMedia(msg, st);
+    if (this.who.role === "team") return this.say("Thanks – files can be added from the admin page.");
+    // a patient sending a picture: the payment screenshot
+    let b = st === "proof" ? await this.ownBooking(this.c.state_data) : null;
+    if (!b) {
+      b = await this.db.prepare(`SELECT * FROM bookings WHERE phone=?1 AND (status IN ('pending','expired') AND date >= ?2 OR status='payment_submitted' OR (status='no_show' AND fee_due > 0 AND fee_paid_at IS NULL))
+        ORDER BY created_at DESC LIMIT 1`).bind(this.phone, istParts().date).first();
+    }
+    if (!b || msg.type !== "image") return this.say("Thanks, we've received it. Our team will take a look 🙏").then(() => this.team(b ? b.id : "", `+91 ${this.phone} sent a ${msg.type} on WhatsApp`).catch(() => {}));
+    const f = await waMedia(env, this.S, msg.image.id);
+    if (!/^image\/(jpeg|png|webp)/.test(f.mime)) return this.say("Please send the payment screenshot as a photo (JPG or PNG).");
+    const data = toB64(f.bytes);
+    if (data.length > MAX_SHOT_CHARS) return this.say("That picture is too large. Please send a screenshot instead.");
+    const now = isoNow();
+    await this.db.prepare("INSERT INTO payment_proofs (booking_id, mime, data, created_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(booking_id) DO UPDATE SET mime=excluded.mime, data=excluded.data, created_at=excluded.created_at")
+      .bind(b.id, f.mime.split(";")[0], data, now).run();
+    if (["pending", "expired"].includes(b.status)) {
+      const room = await slotRoom(env, b.date, b.slot, b.city, b.id);
+      if (!room.ok || !isBookable(b.date, b.slot)) {
+        await this.state(null);
+        await this.say("Thanks, we've got your payment screenshot ✅ But your time slot isn't free any more – please pick a new time:");
+        return this.patientAction("resched", b.id);
+      }
+      await this.db.prepare("UPDATE bookings SET status='payment_submitted', paid_at=?1, updated_at=?1 WHERE id=?2 AND status IN ('pending','expired')").bind(now, b.id).run();
+    }
+    await this.state(null);
+    await this.say(`Thanks! We've received your payment screenshot for ${b.id} ✅ We'll confirm your booking as soon as we've checked it.`);
+    return waEvent(env, "payment", b.id);
+  }
+
+  // ---------- collection centres ----------
+  async jobs(where, binds = []) {
+    const { results } = await this.db.prepare(`SELECT * FROM bookings WHERE centre_id=?1 AND ${where} ORDER BY date, slot LIMIT 10`).bind(this.who.centre_id, ...binds).all();
+    return results;
+  }
+  async job(id) {
+    return id ? await this.db.prepare(`SELECT * FROM bookings WHERE id=?1 AND centre_id=?2 AND status IN (${PAID_STATES.map((_, i) => "?" + (i + 3)).join(",")})`)
+      .bind(id, this.who.centre_id, ...PAID_STATES).first() : null;
+  }
+  jobRows(rows, action) {
+    return rows.map((b) => ({ id: `a:${action}:${b.id}`, title: `${M.fmtDate(b.date)} ${b.slot}`, description: `${b.name} · ${b.city || b.pincode}` }));
+  }
+  async centreAction(a, id) {
+    const env = this.env, today = istParts().date;
+    const listOr = async (rows, action, title, none) => (rows.length ? this.list(title, "Choose", this.jobRows(rows, action)) : this.say(none).then(() => this.menu(false)));
+    if (a === "c_new") return listOr(await this.jobs("status='confirmed' AND centre_status IS NULL"), "c_job", "New jobs – choose one to accept or decline:", "No new jobs right now ✅");
+    if (a === "c_today") return listOr(await this.jobs("date=?2 AND status IN ('confirmed','collected')", [today]), "c_job", "Today's visits:", "No visits today.");
+    if (a === "c_jobs") return listOr(await this.jobs("status IN ('confirmed','collected','report_ready') AND date >= ?2", [addDays(today, -30)]), "c_job", "Open jobs:", "No open jobs ✅");
+    if (a === "c_vial") return listOr(await this.jobs("status='confirmed' AND date <= ?2", [addDays(today, 1)]), "c_vialq", "Which patient's sample did you collect?", "No samples waiting to be collected.");
+    if (a === "c_upload") return listOr(await this.jobs("status IN ('collected','report_ready')"), "c_up", "Which patient's report do you want to upload?", "No reports waiting.");
+    const b = await this.job(id);
+    if (!b) return this.say("That booking isn't with your centre any more.").then(() => this.menu(false));
+    if (a === "c_job") {
+      const full = await bookingFull(env, b.id);
+      const rows = [];
+      if (b.status === "confirmed") {
+        if (b.centre_status !== "accepted") rows.push({ id: `a:c_accept:${b.id}`, title: "Accept", description: "We'll do this visit" }, { id: `a:c_decline:${b.id}`, title: "Can't do", description: "Give it to another centre" });
+        rows.push({ id: `a:c_coll:${b.id}`, title: "Collector details", description: "Name, mobile and time for the patient" }, { id: `a:c_vialq:${b.id}`, title: "Sample collected", description: "Enter the vial no." });
+      } else rows.push({ id: `a:c_up:${b.id}`, title: "Upload report", description: "Send the report PDF" }, { id: `a:c_vialq:${b.id}`, title: "Edit vial no.", description: b.vial_no || "" });
+      rows.push({ id: "a:menu", title: "Back to menu" });
+      return this.list(msgFor(env, await templates(env), full, "center").text.slice(0, 1000), "What next?", rows);
+    }
+    if (a === "c_accept") {
+      await this.db.prepare("UPDATE bookings SET centre_status='accepted', centre_status_at=?1, updated_at=?1 WHERE id=?2").bind(isoNow(), b.id).run();
+      await this.state("collector", b.id);
+      return this.say(`Thank you ✅ Please reply with the *collector's name, mobile and arrival time* for ${b.name} – e.g.\nRamesh, 98765 43210, 8:30 AM\n\nWe'll send it to the patient.`);
+    }
+    if (a === "c_decline") {
+      await this.db.prepare("UPDATE bookings SET centre_id=NULL, centre_status='declined', centre_status_at=?1, collector_info=NULL, updated_at=?1 WHERE id=?2").bind(isoNow(), b.id).run();
+      await this.db.prepare("DELETE FROM msg_log WHERE booking_id=?1 AND kind IN ('center','done:center','done:centre_ok')").bind(b.id).run();
+      await this.say("Noted 👍 We'll give this visit to another centre.");
+      return waEvent(env, "declined", b.id, { centre: this.who.centre });
+    }
+    if (a === "c_coll") { await this.state("collector", b.id); return this.say(`Reply with the *collector's name, mobile and arrival time* for ${b.name} – e.g.\nRamesh, 98765 43210, 8:30 AM`); }
+    if (a === "c_vialq") { await this.state("vial", b.id); return this.say(`Reply with the *vial no.* written on ${b.name}'s sample.`); }
+    if (a === "c_up") { await this.state("upload", b.id); return this.say(`Send ${b.name}'s report *PDF* here now (as a document). You can send more than one.`); }
+    return this.menu(false);
+  }
+  async centreAnswer(st, id, text) {
+    const env = this.env;
+    const b = await this.job(id);
+    if (!b) { await this.state(null); return this.menu(true); }
+    if (st === "collector") {
+      const info = clean(text, 200);
+      if (info.length < 5) return this.say("Please send the collector's name, mobile and time, e.g. Ramesh, 98765 43210, 8:30 AM");
+      await this.db.prepare("UPDATE bookings SET collector_info=?1, centre_status='accepted', centre_status_at=COALESCE(centre_status_at, ?2), updated_at=?2 WHERE id=?3").bind(info, isoNow(), b.id).run();
+      await this.state(null);
+      const S = this.S;
+      if (waAuto(env, S)) { await waEvent(env, "accepted", b.id); await this.say("Saved ✅ We've sent the collector details to the patient."); }
+      else await this.say("Saved ✅ Our team will share the details with the patient.");
+      return this.menu(false);
+    }
+    if (st === "vial") {
+      const r = await markCollected(env, b, text);
+      if (r.err) return this.say(r.err + " Send the vial no. again.");
+      await this.state(null);
+      if (r.collected) await waEvent(env, "collected", b.id);
+      await this.say(`Saved ✅ ${b.name} – vial *${r.vial}*${r.collected ? " – sample collected." : "."}`);
+      return this.menu(false);
+    }
+    if (st === "upload") return this.say("Please send the report as a *PDF document* (📎 → Document).");
+    return this.menu(true);
+  }
+  async centreMedia(msg, st) {
+    const env = this.env;
+    let id = st === "upload" ? this.c.state_data : null;
+    const caption = (msg.document && msg.document.caption) || (msg.image && msg.image.caption) || "";
+    const ref = /DSL-[A-Z0-9]{6}/i.exec(caption + " " + ((msg.document && msg.document.filename) || ""));
+    if (ref) id = ref[0].toUpperCase();
+    const b = await this.job(id);
+    if (!b) return this.say("Which patient is this report for? Choose *Upload a report* in the menu first, then send the PDF.").then(() => this.centreAction("c_upload"));
+    if (msg.type !== "document") return this.say("Please send the report as a *PDF document* (📎 → Document), not a photo.");
+    if (!["collected", "report_ready", "completed"].includes(b.status)) return this.say(`First mark ${b.name}'s sample as collected (with the vial no.), then send the report.`);
+    const f = await waMedia(env, this.S, msg.document.id);
+    if (f.bytes.length > MAX_REPORT_BYTES) return this.say("That file is larger than 10 MB. Please send a smaller PDF.");
+    if (String.fromCharCode(...f.bytes.subarray(0, 5)) !== "%PDF-") return this.say("That isn't a PDF. Please send the report as a PDF document.");
+    await storeReport(env, b.id, f.bytes, clean(msg.document.filename || `${b.vial_no || b.id}.pdf`, 120));
+    await waEvent(env, "report", b.id);
+    return this.say(`Report saved for ${b.name} ✅ Send another PDF if there's more, or type *menu*.`);
+  }
+
+  // ---------- our team ----------
+  async teamAction(a, id, extra) {
+    const env = this.env, today = istParts().date;
+    if (a === "o_assign") {
+      if (!id) {
+        const { results } = await this.db.prepare("SELECT * FROM bookings WHERE status IN ('confirmed') AND centre_id IS NULL AND date >= ?1 ORDER BY date, slot LIMIT 10").bind(addDays(today, -1)).all();
+        if (!results.length) return this.say("Every paid booking has a centre ✅").then(() => this.menu(false));
+        return this.list("Paid bookings without a centre:", "Choose", results.map((b) => ({ id: `a:o_assign:${b.id}`, title: `${M.fmtDate(b.date)} ${b.slot}`, description: `${b.name} · ${b.city || b.pincode}` })));
+      }
+      const b = await this.db.prepare("SELECT * FROM bookings WHERE id=?1").bind(id).first();
+      if (!b) return this.say("Booking not found.");
+      const { results: cs } = await this.db.prepare("SELECT id, name, city FROM centres WHERE active=1 ORDER BY name LIMIT 10").all();
+      if (!cs.length) return this.say("No active centres. Add one in the admin page → Centres.");
+      return this.list(`${b.id} · ${b.name}\n${M.fmtDate(b.date)}, ${M.slotLabel(b.slot)}\n📍 ${[b.address, b.city, b.pincode].filter(Boolean).join(", ")}\n\nWhich centre?`, "Choose centre",
+        cs.map((c) => ({ id: `a:o_set:${b.id}:${c.id}`, title: c.name, description: c.city || "" })));
+    }
+    if (a === "o_set") {
+      const b = await this.db.prepare("SELECT id, name FROM bookings WHERE id=?1 AND status != 'blocked'").bind(id).first();
+      const c = await this.db.prepare("SELECT id, name FROM centres WHERE id=?1 AND active=1").bind(parseInt(extra, 10) || 0).first();
+      if (!b || !c) return this.say("Couldn't do that – the booking or centre wasn't found.");
+      await assignCentre(env, b.id, c.id);
+      await waEvent(env, "assigned", b.id);
+      await this.say(`✅ ${b.name} (${b.id}) → ${c.name}.${waAuto(env, this.S) ? " The booking details were sent to the centre." : ""}`);
+      return this.teamAction("o_assign");
+    }
+    if (a === "o_today") {
+      const { results } = await this.db.prepare("SELECT status, COUNT(*) AS n FROM bookings WHERE date=?1 AND status NOT IN ('blocked','expired','cancelled') GROUP BY status").bind(today).all();
+      const un = await this.db.prepare("SELECT COUNT(*) AS n FROM bookings WHERE status='confirmed' AND centre_id IS NULL AND date >= ?1").bind(today).first();
+      const verify = await this.db.prepare("SELECT COUNT(*) AS n FROM bookings WHERE status='payment_submitted'").first();
+      const send = await this.db.prepare("SELECT COUNT(*) AS n FROM bookings WHERE status='report_ready'").first();
+      const fails = await this.db.prepare("SELECT COUNT(*) AS n FROM wa_outbox WHERE status='failed' AND to_role != 'team' AND created_at >= ?1").bind(new Date(Date.now() - 7 * 86400000).toISOString()).first();
+      return this.say([`📊 *Today (${M.fmtDate(today)})*`, ...results.map((r) => `• ${STATUS_LINE[r.status] || r.status}: ${r.n}`), "",
+        `💳 Payments to verify: ${verify.n}`, `🏥 Paid, no centre yet: ${un.n}`, `📄 Reports to send: ${send.n}`, `✋ Messages to send by hand: ${fails.n}`, "", `${SITE}/admin/`].join("\n"));
+    }
+    if (a === "o_failed") {
+      const r = await this.db.prepare("SELECT COUNT(*) AS n FROM wa_outbox WHERE status='failed' AND to_role != 'team' AND created_at >= ?1").bind(new Date(Date.now() - 7 * 86400000).toISOString()).first();
+      return this.say(r.n ? `✋ ${r.n} message${r.n === 1 ? "" : "s"} couldn't be sent automatically. Open ${SITE}/admin/ → WhatsApp → *Send by hand*.` : "Nothing to send by hand ✅");
+    }
+    return this.menu(false);
+  }
+}
+
+// ---- admin: WhatsApp settings, texts, menus, messages to send by hand ----
+async function adminWa(env, url) {
+  const S = await getSettings(env);
+  const [T, { results: menus }, { results: failed }] = await Promise.all([
+    templates(env),
+    env.DB.prepare("SELECT * FROM menu_items ORDER BY role, sort, id").all(),
+    env.DB.prepare(`SELECT o.*, b.name AS patient FROM wa_outbox o LEFT JOIN bookings b ON b.id = o.booking_id
+      WHERE o.status='failed' AND o.to_role != 'team' AND o.created_at >= ?1 ORDER BY o.id DESC LIMIT 50`).bind(new Date(Date.now() - 14 * 86400000).toISOString()).all(),
+  ]);
+  const { results: recent } = await env.DB.prepare(`SELECT o.id, o.booking_id, o.kind, o.to_phone, o.to_role, o.status, o.error, o.created_at, b.name AS patient
+    FROM wa_outbox o LEFT JOIN bookings b ON b.id = o.booking_id ORDER BY o.id DESC LIMIT 30`).all();
+  // the exact text to send by hand for each failed message
+  const cache = {};
+  for (const f of failed) {
+    try {
+      const b = cache[f.booking_id] || (cache[f.booking_id] = await bookingFull(env, f.booking_id));
+      f.text = b ? msgFor(env, T, b, f.kind).text : "";
+      f.to_phone = f.to_phone || (b ? (f.to_role === "centre" ? b.centre_phone : b.phone) : "");
+    } catch { f.text = ""; }
+  }
+  return json({
+    settings: Object.fromEntries(Object.entries(S).filter(([k]) => k in WA_DEFAULTS)),
+    secrets: { WA_TOKEN: !!env.WA_TOKEN, WA_APP_SECRET: !!env.WA_APP_SECRET, WA_VERIFY_TOKEN: !!env.WA_VERIFY_TOKEN },
+    ready: waReady(env, S), auto: waAuto(env, S), down: waDown(S),
+    webhook: `${url.origin}/api/wa/webhook`, templates: T, vars: M.VARS, menus, actions: MENU_ACTIONS, failed, recent,
+  });
+}
+async function adminWaSettings(env, req) {
+  const b = await req.json().catch(() => ({}));
+  const set = {};
+  for (const k of WA_SETTABLE) if (k in b) set[k] = clean(b[k], 300);
+  if ("wa_mode" in set && !["manual", "auto"].includes(set.wa_mode)) return bad("Choose manual or automatic.");
+  if ("wa_phone_id" in set && set.wa_phone_id && !/^\d{6,25}$/.test(set.wa_phone_id)) return bad("The phone number ID is a long number (WhatsApp → API Setup).");
+  if ("wa_waba_id" in set && set.wa_waba_id && !/^\d{6,25}$/.test(set.wa_waba_id)) return bad("The WhatsApp account ID is a long number.");
+  if ("wa_version" in set && !/^v\d{2}\.\d$/.test(set.wa_version)) return bad("API version looks like v25.0");
+  if ("team_numbers" in set) {
+    const raw = set.team_numbers.split(/[,;\s]+/).filter(Boolean);
+    const bad1 = raw.find((x) => !normPhone(x));
+    if (bad1) return bad(`${bad1} isn't a valid 10-digit mobile number.`);
+    set.team_numbers = raw.map((x) => normPhone(x)).join(", ");
+  }
+  if ("auto_reports" in set) set.auto_reports = b.auto_reports === true || b.auto_reports === "1" ? "1" : "0";
+  if (b.resume) Object.assign(set, { wa_down_until: "", wa_down_reason: "" });
+  await setSettings(env, set);
+  return json({ ok: true });
+}
+async function adminWaTest(env) {
+  const S = await getSettings(env);
+  if (!env.WA_TOKEN) return bad("The WA_TOKEN secret isn't set in Cloudflare yet.");
+  if (!S.wa_phone_id) return bad("Enter the phone number ID first.");
+  try {
+    const p = await graph(env, S, `${S.wa_phone_id}?fields=display_phone_number,verified_name,quality_rating,code_verification_status,name_status,status,messaging_limit_tier`);
+    await setSettings(env, { wa_down_until: "", wa_down_reason: "" });
+    return json({ ok: true, phone: p });
+  } catch (e) { return bad(`WhatsApp said: ${e.message}`, 502); }
+}
+async function adminWaSaveTemplate(env, req, key, reset) {
+  if (!M.TEMPLATES.some((t) => t.key === key)) return bad("Unknown message", 404);
+  const body = reset ? null : String((await req.json().catch(() => ({}))).body || "").replace(/\r/g, "").trim();
+  if (!reset && (body.length < 5 || body.length > 4000)) return bad("The text must be 5 to 4,000 characters.");
+  const unknown = !reset && Array.from(body.matchAll(/\{\{\s*([^}]*?)\s*\}\}/g), (m) => m[1]).find((k) => !M.VARS.some(([n]) => n === k));
+  if (unknown) return bad(`{{${unknown}}} isn't one of the values that can be filled in.`);
+  await env.DB.prepare("INSERT INTO msg_templates (key, body, updated_at) VALUES (?1, ?2, ?3) ON CONFLICT(key) DO UPDATE SET body=excluded.body, updated_at=excluded.updated_at").bind(key, body, isoNow()).run();
+  return json({ ok: true });
+}
+// Send a text to WhatsApp for approval as a template (needed to message people who haven't written to us in 24 hours).
+async function adminWaSubmit(env, key) {
+  const S = await getSettings(env);
+  if (!env.WA_TOKEN) return bad("Add the WA_TOKEN secret in Cloudflare first.");
+  if (!S.wa_waba_id) return bad("Enter the WhatsApp account ID first.");
+  const t = (await templates(env)).find((x) => x.key === key);
+  if (!t) return bad("Unknown message", 404);
+  if (t.meta === false) return bad("This message only goes out inside an open chat, so it doesn't need WhatsApp's approval.");
+  const { text, params } = M.metaBody(t.body);
+  if (text.length > 1024) return bad(`The WhatsApp version is ${text.length} characters; WhatsApp allows 1,024. Shorten the text.`);
+  if (/^\s*\{\{/.test(text) || /\}\}\s*$/.test(text)) return bad("WhatsApp doesn't allow a template to start or end with a {{value}}. Add a few words before / after it.");
+  const ex = M.vars({ id: "DSL-AB12CD", name: "Asha Verma", phone: "9811122233", date: addDays(istParts().date, 2), slot: "07:30", address: "Flat 302, Sunrise Apartments, Sector 7",
+    city: "New Delhi", state: "Delhi", pincode: "110075", amount: 1899, vial_no: "AB1234", notes: "Gate 2", collector_info: "Ramesh, 98765 43210, 8:30 AM", status: "confirmed" },
+  { tests: [{ name: "FEMALE FERTILITY", includes: "FSH, LH, AMH, TSH" }], cfg: { amount: 1899, upiId: env.UPI_ID || "lab@upi", visitFee: 300 }, centre: { name: "Dwarka Sector 7 centre" }, alert: "Report uploaded" });
+  const comps = [{ type: "BODY", text, ...(params.length ? { example: { body_text_named_params: params.map((k) => ({ param_name: k, example: M.oneLine(ex[k]).slice(0, 200) })) } } : {}) }];
+  if (t.buttons.length) comps.push({ type: "BUTTONS", buttons: t.buttons.map((x) => ({ type: "QUICK_REPLY", text: x.text })) });
+  try {
+    let id = t.wa_id, status = "PENDING";
+    if (id) await graph(env, S, id, { method: "POST", body: { components: comps } }); // edit the existing template
+    else {
+      const j = await graph(env, S, `${S.wa_waba_id}/message_templates`, { method: "POST", body: { name: t.wa_name, language: "en", category: "UTILITY", parameter_format: "NAMED", components: comps } });
+      id = j.id; status = j.status || "PENDING";
+    }
+    await env.DB.prepare(`INSERT INTO msg_templates (key, wa_id, wa_status, wa_reason, wa_body, updated_at) VALUES (?1, ?2, ?3, NULL, ?4, ?5)
+      ON CONFLICT(key) DO UPDATE SET wa_id=excluded.wa_id, wa_status=excluded.wa_status, wa_reason=NULL, wa_body=excluded.wa_body, updated_at=excluded.updated_at`).bind(key, id, status, t.body, isoNow()).run();
+    return json({ ok: true, status });
+  } catch (e) {
+    if (/already exists|2388024|2388023/i.test(e.message)) { await adminWaSync(env); return bad("WhatsApp already has a template with this name – its status has been loaded. Press Submit again to update it."); }
+    return bad(`WhatsApp said: ${e.message}`, 400);
+  }
+}
+async function adminWaSync(env) {
+  const S = await getSettings(env);
+  if (!env.WA_TOKEN || !S.wa_waba_id) return bad("Set the WA_TOKEN secret and the WhatsApp account ID first.");
+  let j;
+  try { j = await graph(env, S, `${S.wa_waba_id}/message_templates?fields=id,name,status,language,rejected_reason,components&limit=200`); }
+  catch (e) { return bad(`WhatsApp said: ${e.message}`, 502); }
+  const { results: rows } = await env.DB.prepare("SELECT key, wa_body FROM msg_templates").all();
+  const stmts = [];
+  for (const t of M.TEMPLATES) {
+    if (t.meta === false) continue;
+    const m = (j.data || []).find((d) => d.name === t.wa_name && /^en/.test(d.language || ""));
+    if (!m) continue;
+    const have = rows.find((r) => r.key === t.key);
+    const metaText = ((m.components || []).find((c) => c.type === "BODY") || {}).text || null;
+    stmts.push(env.DB.prepare(`INSERT INTO msg_templates (key, wa_id, wa_status, wa_reason, wa_body, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+      ON CONFLICT(key) DO UPDATE SET wa_id=excluded.wa_id, wa_status=excluded.wa_status, wa_reason=excluded.wa_reason, wa_body=COALESCE(msg_templates.wa_body, excluded.wa_body), updated_at=excluded.updated_at`)
+      .bind(t.key, m.id, m.status, m.rejected_reason && m.rejected_reason !== "NONE" ? m.rejected_reason : null, have && have.wa_body ? have.wa_body : metaText, isoNow()));
+  }
+  if (stmts.length) await env.DB.batch(stmts);
+  return json({ ok: true, found: stmts.length });
+}
+async function adminWaMenu(env, req) {
+  const b = await req.json().catch(() => ({}));
+  const role = b.role;
+  if (!MENU_ACTIONS[role]) return bad("Unknown menu");
+  const items = (Array.isArray(b.items) ? b.items : []).filter((x) => MENU_ACTIONS[role][x.action]);
+  if (items.filter((x) => x.active !== false).length > 10) return bad("WhatsApp menus can show at most 10 options. Switch some off.");
+  for (const x of items) {
+    if (!clean(x.title, 24)) return bad("Every option needs a title.");
+    if (String(x.title).length > 24) return bad(`“${x.title}” is too long – titles can be 24 characters.`);
+    if (String(x.description || "").length > 72) return bad(`The description of “${x.title}” is too long – 72 characters max.`);
+  }
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM menu_items WHERE role=?1").bind(role),
+    ...items.map((x, i) => env.DB.prepare("INSERT INTO menu_items (role, action, title, description, sort, active) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")
+      .bind(role, x.action, clean(x.title, 24), clean(x.description, 72), i, x.active === false ? 0 : 1)),
+  ]);
+  return json({ ok: true });
+}
+// a message the API couldn't send: sent by hand now (counts as done) or not needed any more
+async function adminWaOutbox(env, req, id) {
+  const b = await req.json().catch(() => ({}));
+  const o = await env.DB.prepare("SELECT * FROM wa_outbox WHERE id=?1").bind(id).first();
+  if (!o) return bad("Not found", 404);
+  const now = isoNow();
+  if (b.action === "done") {
+    const stmts = [env.DB.prepare("UPDATE wa_outbox SET status='manual', updated_at=?1 WHERE id=?2").bind(now, id)];
+    if (o.booking_id && o.to_role !== "team" && MSG_KINDS.includes(o.kind)) stmts.push(env.DB.prepare("INSERT INTO msg_log (booking_id, kind, at) VALUES (?1, ?2, ?3)").bind(o.booking_id, o.kind, now));
+    await env.DB.batch(stmts);
+    if (o.kind === "report" && o.booking_id) await releaseReports(env, await bookingFull(env, o.booking_id));
+  } else await env.DB.prepare("UPDATE wa_outbox SET status='dismissed', updated_at=?1 WHERE id=?2").bind(now, id).run();
+  return json({ ok: true });
+}
+// admin pressed a message button: through the API when it's set up, otherwise { manual: true } and the page opens WhatsApp
+async function adminSend(env, req, id) {
+  const b = await req.json().catch(() => ({}));
+  if (!MSG_KINDS.includes(b.kind) || b.kind === "chat") return bad("Invalid message type");
+  const S = await getSettings(env);
+  if (!waReady(env, S) || waDown(S) || S.wa_mode !== "auto") return json({ manual: true });
+  const sug = Array.isArray(b.sug) ? b.sug.filter((s) => s && /^\d{4}-\d{2}-\d{2}$/.test(s.date) && SLOTS.includes(s.slot)).slice(0, 5) : undefined;
+  const r = await deliver(env, id, b.kind, { S, sug, reportIds: b.reportIds });
+  if (r.manual) await env.DB.prepare("UPDATE wa_outbox SET status='dismissed' WHERE booking_id=?1 AND kind=?2 AND status='failed'").bind(id, b.kind).run(); // the page sends it by hand now
+  return json(r);
+}
+
 // ---- router ----
+// run work after the response is sent (e.g. WhatsApp messages after an admin click)
+const CTX = new WeakMap();
+function later(req, promise) {
+  const p = Promise.resolve(promise).catch((e) => console.log("background job failed", String(e && e.stack || e)));
+  const ctx = CTX.get(req);
+  if (ctx) ctx.waitUntil(p);
+}
+
 export default {
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil((async () => { await ensureSchema(env); await waDaily(env); })());
+  },
   async fetch(req, env, ctx) {
+    CTX.set(req, ctx);
     const url = new URL(req.url);
     const p = url.pathname;
     try {
@@ -1245,6 +2137,8 @@ export default {
         if (!env.DB) return bad("Database not configured", 503);
         await ensureSchema(env);
         if (p === "/api/config" && req.method === "GET") return getConfig(env);
+        if (p === "/api/wa/webhook" && req.method === "GET") return waWebhookVerify(env, url);
+        if (p === "/api/wa/webhook" && req.method === "POST") return waWebhook(env, req);
         if (p === "/api/packages" && req.method === "GET") return publicPackages(env);
         if (p === "/api/slots" && req.method === "GET") return getSlots(env, url);
         let pm = p.match(/^\/api\/pincode\/(\d{6})$/);
@@ -1289,6 +2183,20 @@ export default {
           if (m && req.method === "POST") return adminSetStatus(env, req, m[1]);
           m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/centre$/);
           if (m && req.method === "POST") return adminAssignCentre(env, req, m[1]);
+          m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/send$/);
+          if (m && req.method === "POST") return adminSend(env, req, m[1]);
+          if (p === "/api/admin/wa" && req.method === "GET") return adminWa(env, url);
+          if (p === "/api/admin/wa/settings" && req.method === "POST") return adminWaSettings(env, req);
+          if (p === "/api/admin/wa/test" && req.method === "POST") return adminWaTest(env);
+          if (p === "/api/admin/wa/sync" && req.method === "POST") return adminWaSync(env);
+          if (p === "/api/admin/wa/menu" && req.method === "POST") return adminWaMenu(env, req);
+          m = p.match(/^\/api\/admin\/wa\/templates\/([a-z_]{2,30})$/);
+          if (m && req.method === "POST") return adminWaSaveTemplate(env, req, m[1], false);
+          if (m && req.method === "DELETE") return adminWaSaveTemplate(env, req, m[1], true);
+          m = p.match(/^\/api\/admin\/wa\/templates\/([a-z_]{2,30})\/submit$/);
+          if (m && req.method === "POST") return adminWaSubmit(env, m[1]);
+          m = p.match(/^\/api\/admin\/wa\/outbox\/(\d{1,9})$/);
+          if (m && req.method === "POST") return adminWaOutbox(env, req, Number(m[1]));
           if (p === "/api/admin/centres" && req.method === "GET") return adminCentres(env);
           if (p === "/api/admin/centres" && req.method === "POST") return adminSaveCentre(env, req, null);
           m = p.match(/^\/api\/admin\/centres\/(\d{1,9})$/);
@@ -1313,6 +2221,8 @@ export default {
           if (m && req.method === "POST") return centreCollected(env, user, req, m[1]);
           m = p.match(/^\/api\/centre\/bookings\/(DSL-[A-Z0-9]{6})\/reports$/);
           if (m && req.method === "POST") return centreUpload(env, user, req, m[1]);
+          m = p.match(/^\/api\/centre\/bookings\/(DSL-[A-Z0-9]{6})\/(accept|decline)$/);
+          if (m && req.method === "POST") return centreAccept(env, user, req, m[1], m[2]);
           m = p.match(/^\/api\/centre\/reports\/(\d{1,9})$/);
           if (m && req.method === "GET") return centreReportFile(env, user, Number(m[1]));
           return bad("Not found", 404);

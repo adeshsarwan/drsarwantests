@@ -14,7 +14,7 @@
   };
   let TOKEN = '';
   try { TOKEN = sessionStorage.getItem('dsl_centre') || localStorage.getItem('dsl_centre') || ''; } catch (e) {}
-  let DATA = null, filter = 'todo', vialOpen = null;
+  let DATA = null, filter = 'todo', vialOpen = null, accOpen = null;
 
   function toast(m) { const t = $('#toast'); t.textContent = m; t.style.display = 'block'; clearTimeout(t._t); t._t = setTimeout(() => (t.style.display = 'none'), 3000); }
   async function api(path, opts = {}) {
@@ -51,7 +51,7 @@
     const t = ist(), all = DATA ? DATA.bookings : [];
     if (filter === 'today') return all.filter((b) => b.date === t);
     if (filter === 'upcoming') return all.filter((b) => b.date >= t && b.status === 'confirmed');
-    if (filter === 'todo') return all.filter((b) => (b.status === 'confirmed' && b.date <= t) || b.status === 'collected');
+    if (filter === 'todo') return all.filter((b) => (b.status === 'confirmed' && (b.date <= t || b.centre_status !== 'accepted')) || b.status === 'collected');
     return all.slice().reverse();
   };
   function render() {
@@ -64,7 +64,11 @@
     const [label, cls] = STATUS[b.status] || [b.status, ''];
     const after = ['collected', 'report_ready', 'completed'].includes(b.status);
     const acts = [];
-    if (b.status === 'confirmed') acts.push(`<button type="button" class="btn blue sm" data-a="vial" data-id="${b.id}">Sample collected</button>`);
+    if (b.status === 'confirmed') {
+      if (b.centre_status !== 'accepted') acts.push(`<button type="button" class="btn sm" data-a="acc" data-id="${b.id}">Accept</button>`, `<button type="button" class="btn ghost sm" data-a="dec" data-id="${b.id}">Can't do</button>`);
+      else acts.push(`<button type="button" class="btn ghost sm" data-a="acc" data-id="${b.id}">Edit collector</button>`);
+      acts.push(`<button type="button" class="btn blue sm" data-a="vial" data-id="${b.id}">Sample collected</button>`);
+    }
     if (after) {
       acts.push(`<label class="btn sm" style="cursor:pointer">Upload report PDF<input type="file" accept="application/pdf,.pdf" multiple hidden data-a="upload" data-id="${b.id}"></label>`);
       acts.push(`<button type="button" class="btn ghost sm" data-a="vial" data-id="${b.id}">${b.vial_no ? 'Edit vial no.' : 'Add vial no.'}</button>`);
@@ -76,6 +80,8 @@
 <div class="job-l">📍 ${esc(b.address)}, ${esc(b.city || '')}${b.state ? ', ' + esc(b.state) : ''} – ${esc(b.pincode)} · <a href="${mapUrl(b)}" target="_blank" rel="noopener">Map</a></div>
 <div class="job-l">📞 <a href="tel:+91${esc(b.phone)}">+91 ${esc(b.phone)}</a>${b.cycle ? ` · ${esc(b.cycle)}` : ''}</div>
 ${b.notes ? `<div class="job-l">📝 ${esc(b.notes)}</div>` : ''}
+${b.status === 'confirmed' ? (b.centre_status === 'accepted' ? `<div class="job-l">✅ Accepted${b.collector_info ? ` · 👤 ${esc(b.collector_info)}` : ''}</div>` : '<div class="job-l" style="color:#8a5a00"><b>New – please accept or decline</b></div>') : ''}
+${accOpen === b.id ? `<form class="vial-f" data-a="acc-save" data-id="${b.id}"><input class="inp" id="accIn" style="text-transform:none;letter-spacing:0" placeholder="Collector name, mobile, arrival time" value="${esc(b.collector_info || '')}" autocomplete="off" aria-label="Collector details"><button class="btn sm">Save – tell the patient</button><button type="button" class="btn ghost sm" data-a="vial-cancel">Cancel</button></form>` : ''}
 ${b.vial_no ? `<div class="job-l"><b>Vial no.: ${esc(b.vial_no)}</b></div>` : after ? '<div class="job-l" style="color:#a33a1f"><b>⚠ Vial no. missing</b></div>' : ''}
 ${vialOpen === b.id ? `<form class="vial-f" data-a="vial-save" data-id="${b.id}"><input class="inp" id="vialIn" placeholder="Vial no. on the tube" value="${esc(b.vial_no || '')}" autocomplete="off" aria-label="Vial number"><button class="btn blue sm">${b.status === 'confirmed' ? 'Save – sample collected' : 'Save'}</button><button type="button" class="btn ghost sm" data-a="vial-cancel">Cancel</button></form>` : ''}
 ${b.reports.length ? `<ul class="job-reps">${b.reports.map((r) => `<li>📄 <button type="button" class="lnk-b" style="width:auto;text-align:left;color:var(--teal)" data-a="view" data-rid="${r.id}">${esc(r.name)}</button><span class="meta">${kb(r.size)}</span></li>`).join('')}</ul>` : ''}
@@ -89,7 +95,12 @@ ${b.reports.length ? `<ul class="job-reps">${b.reports.map((r) => `<li>📄 <but
     const el = e.target.closest('[data-a]'); if (!el) return;
     const a = el.dataset.a;
     if (a === 'vial') { vialOpen = el.dataset.id; render(); setTimeout(() => $('#vialIn') && $('#vialIn').focus(), 30); }
-    else if (a === 'vial-cancel') { vialOpen = null; render(); }
+    else if (a === 'vial-cancel') { vialOpen = null; accOpen = null; render(); }
+    else if (a === 'acc') { accOpen = el.dataset.id; vialOpen = null; render(); setTimeout(() => $('#accIn') && $('#accIn').focus(), 30); }
+    else if (a === 'dec') {
+      if (!confirm('Give this visit back to Dr. Sarwan Diagnostic Labs so another centre can do it?')) return;
+      try { await api(`/api/centre/bookings/${el.dataset.id}/decline`, { method: 'POST', body: '{}' }); toast('Given back ✓'); await load(); } catch (err) { toast(err.message); }
+    }
     else if (a === 'view') {
       const w = window.open('', '_blank'); // open now so the browser doesn't block it
       try {
@@ -101,6 +112,13 @@ ${b.reports.length ? `<ul class="job-reps">${b.reports.map((r) => `<li>📄 <but
     }
   });
   document.addEventListener('submit', async (e) => {
+    const af = e.target.closest('[data-a="acc-save"]');
+    if (af) {
+      e.preventDefault();
+      try { await api(`/api/centre/bookings/${af.dataset.id}/accept`, { method: 'POST', body: JSON.stringify({ collector: $('#accIn').value }) }); accOpen = null; toast('Saved ✓ The patient gets the collector details.'); await load(); }
+      catch (err) { toast(err.message); }
+      return;
+    }
     const f = e.target.closest('[data-a="vial-save"]'); if (!f) return;
     e.preventDefault();
     const btn = f.querySelector('button'); btn.disabled = true;

@@ -39,6 +39,25 @@ Unpaid bookings never block a slot and are marked expired after 2 hours.
 - The website booking form now asks for the patient's **date of birth** and a **WhatsApp consent** tick.
 - Logins are protected against guessing: 8 wrong tries on one account (or 30 from one IP) lock it for 15 minutes.
 
+## WhatsApp (automatic sending with manual backup)
+- **Admin → WhatsApp** switches between *Manual* (open WhatsApp and send, as before) and *Automatic*
+  (the WhatsApp Cloud API sends each message by itself). Both use the **same texts** (`public/shared/msgs.js`, editable in the tab)
+  and the **same steps**, so the progress bar looks the same either way.
+- If the API can't send something (template not approved yet, payment or token problem, number not on WhatsApp), it lands in
+  **Send by hand** (also shown as a banner on Bookings): one click opens WhatsApp with the same text and ticks the step.
+  Token / payment / account errors pause the API for 30 minutes so nothing is lost.
+- Automatic messages: booking confirmation (+ team alert to choose a centre) when you confirm the payment → booking details to the
+  centre when you choose it → collector details to the patient when the centre accepts → reminder at 7 PM the evening before
+  (cron) → "sample received" when the vial no. is entered → "reports ready" (patient taps *Get my report*, gives the date of birth
+  and gets the PDFs). Reports go out when you press *Send reports*, or straight away if you tick that option.
+- **WhatsApp menus** (editable): patients (bookings, tracking, how to prepare, change time, pay + screenshot, report, talk to us),
+  centres – recognised by the numbers in the Centres tab (accept / decline, collector details, vial no., upload report PDF),
+  and the team numbers (choose centres, today's summary).
+- People who haven't written to us in 24 hours can only get **approved templates**: press *Send for approval* on each text,
+  then *Check approvals*.
+- Setup: Cloudflare secrets `WA_TOKEN`, `WA_APP_SECRET`, `WA_VERIFY_TOKEN`; in Meta set the webhook to
+  `https://drsarwantests.com/api/wa/webhook` (subscribe to *messages*); in Admin → WhatsApp enter the phone number ID and team numbers.
+
 ## One-time Cloudflare setup
 1. **Create the database**: Cloudflare dashboard → Storage & Databases → D1 → Create →
    name `drsarwantests-bookings`. Copy its **Database ID** into `wrangler.jsonc`
