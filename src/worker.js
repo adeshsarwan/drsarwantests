@@ -957,8 +957,24 @@ function cleanDob(v) {
 
 // One-time setup: a temporary centre with the current centre number, given all existing paid bookings;
 // and a patient user for every (phone, name) already in the bookings. New bookings link themselves (linkPatient).
+// One-time clean-up (14 Nov 2026): visits before the new workflow went live were all done outside the system
+// (sample collected, report given), so they are closed as completed. Runs once; a settings flag remembers it.
+async function closeOldBookings(env) {
+  const flag = "mig_close_old_20261114";
+  if (await env.DB.prepare("SELECT 1 FROM settings WHERE k=?1").bind(flag).first()) return;
+  const now = isoNow();
+  const where = "date < '2026-11-14' AND status IN ('payment_submitted','confirmed','collected','report_ready')";
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE wa_outbox SET status='dismissed', updated_at=?1 WHERE status='failed' AND booking_id IN (SELECT id FROM bookings WHERE ${where})`).bind(now),
+    env.DB.prepare(`UPDATE bookings SET status='completed', completed_at=COALESCE(completed_at, ?1), paid_at=COALESCE(paid_at, ?1),
+      collected_at=COALESCE(collected_at, ?1), centre_status=COALESCE(centre_status, 'accepted'), centre_status_at=COALESCE(centre_status_at, ?1),
+      resched_req=NULL, resched_at=NULL, resched_date=NULL, resched_slot=NULL, updated_at=?1 WHERE ${where}`).bind(now),
+    env.DB.prepare("INSERT OR REPLACE INTO settings (k, v) VALUES (?1, ?2)").bind(flag, now),
+  ]);
+}
 async function seedAccounts(env) {
   const now = isoNow();
+  await closeOldBookings(env);
   // the first admin login: username "admin" with the existing admin password
   const pw = String(env.ADMIN_PASSWORD || "").trim();
   if (pw && !(await env.DB.prepare("SELECT 1 FROM users WHERE role='admin' LIMIT 1").first())) {
