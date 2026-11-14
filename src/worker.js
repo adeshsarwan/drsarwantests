@@ -539,7 +539,14 @@ async function adminCreate(env, req) {
   const name = clean(b.name, 80), address = clean(b.address, 300), pincode = clean(b.pincode, 6);
   const city = clean(b.city, 60), state = clean(b.state, 40), date = clean(b.date, 10), slot = clean(b.slot, 5);
   const phone = normPhone(b.phone);
-  const status = ["confirmed", "payment_submitted", "pending"].includes(b.status) ? b.status : "confirmed";
+  const staff = STAFF.get(req), op = staff && staff.role !== "admin";
+  // operators only take bookings that are already paid, and choose the collection centre right away
+  const status = op ? "confirmed" : ["confirmed", "payment_submitted", "pending"].includes(b.status) ? b.status : "confirmed";
+  const centreId = b.centre_id ? parseInt(b.centre_id, 10) : null;
+  if (centreId) {
+    const c = await env.DB.prepare("SELECT id, active FROM centres WHERE id=?1").bind(centreId).first();
+    if (!c || !c.active) return bad("Pick an active collection centre.");
+  } else if (op) return bad("Choose the collection centre.");
   if (name.length < 2) return bad("Enter the patient's name.");
   if (!phone) return bad("Enter a valid 10-digit mobile number.");
   if (address.length < 4) return bad("Enter the collection address.");
@@ -569,7 +576,10 @@ async function adminCreate(env, req) {
     throw e;
   }
   await linkPatient(env, id, name, phone, dob, null);
-  if (status === "confirmed") { await autoAssign(env, id); later(req, waEvent(env, "confirmed", id)); }
+  if (status === "confirmed") {
+    if (centreId) await assignCentre(env, id, centreId); else await autoAssign(env, id);
+    later(req, centreJob(env, req, id, "confirmed"));
+  } else if (centreId) await assignCentre(env, id, centreId);
   return json({ ok: true, id }, 201);
 }
 
@@ -1124,7 +1134,7 @@ async function adminAssignCentre(env, req, id) {
   const cur = await env.DB.prepare("SELECT centre_id FROM bookings WHERE id=?1 AND status != 'blocked'").bind(id).first();
   if (!cur) return bad("Booking not found", 404);
   await assignCentre(env, id, cid);
-  if (cid && cid !== cur.centre_id) later(req, waEvent(env, "assigned", id));
+  if (cid && cid !== cur.centre_id) later(req, centreJob(env, req, id, "assigned"));
   return json({ ok: true });
 }
 // a paid booking without a centre goes to the default centre (Centres tab → "Default"), if there is an active one
@@ -2408,6 +2418,18 @@ async function queueForAdmin(env, id, kind, error) {
   const now = isoNow();
   await env.DB.prepare("INSERT INTO wa_outbox (booking_id, kind, to_phone, to_role, status, error, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'failed', ?5, ?6, ?6)")
     .bind(id, kind, to || null, m.t.to, String(error).slice(0, 500), now).run();
+}
+
+// The job goes to the collection centre on WhatsApp. If sending isn't automatic and an operator did this,
+// the message is put in the admin's "Send by hand" list instead (operators never send by hand).
+async function centreJob(env, req, id, ev) {
+  const S = await getSettings(env);
+  if (waAuto(env, S)) return waEvent(env, ev, id);
+  const staff = STAFF.get(req);
+  if (staff && staff.role !== "admin") {
+    const b = await env.DB.prepare("SELECT centre_id FROM bookings WHERE id=?1").bind(id).first();
+    if (b && b.centre_id) await queueForAdmin(env, id, "center", "Sending is set to Manual.");
+  }
 }
 
 // ---- reschedule requests (from the patient's WhatsApp menu) ----
