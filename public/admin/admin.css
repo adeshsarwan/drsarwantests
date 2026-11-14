@@ -475,7 +475,7 @@ button.stat:hover{border-color:var(--teal);box-shadow:0 0 0 2px #d8ecef}
 .ib-msgs{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:4px}
 .ib-day{align-self:center;background:#fff;color:var(--muted);font-size:12px;font-weight:700;border-radius:8px;padding:3px 10px;margin:10px 0 6px;box-shadow:0 1px 1px rgba(0,0,0,.06)}
 .ib-m{max-width:min(560px,78%);padding:7px 10px 5px;border-radius:10px;background:#fff;box-shadow:0 1px 1px rgba(0,0,0,.08);white-space:pre-wrap;word-wrap:break-word;font-size:14.5px;line-height:1.4}
-.ib-m.in{align-self:flex-start}.ib-m.out{align-self:flex-end;background:#d9fdd3}.ib-m.out.auto,.ib-m.out.bot{background:#e8f5e4}
+.ib-m.in{align-self:flex-start}.ib-m.out{align-self:flex-end;background:#d9fdd3}.ib-m.out.auto,.ib-m.out.bot{background:#e8f5e4}.ib-m.out.hand{background:#fff;border:1.5px dashed #9fc3cc;box-shadow:none}
 .ib-m .ib-by{display:block;font-size:11.5px;font-weight:800;color:#1f6977;margin-bottom:2px}
 .ib-m .ib-t{display:block;text-align:right;font-size:11px;color:#667781;margin-top:2px}
 .ib-m .tick{margin-left:4px;letter-spacing:-3px}.ib-m .tick.read{color:#34b7f1}
