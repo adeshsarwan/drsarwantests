@@ -278,7 +278,8 @@ async function seedPackages(env) {
 let schemaReady = null;
 const NEW_COLS = { city: "TEXT", state: "TEXT", vial_no: "TEXT", collected_at: "TEXT", report_name: "TEXT", report_size: "INTEGER",
   report_token: "TEXT", report_at: "TEXT", completed_at: "TEXT", fee_due: "INTEGER", fee_paid_at: "TEXT", missed_slot: "TEXT", package_id: "INTEGER", package_name: "TEXT",
-  centre_id: "INTEGER", patient_id: "INTEGER", consent_at: "TEXT", centre_status: "TEXT", centre_status_at: "TEXT", collector_info: "TEXT" };
+  centre_id: "INTEGER", patient_id: "INTEGER", consent_at: "TEXT", centre_status: "TEXT", centre_status_at: "TEXT", collector_info: "TEXT",
+  resched_req: "TEXT", resched_at: "TEXT", resched_date: "TEXT", resched_slot: "TEXT" };
 function ensureSchema(env) {
   if (!schemaReady) {
     schemaReady = (async () => {
@@ -504,7 +505,7 @@ function isAdmin(env, req) {
   return !!want && safeEqual(String(req.headers.get("x-admin-key") || "").trim(), want);
 }
 
-async function adminList(env, url) {
+async function adminList(env, url, staff) {
   await expireHolds(env);
   const today = istParts().date;
   const from = url.searchParams.get("from") || today;
@@ -513,9 +514,10 @@ async function adminList(env, url) {
   const { results } = await env.DB.prepare(
     `SELECT id, date, slot, name, phone, address, pincode, city, state, cycle, notes, amount, status, utr, source, created_at, paid_at, updated_at,
        package_id, package_name, vial_no, collected_at, report_name, report_size, report_token, report_at, completed_at, fee_due, fee_paid_at, missed_slot,
-       centre_id, patient_id, consent_at, centre_status, collector_info, (SELECT dob FROM users u WHERE u.id = bookings.patient_id) AS dob,
+       centre_id, patient_id, consent_at, centre_status, centre_status_at, collector_info, resched_req, resched_at, resched_date, resched_slot, (SELECT dob FROM users u WHERE u.id = bookings.patient_id) AS dob,
        EXISTS(SELECT 1 FROM payment_proofs p WHERE p.booking_id = bookings.id) AS has_proof,
-       (SELECT group_concat(kind || '@' || at, ',') FROM msg_log l WHERE l.booking_id = bookings.id) AS msgs
+       (SELECT group_concat(kind || '@' || at, ',') FROM msg_log l WHERE l.booking_id = bookings.id) AS msgs,
+       (SELECT group_concat(kind || ':' || id, ',') FROM wa_outbox o WHERE o.booking_id = bookings.id AND o.status = 'failed') AS failed
      FROM bookings WHERE date BETWEEN ?1 AND ?2 ${includeInactive ? "" : "AND status NOT IN ('expired')"}
      ORDER BY date, slot, created_at`
   ).bind(from, to).all();
@@ -525,7 +527,8 @@ async function adminList(env, url) {
   ]);
   const by = (rows) => rows.reduce((m, r) => ((m[r.booking_id] = m[r.booking_id] || []).push(r), m), {});
   const T = by(tests), F = by(files);
-  for (const b of results) { b.tests = T[b.id] || []; b.reports = F[b.id] || []; }
+  const op = staff && staff.role === "operator";
+  for (const b of results) { b.tests = (T[b.id] || []).map((t) => (op ? { ...t, margin: null } : t)); b.reports = F[b.id] || []; }
   return json({ from, to, slots: SLOTS.map((s) => ({ time: s, label: slotLabel(s) })), bookings: results });
 }
 
@@ -622,6 +625,12 @@ async function adminMove(env, req, id) {
     if (/UNIQUE/i.test(String(e))) return bad("That slot already has a booking.", 409);
     throw e;
   }
+  const paid = ["payment_submitted", "confirmed", "no_show"].includes(row.status);
+  await env.DB.batch([
+    env.DB.prepare("UPDATE bookings SET resched_req=NULL, resched_at=NULL, resched_date=NULL, resched_slot=NULL" + (paid ? ", centre_status=NULL, collector_info=NULL" : "") + " WHERE id=?1").bind(id),
+    env.DB.prepare(`DELETE FROM msg_log WHERE booking_id=?1 AND kind IN ('reminder','done:reminder'${paid ? ",'center','done:center','done:centre_ok','collector','done:collector'" : ""})`).bind(id),
+  ]);
+  if (paid) later(req, waEvent(env, "moved", id));
   return json({ ok: true });
 }
 
@@ -760,7 +769,7 @@ async function adminVial(env, req, id) {
 }
 
 // Admin opened WhatsApp with a message. Sending the report completes the job.
-const MSG_KINDS = ["pay", "confirm", "center", "collector", "reminder", "slots", "missed", "collected", "report", "prep", "chat"];
+const MSG_KINDS = ["pay", "confirm", "center", "collector", "reminder", "slots", "missed", "collected", "report", "prep", "moved", "centre_cancel", "chat"];
 const DONE_KINDS = ["confirm", "center", "centre_ok", "collector", "reminder", "collected"]; // message steps that can be ticked as done by hand
 // A message sent by hand from someone's own WhatsApp (manual mode / "Send by hand") – also shown in Admin → Inbox.
 async function logHand(env, bookingId, kind, toPhone) {
@@ -777,6 +786,9 @@ async function logHand(env, bookingId, kind, toPhone) {
 async function adminSent(env, req, id) {
   const body = await req.json().catch(() => ({}));
   const kind = body.kind;
+  const staff = STAFF.get(req);
+  if (staff && staff.role !== "admin" && !(kind === "done:centre_ok" || (kind === "undo-done" && body.target === "centre_ok")))
+    return bad("Only an admin can mark messages as sent by hand.", 403);
   const row = await env.DB.prepare("SELECT status FROM bookings WHERE id=?1").bind(id).first();
   if (!row) return bad("Booking not found", 404);
   const now = isoNow();
@@ -823,10 +835,11 @@ async function publicPackages(env) {
   const { results } = await env.DB.prepare("SELECT id, name, tests, mrp, price, prep, is_default FROM packages WHERE active=1 ORDER BY sort, id").all();
   return json({ packages: results });
 }
-async function adminPackages(env) {
+async function adminPackages(env, staff) {
   const { results } = await env.DB.prepare(
     `SELECT p.*, (SELECT COUNT(*) FROM bookings b WHERE b.package_id = p.id AND b.status NOT IN ('cancelled','expired','blocked')) AS bookings
      FROM packages p ORDER BY p.sort, p.id`).all();
+  if (staff && staff.role === "operator") for (const r of results) r.margin = null;
   return json({ packages: results });
 }
 function readPackage(b) {
@@ -920,6 +933,7 @@ async function adminCsv(env, url) {
 // ---- collection centres, users, logins (centre portal + patient portal) ----
 // =====================================================================
 const PAID_STATES = ["confirmed", "collected", "report_ready", "completed", "no_show"]; // what a centre gets to see
+const AFTER_COLLECT_STATES = ["collected", "report_ready", "completed"];
 const CENTRE_SESSION_DAYS = 30, PATIENT_SESSION_HOURS = 12;
 
 function cleanDob(v) {
@@ -935,6 +949,12 @@ function cleanDob(v) {
 // and a patient user for every (phone, name) already in the bookings. New bookings link themselves (linkPatient).
 async function seedAccounts(env) {
   const now = isoNow();
+  // the first admin login: username "admin" with the existing admin password
+  const pw = String(env.ADMIN_PASSWORD || "").trim();
+  if (pw && !(await env.DB.prepare("SELECT 1 FROM users WHERE role='admin' LIMIT 1").first())) {
+    await env.DB.prepare("INSERT OR IGNORE INTO users (role, name, username, pass_hash, active, created_at, updated_at) VALUES ('admin', 'Admin', 'admin', ?1, 1, ?2, ?2)")
+      .bind(await hashPassword(pw), now).run();
+  }
   const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM centres").first();
   if (!n || !n.n) {
     const phone = normPhone(env.CENTER_WHATSAPP || "8368143677") || "8368143677";
@@ -1014,7 +1034,7 @@ async function getSession(env, req, role) {
   const token = String(req.headers.get("x-session") || "").trim();
   if (!/^[a-z0-9]{40}$/.test(token)) return null;
   const s = await env.DB.prepare(`SELECT s.token_hash, s.phone AS s_phone, s.dob AS s_dob, u.* FROM sessions s JOIN users u ON u.id = s.user_id
-    WHERE s.token_hash=?1 AND s.expires_at > ?2 AND s.role=?3 AND u.active=1`).bind(await sha256(token), isoNow(), role).first();
+    WHERE s.token_hash=?1 AND s.expires_at > ?2 AND s.role IN (SELECT value FROM json_each(?3)) AND u.active=1`).bind(await sha256(token), isoNow(), JSON.stringify([].concat(role))).first();
   return s || null;
 }
 async function logoutSession(env, req) {
@@ -1124,11 +1144,12 @@ async function assignCentre(env, id, cid) {
 
 // ---- admin: users ----
 async function adminUsers(env, url) {
-  const role = url.searchParams.get("role") === "patient" ? "patient" : "centre";
+  const role = url.searchParams.get("role") === "patient" ? "patient" : "staff";
   const q = clean(url.searchParams.get("q"), 60).toLowerCase();
-  if (role === "centre") {
+  if (role === "staff") {
     const { results } = await env.DB.prepare(`SELECT u.id, u.role, u.name, u.phone, u.username, u.centre_id, u.active, u.last_login_at, u.created_at, c.name AS centre_name
-      FROM users u LEFT JOIN centres c ON c.id = u.centre_id WHERE u.role='centre' ORDER BY u.active DESC, c.name, u.name`).all();
+      FROM users u LEFT JOIN centres c ON c.id = u.centre_id WHERE u.role IN ('admin','operator','centre')
+      ORDER BY u.active DESC, CASE u.role WHEN 'admin' THEN 0 WHEN 'operator' THEN 1 ELSE 2 END, c.name, u.name`).all();
     return json({ users: results });
   }
   const like = "%" + q.replace(/[%_]/g, "") + "%";
@@ -1145,7 +1166,8 @@ async function adminSaveUser(env, req, id) {
   const now = isoNow();
   const cur = id ? await env.DB.prepare("SELECT * FROM users WHERE id=?1").bind(id).first() : null;
   if (id && !cur) return bad("User not found", 404);
-  const role = cur ? cur.role : "centre"; // patients are only created from bookings
+  // patients are only created from bookings; staff roles can be changed
+  const role = cur && cur.role === "patient" ? "patient" : ["admin", "operator", "centre"].includes(b.role) ? b.role : cur ? cur.role : "centre";
   const name = clean(b.name, 80);
   if (name.length < 2) return bad("Enter the name.");
   const active = b.active === false || b.active === 0 || b.active === "0" ? 0 : 1;
@@ -1159,8 +1181,12 @@ async function adminSaveUser(env, req, id) {
   }
   const username = clean(b.username, 40).toLowerCase();
   if (!/^[a-z0-9._-]{3,40}$/.test(username)) return bad("Username: 3–40 letters, numbers, dot, dash or underscore (no spaces).");
-  const centreId = parseInt(b.centre_id, 10);
-  if (!(await env.DB.prepare("SELECT 1 FROM centres WHERE id=?1").bind(centreId || 0).first())) return bad("Pick the user's collection centre.");
+  const centreId = role === "centre" ? parseInt(b.centre_id, 10) : null;
+  if (role === "centre" && !(await env.DB.prepare("SELECT 1 FROM centres WHERE id=?1").bind(centreId || 0).first())) return bad("Pick the user's collection centre.");
+  if (cur && cur.role === "admin" && (role !== "admin" || !active)) {
+    const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM users WHERE role='admin' AND active=1 AND id != ?1").bind(id).first();
+    if (!n.n) return bad("This is the only admin – make someone else an admin first.", 409);
+  }
   const pw = String(b.password || "");
   if (!cur && pw.length < 8) return bad("Set a password of at least 8 characters.");
   if (pw && pw.length < 8) return bad("The new password must be at least 8 characters.");
@@ -1168,24 +1194,83 @@ async function adminSaveUser(env, req, id) {
   if (dup) return bad("That username is already taken.", 409);
   const hash = pw ? await hashPassword(pw) : null;
   if (cur) {
-    await env.DB.prepare("UPDATE users SET name=?1, phone=?2, username=?3, centre_id=?4, active=?5, pass_hash=COALESCE(?6, pass_hash), updated_at=?7 WHERE id=?8")
-      .bind(name, phone, username, centreId, active, hash, now, id).run();
-    if (hash || !active) await env.DB.prepare("DELETE FROM sessions WHERE user_id=?1").bind(id).run(); // sign them out everywhere
+    await env.DB.prepare("UPDATE users SET role=?9, name=?1, phone=?2, username=?3, centre_id=?4, active=?5, pass_hash=COALESCE(?6, pass_hash), updated_at=?7 WHERE id=?8")
+      .bind(name, phone, username, centreId, active, hash, now, id, role).run();
+    if (hash || !active || role !== cur.role) await env.DB.prepare("DELETE FROM sessions WHERE user_id=?1").bind(id).run(); // sign them out everywhere
     return json({ ok: true, id });
   }
-  const r = await env.DB.prepare("INSERT INTO users (role, name, phone, username, pass_hash, centre_id, active, created_at, updated_at) VALUES ('centre', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)")
-    .bind(name, phone, username, hash, centreId, active, now).run();
+  const r = await env.DB.prepare("INSERT INTO users (role, name, phone, username, pass_hash, centre_id, active, created_at, updated_at) VALUES (?8, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)")
+    .bind(name, phone, username, hash, centreId, active, now, role).run();
   return json({ ok: true, id: r.meta.last_row_id }, 201);
 }
 async function adminDeleteUser(env, id) {
   const u = await env.DB.prepare("SELECT role FROM users WHERE id=?1").bind(id).first();
   if (!u) return bad("User not found", 404);
   if (u.role === "patient") return bad("Patients come from bookings and can't be deleted. Untick “Active” to block their portal login.", 409);
+  if (u.role === "admin") {
+    const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM users WHERE role='admin' AND active=1 AND id != ?1").bind(id).first();
+    if (!n.n) return bad("This is the only admin and can't be deleted.", 409);
+  }
   await env.DB.batch([env.DB.prepare("DELETE FROM sessions WHERE user_id=?1").bind(id), env.DB.prepare("DELETE FROM users WHERE id=?1").bind(id)]);
   return json({ ok: true });
 }
 
 // ---- centre portal ----
+// New booking: everything we know about a mobile number (people on it, their addresses, last packages).
+async function adminLookup(env, url) {
+  const phone = normPhone(url.searchParams.get("phone") || "");
+  if (!phone) return bad("Enter a valid 10-digit mobile number.");
+  const [{ results: people }, { results: rows }] = await Promise.all([
+    env.DB.prepare("SELECT id, name, dob FROM users WHERE role='patient' AND phone=?1 AND active=1 ORDER BY id").bind(phone).all(),
+    env.DB.prepare(`SELECT id, name, date, address, pincode, city, state, package_name, status, patient_id FROM bookings
+      WHERE phone=?1 AND status NOT IN ('blocked') ORDER BY created_at DESC LIMIT 30`).bind(phone).all(),
+  ]);
+  const seen = new Set(), addresses = [];
+  for (const r of rows) {
+    const k = (r.address + "|" + r.pincode).toLowerCase().replace(/\s+/g, " ");
+    if (!r.address || seen.has(k)) continue;
+    seen.add(k); addresses.push({ address: r.address, pincode: r.pincode, city: r.city, state: r.state, last: r.date });
+  }
+  const out = people.map((p) => {
+    const mine = rows.filter((r) => r.patient_id === p.id);
+    return { id: p.id, name: p.name, dob: p.dob, bookings: mine.length, last_date: mine[0] ? mine[0].date : null, last_package: mine[0] ? mine[0].package_name : null };
+  });
+  return json({ phone, people: out, addresses: addresses.slice(0, 6), bookings: rows.length });
+}
+
+// ---- staff (admin / operator) sign-in ----
+const STAFF_SESSION_DAYS = 7;
+const STAFF_ROLES = ["admin", "operator"];
+async function staffLogin(env, req) {
+  const b = await req.json().catch(() => ({}));
+  const username = clean(b.username, 40).toLowerCase(), pw = String(b.password || "");
+  const keys = [["s:" + username, 8], ["ip:" + ipOf(req), 30]];
+  if (await loginBlocked(env, keys)) return bad("Too many wrong tries. Please wait 15 minutes.", 429);
+  const u = await env.DB.prepare("SELECT * FROM users WHERE role IN ('admin','operator') AND username=?1 AND active=1").bind(username).first();
+  if (!u || !(await verifyPassword(pw, u.pass_hash))) { await loginFailed(env, keys); return bad("Wrong username or password.", 401); }
+  const token = await newSession(env, u, STAFF_SESSION_DAYS * 86400000);
+  return json({ token, user: { name: u.name, username: u.username, role: u.role } });
+}
+// who is calling an /api/admin/ endpoint: a signed-in admin/operator, or the old admin password (counts as admin)
+async function staffOf(env, req) {
+  if (isAdmin(env, req)) return { id: 0, role: "admin", name: "Admin", username: "admin" };
+  const u = await getSession(env, req, STAFF_ROLES);
+  return u ? { id: u.id, role: u.role, name: u.name, username: u.username } : null;
+}
+// what an operator may do in /api/admin/ (everything else is admin-only)
+const OPERATOR_OK = [
+  ["GET", /^\/api\/admin\/(bookings|packages|centres|me)$/],
+  ["POST", /^\/api\/admin\/bookings$/],
+  ["GET", /^\/api\/admin\/lookup$/],
+  ["GET", /^\/api\/admin\/bookings\/DSL-[A-Z0-9]{6}\/(screenshot|reports?)$/],
+  ["POST", /^\/api\/admin\/bookings\/DSL-[A-Z0-9]{6}\/(move|reports?|tests|vial|sent|status|centre|send|resched|cancel-centre)$/],
+  ["GET", /^\/api\/admin\/reports\/\d{1,9}$/],
+  ["DELETE", /^\/api\/admin\/reports\/\d{1,9}$/],
+  ["GET", /^\/api\/admin\/wa\/(chats|chats\/\d{10}|media\/\d{1,12})$/],
+  ["POST", /^\/api\/admin\/wa\/chats\/\d{10}(\/bot)?$/],
+];
+const operatorMay = (method, p) => OPERATOR_OK.some(([m, re]) => m === method && re.test(p));
+
 async function centreLogin(env, req) {
   const b = await req.json().catch(() => ({}));
   const username = clean(b.username, 40).toLowerCase(), pw = String(b.password || "");
@@ -1554,10 +1639,10 @@ async function waEvent(env, ev, id, extra = {}) {
   else if (ev === "report") {
     if (S.auto_reports === "1") await deliver(env, b, "report", { S, T });
     else await team("Report uploaded – check it and send it to the patient");
-  } else if (ev === "rescheduled") {
+  } else if (ev === "moved") { // new date/time set by our team: patient told, centre gets the job again to accept the new time
+    await deliver(env, b, "moved", { S, T });
     if (b.centre_id) await deliver(env, b, "center", { S, T });
-    await team(`The patient moved the visit to ${M.fmtDate(b.date)}, ${M.slotLabel(b.slot)}`);
-  } else if (ev === "payment") await team("Payment screenshot received on WhatsApp – please verify");
+  } else if (ev === "resched_req") await team(`Reschedule request: ${b.resched_req || "the patient wants another time"} – please handle it on the dashboard`); else if (ev === "payment") await team("Payment screenshot received on WhatsApp – please verify");
 }
 
 // Every evening (cron): reminders for tomorrow's visits.
@@ -1844,14 +1929,21 @@ class Bot {
       if (!SLOTS.includes(slot) || !isBookable(d, slot)) return this.say("That time isn't available any more. Please pick another.");
       const room = await slotRoom(env, d, slot, b.city, b.id);
       if (!room.ok) return this.say(room.msg);
+      if (["payment_submitted", "confirmed"].includes(b.status)) {
+        // paid visits are moved by our team (the collection centre has to agree to the new time)
+        await env.DB.prepare("UPDATE bookings SET resched_req=?1, resched_at=?2, resched_date=?3, resched_slot=?4, updated_at=?2 WHERE id=?5")
+          .bind(`Asked for ${M.fmtDate(d)}, ${M.slotLabel(slot)}`, isoNow(), d, slot, b.id).run();
+        await this.say(`Thank you 🙏 We've asked for *${M.fmtDate(d)}, ${M.slotLabel(slot)}*.\n\nOur team will confirm the new time with the collector and message you here shortly. Until then your visit stays on *${M.fmtDate(b.date)}, ${M.slotLabel(b.slot)}*.`);
+        await waEvent(env, "resched_req", b.id);
+        return;
+      }
       try {
         await env.DB.batch([
           env.DB.prepare("UPDATE bookings SET date=?1, slot=?2, status=CASE WHEN status='expired' THEN 'pending' ELSE status END, updated_at=?3 WHERE id=?4").bind(d, slot, isoNow(), b.id),
           env.DB.prepare("DELETE FROM msg_log WHERE booking_id=?1 AND kind IN ('reminder','done:reminder')").bind(b.id),
         ]);
       } catch (e) { if (/UNIQUE/i.test(String(e))) return this.say("Someone just took that time. Please pick another."); throw e; }
-      await this.say(`Done ✅ Your visit is now on *${M.fmtDate(d)}, ${M.slotLabel(slot)}*.${b.status === "pending" || b.status === "expired" ? "\n\nYour slot is reserved once the payment is received." : ""}`);
-      if (["payment_submitted", "confirmed"].includes(b.status)) await waEvent(env, "rescheduled", b.id);
+      await this.say(`Done ✅ Your visit is now on *${M.fmtDate(d)}, ${M.slotLabel(slot)}*.\n\nYour slot is reserved once the payment is received.`);
       return;
     }
     return this.menu(false);
@@ -2294,16 +2386,59 @@ async function adminSend(env, req, id) {
   const b = await req.json().catch(() => ({}));
   if (!MSG_KINDS.includes(b.kind) || b.kind === "chat") return bad("Invalid message type");
   const S = await getSettings(env);
-  if (!waReady(env, S) || waDown(S) || S.wa_mode !== "auto") return json({ manual: true });
+  const staff = STAFF.get(req), op = staff && staff.role !== "admin";
+  if (!waReady(env, S) || waDown(S) || S.wa_mode !== "auto") {
+    if (!op) return json({ manual: true });
+    await queueForAdmin(env, id, b.kind, !waReady(env, S) ? "The WhatsApp API isn't set up yet." : waDown(S) ? `WhatsApp API paused: ${S.wa_down_reason}` : "Sending is set to Manual.");
+    return json({ queued: true });
+  }
   const sug = Array.isArray(b.sug) ? b.sug.filter((s) => s && /^\d{4}-\d{2}-\d{2}$/.test(s.date) && SLOTS.includes(s.slot)).slice(0, 5) : undefined;
   const r = await deliver(env, id, b.kind, { S, sug, reportIds: b.reportIds });
+  if (r.manual && op) return json({ queued: true, error: r.error });
   if (r.manual) await env.DB.prepare("UPDATE wa_outbox SET status='dismissed' WHERE booking_id=?1 AND kind=?2 AND status='failed'").bind(id, b.kind).run(); // the page sends it by hand now
   return json(r);
+}
+
+// A message the API couldn't send, put in the admin's "Send by hand" list.
+async function queueForAdmin(env, id, kind, error) {
+  const b = await bookingFull(env, id);
+  if (!b) return;
+  const m = msgFor(env, await templates(env), b, kind);
+  const to = m.t.to === "centre" ? b.centre_phone : m.t.to === "patient" ? b.phone : null;
+  const now = isoNow();
+  await env.DB.prepare("INSERT INTO wa_outbox (booking_id, kind, to_phone, to_role, status, error, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'failed', ?5, ?6, ?6)")
+    .bind(id, kind, to || null, m.t.to, String(error).slice(0, 500), now).run();
+}
+
+// ---- reschedule requests (from the patient's WhatsApp menu) ----
+async function adminResched(env, req, id) {
+  const b = await req.json().catch(() => ({}));
+  if (b.action !== "dismiss") return bad("Invalid request");
+  await env.DB.prepare("UPDATE bookings SET resched_req=NULL, resched_at=NULL, resched_date=NULL, resched_slot=NULL, updated_at=?1 WHERE id=?2").bind(isoNow(), id).run();
+  return json({ ok: true });
+}
+// Take the job away from its collection centre: the centre gets a cancellation message, the booking waits for a new centre.
+async function adminCancelCentre(env, req, id) {
+  const row = await bookingFull(env, id);
+  if (!row || !row.centre_id) return bad("This booking has no collection centre.", 400);
+  if (AFTER_COLLECT_STATES.includes(row.status)) return bad("The sample is already collected.", 409);
+  const S = await getSettings(env);
+  const staff = STAFF.get(req), op = staff && staff.role !== "admin";
+  let r = { manual: true, error: "Sending is set to Manual." };
+  if (waReady(env, S) && !waDown(S) && S.wa_mode === "auto") r = await deliver(env, row, "centre_cancel", { S });
+  else if (op) await queueForAdmin(env, id, "centre_cancel", r.error);
+  const now = isoNow();
+  await env.DB.batch([
+    env.DB.prepare("UPDATE bookings SET centre_id=NULL, centre_status='cancelled', centre_status_at=?1, collector_info=NULL, updated_at=?1 WHERE id=?2").bind(now, id),
+    env.DB.prepare("DELETE FROM msg_log WHERE booking_id=?1 AND kind IN ('center','done:center','done:centre_ok','collector','done:collector','reminder','done:reminder')").bind(id),
+  ]);
+  return json({ ok: true, sent: !!r.sent, queued: !r.sent && op, manual: !r.sent && !op, text: !r.sent && !op ? msgFor(env, await templates(env), row, "centre_cancel").text : undefined, phone: row.centre_phone || null });
 }
 
 // ---- router ----
 // run work after the response is sent (e.g. WhatsApp messages after an admin click)
 const CTX = new WeakMap();
+const STAFF = new WeakMap(); // req → the signed-in admin/operator
 function later(req, promise) {
   const p = Promise.resolve(promise).catch((e) => console.log("background job failed", String(e && e.stack || e)));
   const ctx = CTX.get(req);
@@ -2337,14 +2472,20 @@ export default {
         m = p.match(/^\/api\/bookings\/(DSL-[A-Z0-9]{6})\/reslot$/);
         if (m && req.method === "POST") return reslot(env, req, m[1]);
 
+        if (p === "/api/staff/login" && req.method === "POST") return staffLogin(env, req);
+        if (p === "/api/staff/logout" && req.method === "POST") return logoutSession(env, req);
         if (p.startsWith("/api/admin/")) {
-          if (!String(env.ADMIN_PASSWORD || "").trim()) return bad("Admin password is not set up yet. In Cloudflare add ADMIN_PASSWORD as a Secret.", 503);
-          if (!isAdmin(env, req)) return bad("Wrong password", 401);
-          if (p === "/api/admin/bookings" && req.method === "GET") return adminList(env, url);
+          const staff = await staffOf(env, req);
+          if (!staff) return bad("Please sign in again.", 401);
+          if (staff.role !== "admin" && !operatorMay(req.method, p)) return bad("Only an admin can do this.", 403);
+          STAFF.set(req, staff);
+          if (p === "/api/admin/me" && req.method === "GET") return json({ user: staff });
+          if (p === "/api/admin/lookup" && req.method === "GET") return adminLookup(env, url);
+          if (p === "/api/admin/bookings" && req.method === "GET") return adminList(env, url, staff);
           if (p === "/api/admin/export.csv" && req.method === "GET") return adminCsv(env, url);
           if (p === "/api/admin/block" && req.method === "POST") return adminBlock(env, req);
           if (p === "/api/admin/bookings" && req.method === "POST") return adminCreate(env, req);
-          if (p === "/api/admin/packages" && req.method === "GET") return adminPackages(env);
+          if (p === "/api/admin/packages" && req.method === "GET") return adminPackages(env, staff);
           if (p === "/api/admin/packages" && req.method === "POST") return adminSavePackage(env, req, null);
           m = p.match(/^\/api\/admin\/packages\/(\d{1,9})$/);
           if (m && req.method === "POST") return adminSavePackage(env, req, Number(m[1]));
@@ -2371,6 +2512,10 @@ export default {
           if (m && req.method === "POST") return adminAssignCentre(env, req, m[1]);
           m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/send$/);
           if (m && req.method === "POST") return adminSend(env, req, m[1]);
+          m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/resched$/);
+          if (m && req.method === "POST") return adminResched(env, req, m[1]);
+          m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/cancel-centre$/);
+          if (m && req.method === "POST") return adminCancelCentre(env, req, m[1]);
           if (p === "/api/admin/wa" && req.method === "GET") return adminWa(env, url);
           if (p === "/api/admin/wa/chats" && req.method === "GET") return adminChats(env);
           m = p.match(/^\/api\/admin\/wa\/chats\/(\d{10})$/);

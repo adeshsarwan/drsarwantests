@@ -4,8 +4,10 @@
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 
   // ---------- helpers ----------
-  let KEY = '';
-  try { KEY = sessionStorage.getItem('dsl_admin') || ''; } catch (e) {}
+  // signed-in team member: KEY = session token, ME = { name, username, role: 'admin' | 'operator' }
+  let KEY = '', ME = null;
+  try { KEY = sessionStorage.getItem('dsl_staff') || ''; ME = JSON.parse(sessionStorage.getItem('dsl_me') || 'null'); } catch (e) {}
+  const isOp = () => !!ME && ME.role !== 'admin';
   const pref = {
     get(k, d) { try { const v = localStorage.getItem('dsl_' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
     set(k, v) { try { localStorage.setItem('dsl_' + k, JSON.stringify(v)); } catch (e) {} },
@@ -67,8 +69,8 @@
   }
 
   async function api(path, opts = {}) {
-    const r = await fetch(path, { ...opts, headers: { 'content-type': 'application/json', 'x-admin-key': KEY, ...(opts.headers || {}) } });
-    if (r.status === 401 || r.status === 503) { const j = await r.json().catch(() => ({})); logout(); throw new Error(j.error || 'Wrong password'); }
+    const r = await fetch(path, { ...opts, headers: { 'content-type': 'application/json', 'x-session': KEY, ...(opts.headers || {}) } });
+    if (r.status === 401) { const j = await r.json().catch(() => ({})); logout(); throw new Error(j.error || 'Please sign in again'); }
     const j = await r.json().catch(() => ({}));
     if (!r.ok) { const e = new Error(j.error || 'Request failed'); e.code = j.code; throw e; }
     return j;
@@ -92,17 +94,38 @@
   const findB = (id) => (cal.data && cal.data.bookings.find((b) => b.id === id)) || (data && data.bookings.find((b) => b.id === id));
 
   // ---------- auth ----------
-  function logout() { KEY = ''; try { sessionStorage.removeItem('dsl_admin'); } catch (e) {} $('#app').hidden = true; $('#login').hidden = false; }
+  function logout() {
+    if (KEY) fetch('/api/staff/logout', { method: 'POST', headers: { 'x-session': KEY } }).catch(() => {});
+    KEY = ''; ME = null; try { sessionStorage.removeItem('dsl_staff'); sessionStorage.removeItem('dsl_me'); } catch (e) {}
+    $('#app').hidden = true; $('#login').hidden = false;
+  }
   $('#logout').onclick = logout;
+  // admin sees everything; an operator gets Operations, Bookings, Calendar and Inbox (no money, settings or sending by hand)
+  const ADMIN_TABS = ['tests', 'centres', 'users', 'wa'];
+  function applyRole() {
+    document.body.classList.toggle('is-op', isOp());
+    $$('.tab.adm').forEach((t) => (t.hidden = isOp()));
+    $('#whoAmI').textContent = ME ? `${ME.name} · ${ME.role === 'admin' ? 'Admin' : 'Operator'}` : '';
+    if (isOp() && ADMIN_TABS.includes(tab)) tab = 'ops';
+  }
   $('#loginForm').onsubmit = async (e) => {
-    e.preventDefault(); KEY = $('#pw').value.trim(); $('#loginErr').textContent = '';
-    try { await refreshAll(); try { sessionStorage.setItem('dsl_admin', KEY); } catch (e2) {} $('#login').hidden = true; $('#app').hidden = false; showTab(tab); }
-    catch (err) { $('#loginErr').textContent = err.message; }
+    e.preventDefault(); $('#loginErr').textContent = '';
+    try {
+      const r = await fetch('/api/staff/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: $('#un').value.trim(), password: $('#pw').value }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'Could not sign in');
+      KEY = j.token; ME = j.user;
+      try { sessionStorage.setItem('dsl_staff', KEY); sessionStorage.setItem('dsl_me', JSON.stringify(ME)); } catch (e2) {}
+      if (isOp()) tab = 'ops';
+      applyRole(); $('#pw').value = '';
+      await refreshAll(); $('#login').hidden = true; $('#app').hidden = false; showTab(tab);
+    } catch (err) { $('#loginErr').textContent = err.message; }
   };
   fetch('/api/config').then((r) => r.json()).then((c) => (CFG = { ...CFG, ...c })).catch(() => {});
 
   // ---------- tabs ----------
   function showTab(name) {
+    if (isOp() && ADMIN_TABS.includes(name)) name = 'ops';
     tab = name; pref.set('tab', name);
     $$('.tab').forEach((t) => (t.getAttribute('data-tab') === name ? t.setAttribute('aria-current', 'page') : t.removeAttribute('aria-current')));
     $('#view-bookings').hidden = name !== 'bookings';
@@ -112,6 +135,8 @@
     $('#view-users').hidden = name !== 'users';
     $('#view-wa').hidden = name !== 'wa';
     $('#view-inbox').hidden = name !== 'inbox';
+    $('#view-ops').hidden = name !== 'ops';
+    if (name === 'ops') renderOps();
     if (name === 'inbox') loadChats().catch((e) => toast(e.message));
     if (name === 'calendar') loadCal().catch((e) => toast(e.message));
     if (name === 'tests') loadPkgs().catch((e) => toast(e.message));
@@ -122,7 +147,8 @@
   $$('.tab').forEach((t) => (t.onclick = () => showTab(t.getAttribute('data-tab'))));
 
   async function refreshAll() {
-    await Promise.all([load(), loadPkgs().catch(() => {}), loadCentres().catch(() => {}), loadWa(true).catch(() => {}), loadChats().catch(() => {})]);
+    await Promise.all([load(), loadPkgs().catch(() => {}), loadCentres().catch(() => {}), isOp() ? null : loadWa(true).catch(() => {}), loadChats().catch(() => {})]);
+    renderOps();
     if (tab === 'calendar' || cal.data) await loadCal();
     if (detailId && $('#detailDlg').open) { const b = findB(detailId); if (b) $('#detailBody').innerHTML = detailHTML(b); }
     else if (slotOpen && $('#detailDlg').open && cal.data) $('#detailBody').innerHTML = slotListHTML(slotOpen.date, slotOpen.slot);
@@ -168,44 +194,47 @@
   const centrePhone = (b) => { const c = centreOf(b); return c && c.numbers.length ? c.numbers[0].phone : ''; };
   const AFTER_COLLECT = ['collected', 'report_ready', 'completed'];
 
-  // The process, step by step (also drives the "next step" button everywhere).
-  // msg = the WhatsApp message a step sends (those steps can be skipped or ticked as done by hand).
+  // The process: the 4 steps someone in our team acts on (also drives the "next step" button everywhere).
+  // Everything in between (job to the centre, confirmation to the patient, reminder, "sample received", the report)
+  // goes out automatically on WhatsApp – those messages are shown under the step they belong to (autoLines).
   function steps(b) {
     const s = b.status, sent = sentMap(b), reps = reportsOf(b), nSent = reps.filter((r) => r.sent_at).length;
-    const W = (kind, label, ghost) => `<button type="button" class="btn ${ghost ? 'ghost' : 'wa'} sm" data-act="wa" data-kind="${kind}" data-id="${b.id}">${label}</button>`;
-    const unpaid = ['pending', 'expired'].includes(s);
-    const M = (key, msg, label, btn) => ({ key, msg, label, btn, cls: 'wa', done: !!sent[msg], hand: !!sent.manual[msg], at: sent[msg], avail: PAID_LIKE.includes(s),
-      act: W(msg, btn), again: W(msg, 'Resend', true) });
-    const vialBtn = b.vial_no ? `<button type="button" class="btn ghost sm" data-act="vial-edit" data-id="${b.id}">Edit vial</button>`
-      : `<button type="button" class="btn sm" data-act="vial-edit" data-id="${b.id}">Add vial no.</button>`;
+    const unpaid = ['pending', 'expired'].includes(s), paidLike = PAID_LIKE.includes(s);
+    const btn = (act, label, cls, extra) => `<button type="button" class="btn ${cls || ''} sm" data-act="${act}" data-id="${b.id}"${extra || ''}>${label}</button>`;
+    const accepted = b.centre_status === 'accepted' || !!sent.centre_ok;
     return [
-      { key: 'pay', label: 'Payment confirmed', done: PAID_LIKE.includes(s), at: b.paid_at, avail: s === 'payment_submitted' || unpaid,
+      { key: 'pay', label: 'Payment confirmed & centre assigned', done: paidLike && !!b.centre_id, at: b.paid_at, avail: true,
         act: s === 'payment_submitted' || (unpaid && hasPaidProof(b))
-          ? `<button type="button" class="btn sm" data-act="status" data-id="${b.id}" data-st="confirmed">Confirm payment</button>${b.has_proof ? `<button type="button" class="btn ghost sm" data-act="shot" data-id="${b.id}">Screenshot</button>` : ''}`
-          : W('pay', 'Payment reminder') },
-      { key: 'assign', label: centreOf(b) ? `Collection centre: ${centreOf(b).name}` : 'Collection centre chosen', btn: 'Choose centre', cls: '',
-        done: !!b.centre_id, at: null, avail: PAID_LIKE.includes(s),
-        act: `<button type="button" class="btn sm" data-act="assign-open" data-id="${b.id}">Choose centre</button>`,
-        again: `<button type="button" class="btn ghost sm" data-act="assign-open" data-id="${b.id}">Change</button>` },
-      M('center', 'center', `Booking sent to collection centre${centrePhone(b) ? ` (${centrePhone(b)})` : ''}`, 'Send to centre'),
-      { key: 'centre_ok', msg: 'centre_ok', btn: 'Mark accepted', cls: '',
-        label: b.centre_status === 'accepted' ? `Centre accepted${b.collector_info ? ' · collector ' + b.collector_info : ''}` : b.centre_status === 'declined' && !b.centre_id ? 'Centre declined – choose another centre' : 'Centre accepted the visit',
-        done: b.centre_status === 'accepted' || !!sent.centre_ok, hand: b.centre_status !== 'accepted' && !!sent.manual.centre_ok, at: b.centre_status === 'accepted' ? null : sent.centre_ok,
-        avail: PAID_LIKE.includes(s) && !!b.centre_id, act: `<button type="button" class="btn sm" data-act="step-mark" data-kind="centre_ok" data-id="${b.id}">Mark accepted</button>`, again: '' },
-      M('confirm', 'confirm', 'Booking confirmation sent to patient', 'Send confirmation'),
-      M('collector', 'collector', b.collector_info ? `Collector details sent to patient (${b.collector_info})` : 'Collector details sent to patient', 'Send to patient'),
-      M('reminder', 'reminder', 'Visit reminder sent to patient', 'Send reminder'),
-      { key: 'collect', label: AFTER_COLLECT.includes(s) ? (b.vial_no ? `Sample collected · vial ${b.vial_no}` : 'Sample collected · ⚠ vial no. missing') : 'Sample collected (enter vial no.)',
-        btn: 'Sample collected', cls: 'blue', done: AFTER_COLLECT.includes(s), at: b.collected_at, avail: s === 'confirmed',
-        act: `<button type="button" class="btn blue sm" data-act="collect" data-id="${b.id}">Sample collected</button>`, again: vialBtn },
-      { ...M('received', 'collected', '"Sample received at lab" sent to patient', 'Send to patient'), avail: AFTER_COLLECT.includes(s) },
-      { key: 'upload', label: reps.length ? `${reps.length} report${reps.length === 1 ? '' : 's'} uploaded` : 'Reports uploaded', btn: 'Upload reports', cls: 'purple',
-        done: reps.length > 0, at: reps.length ? reps[reps.length - 1].created_at : null, avail: AFTER_COLLECT.includes(s),
-        act: `<button type="button" class="btn purple sm" data-act="reports" data-id="${b.id}">Upload reports</button>`, again: `<button type="button" class="btn ghost sm" data-act="reports" data-id="${b.id}">Add more</button>` },
-      { key: 'send', label: reps.length ? `Reports sent to patient (${nSent} of ${reps.length})` : 'Reports sent to patient', btn: 'Send reports', cls: 'wa',
-        done: s === 'completed' || (reps.length > 0 && nSent === reps.length), at: b.completed_at, avail: reps.length > 0,
-        act: `<button type="button" class="btn wa sm" data-act="reports" data-id="${b.id}">Send reports</button>`, again: `<button type="button" class="btn ghost sm" data-act="reports" data-id="${b.id}">Resend</button>` },
+          ? btn('status', 'Confirm payment', '', ` data-st="confirmed"`) + (b.has_proof ? btn('shot', 'Screenshot', 'ghost') : '')
+          : unpaid ? `<button type="button" class="btn wa sm" data-act="wa" data-kind="pay" data-id="${b.id}">Payment reminder</button>`
+          : btn('assign-open', 'Assign centre'),
+        again: btn('assign-open', 'Change centre', 'ghost'),
+        detail: b.centre_id && centreOf(b) ? `Centre: ${centreOf(b).name}` : b.centre_status === 'declined' ? 'The centre declined – assign another one' : b.centre_status === 'cancelled' ? 'Job cancelled at the centre – assign a centre' : '',
+        autos: [['center', 'Job sent to the centre']] },
+      { key: 'centre', label: 'Centre confirmed', done: accepted, at: b.centre_status === 'accepted' ? b.centre_status_at : sent.centre_ok, hand: !b.centre_status && !!sent.centre_ok, avail: paidLike && !!b.centre_id,
+        act: `<button type="button" class="btn sm" data-act="step-mark" data-kind="centre_ok" data-id="${b.id}">Mark confirmed</button>` + `<button type="button" class="btn ghost sm" data-act="wa" data-kind="center" data-id="${b.id}">Remind centre</button>`,
+        again: '', detail: b.collector_info ? `Collector: ${b.collector_info}` : '',
+        autos: [['confirm', 'Booking confirmation to the patient'], ['collector', 'Collector details to the patient'], ['reminder', 'Visit reminder (evening before)']] },
+      { key: 'collect', label: 'Vial submitted to lab', done: AFTER_COLLECT.includes(s), at: b.collected_at, avail: s === 'confirmed' && accepted,
+        act: btn('collect', 'Enter vial no.', 'blue'), again: b.vial_no ? btn('vial-edit', 'Edit vial', 'ghost') : btn('vial-edit', 'Add vial no.'),
+        detail: AFTER_COLLECT.includes(s) ? (b.vial_no ? `Vial ${b.vial_no}` : '⚠ vial no. missing') : '',
+        autos: [['collected', '"Lab has received your sample" to the patient']] },
+      { key: 'send', label: 'Report uploaded & sent', done: s === 'completed' || (reps.length > 0 && nSent === reps.length), at: b.completed_at, avail: AFTER_COLLECT.includes(s),
+        act: reps.length ? `<button type="button" class="btn purple sm" data-act="reports" data-id="${b.id}">Check &amp; send report</button>` : `<button type="button" class="btn purple sm" data-act="reports" data-id="${b.id}">Upload report</button>`,
+        again: `<button type="button" class="btn ghost sm" data-act="reports" data-id="${b.id}">Reports</button>`,
+        detail: reps.length ? `${reps.length} report${reps.length === 1 ? '' : 's'} · ${nSent} sent` : '',
+        autos: [['report', 'Report to the patient (after you press Send)']] },
     ];
+  }
+  // the automatic messages under a step: sent (when), couldn't be sent (admin: send by hand), or still to come
+  const failedOf = (b) => { const m = {}; String(b.failed || '').split(',').filter(Boolean).forEach((x) => { const [k, id] = x.split(':'); m[k] = Number(id); }); return m; };
+  function autoLines(b, st) {
+    const sent = sentMap(b), failed = failedOf(b);
+    return st.autos.map(([kind, label]) => {
+      if (sent[kind]) return `<li class="au ok"><span class="au-i" aria-hidden="true">✓</span><span>${esc(label)} · <b>sent ${when(sent[kind])}</b>${sent.manual[kind] ? ' (by hand)' : ''}</span></li>`;
+      if (failed[kind]) return `<li class="au bad"><span class="au-i" aria-hidden="true">!</span><span>${esc(label)} · couldn't send on WhatsApp${isOp() ? ' · passed to admin' : ''}</span>${isOp() ? '' : `<button type="button" class="btn ghost sm" data-act="wa-hand" data-oid="${failed[kind]}">Send by hand</button>`}</li>`;
+      return `<li class="au"><span class="au-i" aria-hidden="true">·</span><span>${esc(label)} · automatic</span></li>`;
+    }).join('');
   }
   // Steps with where the booking really is: a message step left undone before a later finished step is "skipped",
   // and the next step is the first one after that (so a forgotten reminder doesn't hold the booking back).
@@ -213,7 +242,7 @@
   function flow(b) {
     const all = steps(b);
     let last = -1; all.forEach((st, i) => { if (st.done) last = i; });
-    all.forEach((st, i) => { st.skipped = !st.done && !!st.msg && i < last; });
+    all.forEach((st, i) => { st.skipped = !st.done && i < last; });
     const cur = all.find((st) => !st.done && !st.skipped && st.avail) || null;
     return { all, cur };
   }
@@ -242,31 +271,35 @@
     if (NO_FLOW.includes(b.status)) return '';
     const { all, cur } = flow(b), sk = all.filter((st) => st.skipped).length, i = cur ? all.indexOf(cur) : -1;
     const dots = all.map((st) => `<i class="${st.done ? 'd' : st.skipped ? 's' : st === cur ? 'c' : ''}" title="${esc(st.label)}${st.skipped ? ' – skipped' : ''}"></i>`).join('');
-    const head = cur ? `<small>Next · step ${i + 1} of ${all.length}</small><b>${esc(cur.label)}</b>` : b.status === 'completed' ? '<b>All done ✓</b>' : '<b>Waiting for payment</b>';
+    const head = cur ? `<small>Next · step ${i + 1} of ${all.length}</small><b>${esc(cur.label)}</b>` : b.status === 'completed' ? '<b>All done ✓</b>' : all[0].done && !all[1].done ? '<b>Waiting for the centre to confirm</b>' : ['pending', 'expired'].includes(b.status) ? '<b>Waiting for payment</b>' : '<b>Nothing to do right now</b>';
     return `<div class="stc"><div class="stc-dots">${dots}</div>
-<div class="stc-row"><div class="stc-t">${head}${sk ? `<small class="m-skip">${sk} step${sk === 1 ? '' : 's'} skipped</small>` : ''}</div>
+<div class="stc-row"><div class="stc-t">${head}${sk ? `<small class="m-skip">${sk} step${sk === 1 ? '' : 's'} not done</small>` : ''}</div>
 <div class="stc-a">${cur ? cur.act : ''}<button type="button" class="btn ghost sm" data-act="steps" data-id="${b.id}">${STEPS_SVG} All steps</button></div></div></div>`;
   }
 
-  // the pop-up: every step, with the option to do any later one
+  // reschedule request from the patient (WhatsApp menu): handled by our team by hand
+  function reschedBox(b) {
+    if (!b.resched_req) return '';
+    const can = MOVABLE.includes(b.status);
+    return `<div class="rq"><div class="rq-h"><b>Reschedule request</b><span>${b.resched_at ? when(b.resched_at) : ''} · on WhatsApp</span></div>
+<p>${esc(b.resched_req)}</p>
+<div class="rq-a">${can ? `<button type="button" class="btn sm" data-act="move" data-id="${b.id}">Move to a new slot</button>` : ''}${b.centre_id && !AFTER_COLLECT.includes(b.status) ? `<button type="button" class="btn warn sm" data-act="cancel-centre" data-id="${b.id}">Cancel job at centre</button>` : ''}<button type="button" class="btn ghost sm" data-act="chat" data-id="${b.id}">Reply in Inbox</button><button type="button" class="lnk-b" data-act="resched-dismiss" data-id="${b.id}">Dismiss</button></div>
+<small>Moving sends the new time to the patient and to the centre (the centre accepts it again). "Cancel job at centre" sends the centre a cancellation – then assign a centre again.</small></div>`;
+  }
+  // the pop-up: the 4 steps, what's been sent automatically under each, and the next action
   function stepsPopHTML(b) {
-    const { all, cur } = flow(b), unpaid = ['pending', 'expired'].includes(b.status);
-    const note = b.status === 'payment_submitted' ? 'Payment isn’t verified yet. Doing a later step also marks the payment as verified.'
-      : unpaid ? 'Payment not received yet. The later steps open once the payment is confirmed.'
-      : 'Forgot to tick something? You can do any step directly – steps left out are marked skipped. Already done outside the system? Tick it with “Mark done”.';
+    const { all, cur } = flow(b);
     const rows = all.map((st, i) => {
-      const locked = !st.done && !canDo(b, st);
+      const locked = !st.done && !st.avail && st !== cur;
       const cls = st.done ? 'done' : st.skipped ? 'skip' : st === cur ? 'cur' : locked ? 'wait' : '';
-      const sub = st.done ? (st.at ? when(st.at) + (st.hand ? ' · ticked by hand' : '') : '') : st.skipped ? 'Skipped' : locked ? 'After payment' : '';
-      const doBtn = `<button type="button" class="btn ${st === cur ? st.cls : 'ghost'} sm" data-act="step" data-key="${st.key}" data-id="${b.id}">${st.skipped ? 'Do it now' : st.btn}</button>`;
-      const markBtn = st.msg && st.key !== 'centre_ok' ? `<button type="button" class="btn ghost sm" data-act="step-mark" data-kind="${st.msg}" data-id="${b.id}">Mark done</button>` : '';
-      const acts = st.done ? (st.hand ? `<button type="button" class="btn ghost sm" data-act="step-unmark" data-kind="${st.msg}" data-id="${b.id}">Undo</button>` : st.again || '')
-        : locked ? '' : st.key === 'pay' ? st.act : doBtn + markBtn;
-      return `<li class="stp ${cls}"><span class="n" aria-hidden="true">${st.done ? '✓' : st.skipped ? '↷' : i + 1}</span>
-<div class="t"><b>${esc(st.label)}</b>${sub ? `<small>${sub}</small>` : ''}</div><div class="a">${acts}</div></li>`;
+      const sub = [st.done && st.at ? when(st.at) + (st.hand ? ' · ticked by hand' : '') : '', st.skipped ? 'Not done' : '', st.detail || ''].filter(Boolean).join(' · ');
+      const acts = st.done ? (st.hand ? `<button type="button" class="btn ghost sm" data-act="step-unmark" data-kind="centre_ok" data-id="${b.id}">Undo</button>` : st.again || '')
+        : st === cur || st.skipped ? st.act : '';
+      return `<li class="stp ${cls}"><span class="n" aria-hidden="true">${st.done ? '✓' : i + 1}</span>
+<div class="t"><b>${esc(st.label)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}<ul class="aul">${autoLines(b, st)}</ul></div><div class="a">${acts}</div></li>`;
     }).join('');
     return `<div class="dlg-h"><b>Steps · ${esc(b.name)}</b><div class="meta">${esc(b.id)} · ${fmtD(b.date)}, ${esc(slotLabel(b.slot))} · <span class="pill st-${b.status}" style="margin:0">${ST[b.status].label}</span></div></div>
-<div class="dlg-b"><p class="meta" style="margin:0 0 10px">${note}</p><ol class="steps">${rows}</ol></div>`;
+<div class="dlg-b">${reschedBox(b)}<p class="meta" style="margin:0 0 10px">Messages go out automatically from WhatsApp +91 98180 28755.${isOp() ? ' If one can’t be delivered, it’s passed to the admin.' : ''}</p><ol class="steps">${rows}</ol></div>`;
   }
   let stepsId = null;
   function openSteps(id) {
@@ -302,7 +335,7 @@
   // ---------- WhatsApp messages ----------
   const MSG = {
     pay: 'Payment reminder', confirm: 'Booking confirmation', center: 'Booking details to collection centre', reminder: 'Visit reminder', slots: 'Suggest new slots',
-    missed: 'Missed visit · fee & new slots', collected: 'Sample received at lab', report: 'Reports', chat: 'Open chat',
+    missed: 'Missed visit · fee & new slots', collected: 'Sample received at lab', report: 'Reports', chat: 'Open chat', moved: 'New date / time', centre_cancel: 'Job cancelled (to centre)',
     collector: 'Collector details to patient', centre_ok: 'Centre accepted', prep: 'How to prepare',
   };
   const NEEDS_SLOTS = ['slots', 'missed'];
@@ -360,8 +393,19 @@
   // one click: open WhatsApp with the message (slot suggestions are looked up first, in a preview)
   async function sendWa(id, kind) {
     const b = findB(id); if (!b) return;
-    if (kind === 'chat') { openWhatsApp(b.phone, ''); return; }
+    if (kind === 'chat') { if (isOp()) { showTab('inbox'); openChat(b.phone).catch((e) => toast(e.message)); } else openWhatsApp(b.phone, ''); return; }
     if (kind === 'report') { openReports(id); return; }
+    if (isOp()) {
+      // operators never send by hand: the message goes from 98180 28755, or it's passed to the admin
+      if (kind === 'center' && !b.centre_id) { openAssign(id); return; }
+      try {
+        const sug = NEEDS_SLOTS.includes(kind) ? await suggestSlots(b) : undefined;
+        const r = await post(`/api/admin/bookings/${id}/send`, { kind, sug });
+        toast(r.sent ? `${MSG[kind]} sent on WhatsApp ✓` : `Couldn't send on WhatsApp – passed to the admin`);
+        await refreshAll();
+      } catch (e) { toast(e.message); }
+      return;
+    }
     if (WA && WA.auto && !NEEDS_SLOTS.includes(kind) && !(kind === 'center' && !b.centre_id)) {
       // automatic: the server sends it through the WhatsApp API; if it can't, the same text opens here to send by hand
       try {
@@ -427,7 +471,7 @@
     if (['pending', 'expired'].includes(b.status)) other.push('pay');
     if (['pending', 'expired', 'payment_submitted', 'confirmed'].includes(b.status)) other.push('slots');
     if (b.status === 'no_show') other.push('missed');
-    other.push('chat');
+    if (!isOp()) other.push('chat');
     const sent = sentMap(b);
     const t = testsOf(b);
     return `<div class="dt-h">
@@ -436,6 +480,7 @@
 <div class="dt-when"><span>${fmtD(b.date)} · ${esc(slotLabel(b.slot))}</span>${MOVABLE.includes(b.status) ? `<button type="button" class="btn ghost sm" style="margin-left:auto" data-act="move" data-id="${b.id}">${b.status === 'no_show' ? 'Rebook' : 'Reschedule'}</button>` : ''}</div>
 </div>
 <div class="dt-b">
+${reschedBox(b)}
 ${b.status === 'no_show' ? `<div class="fee">Phlebotomist reached${b.missed_slot ? ` on ${fmtD(b.missed_slot.slice(0, 10))}, ${fmtT(slotMin(b.missed_slot.slice(11)))}` : ''} – patient not available. <b>${money(b.fee_due || CFG.visitFee)} visit fee</b> is due before rebooking.</div>` : ''}
 ${b.fee_paid_at ? `<div class="meta">Visit fee ${money(b.fee_due)} received ${when(b.fee_paid_at)} · rebooked</div>` : ''}
 <div class="dt-sec"><div class="dt-k" style="display:flex;justify-content:space-between;align-items:center">Tests (${t.length})${b.status !== 'cancelled' ? `<button type="button" class="btn ghost sm" data-act="tests-edit" data-id="${b.id}">Edit tests</button>` : ''}</div>
@@ -446,7 +491,7 @@ ${stepsCompact(b) ? `<div class="dt-sec"><div class="dt-k">Steps</div>${stepsCom
 <div class="dt-sec"><div class="dt-k" style="display:flex;justify-content:space-between;align-items:center">Reports (${reps.length})${AFTER_COLLECT.includes(b.status) ? `<button type="button" class="btn ghost sm" data-act="reports" data-id="${b.id}">${reps.length ? 'Manage / send' : 'Upload'}</button>` : ''}</div>
 ${reps.length ? `<ul class="rl">${reps.map((r) => `<li>📄 ${esc(r.name)} <span class="${r.sent_at ? 'm-ok' : 'meta'}">${r.sent_at ? 'sent ' + when(r.sent_at) : 'not sent'}</span></li>`).join('')}</ul>` : `<div class="meta">${AFTER_COLLECT.includes(b.status) ? 'No reports uploaded yet.' : 'Reports can be uploaded after the sample is collected.'}</div>`}</div>
 <div class="dt-sec"><div class="dt-k">Other WhatsApp messages</div><div class="wa-list">${other.map((k) => `<button type="button" class="wa-btn" data-act="wa" data-kind="${k}" data-id="${b.id}"><span class="ic">✆</span><span><b>${MSG[k]}</b></span>${sent[k] ? `<span class="ok">Sent ${when(sent[k])}</span>` : ''}</button>`).join('')}</div></div>
-<div class="dt-links"><a class="call" href="tel:+91${esc(b.phone)}">Call</a><a class="wa" href="#" data-act="wa" data-kind="chat" data-id="${b.id}">WhatsApp</a><a href="${mapUrl(b)}" target="_blank" rel="noopener">Map</a></div>
+<div class="dt-links"><a class="call" href="tel:+91${esc(b.phone)}">Call</a><a class="wa" href="#" data-act="wa" data-kind="chat" data-id="${b.id}">${isOp() ? 'Chat in Inbox' : 'WhatsApp'}</a><a href="${mapUrl(b)}" target="_blank" rel="noopener">Map</a></div>
 <div><div class="dt-k">Collection address</div><div style="margin-top:2px;line-height:1.45">${esc(b.address)}<br><b>${esc(b.city || '')}</b>${b.state ? ', ' + esc(b.state) : ''} – ${esc(b.pincode)}</div></div>
 <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">${b.cycle ? `<div><div class="dt-k">Cycle</div><div style="margin-top:2px">${esc(b.cycle)}</div></div>` : ''}<div><div class="dt-k">Source</div><div style="margin-top:2px">${esc(srcLabel(b.source))}</div></div></div>
 ${b.dob ? `<div><div class="dt-k">Date of birth</div><div style="margin-top:2px">${fmt(b.dob, { day: 'numeric', month: 'short', year: 'numeric' })}</div></div>` : ''}
@@ -514,8 +559,8 @@ ${f.length ? `<div class="dt-f">${f.join('')}</div>` : ''}`;
       [list.filter((b) => NEW_ST.includes(b.status)).reduce((a, b) => a + Math.max(1, testsOf(b).length), 0), 'New tests (not collected yet)', 'new'],
     ].map(card).join('');
     $('#stats2').innerHTML = [
-      [money(revenue(list)), 'Total price'],
-      [money(paid.reduce((a, b) => a + marginOf(b), 0) + list.reduce((a, b) => a + (b.fee_paid_at ? b.fee_due || 0 : 0), 0)), 'Total margin'],
+      ...(isOp() ? [] : [[money(revenue(list)), 'Total price'],
+      [money(paid.reduce((a, b) => a + marginOf(b), 0) + list.reduce((a, b) => a + (b.fee_paid_at ? b.fee_due || 0 : 0), 0)), 'Total margin']]),
       [list.filter((b) => b.status === 'no_show').length, 'Patient not available', 'no_show', 'red'],
       [list.filter((b) => b.status === 'pending').length, 'Unpaid bookings', 'pending', 'amber'],
     ].map(card).join('');
@@ -637,7 +682,7 @@ ${f.length ? `<div class="dt-f">${f.join('')}</div>` : ''}`;
 <div class="rs c"><b>${c('confirmed')}</b><span>Confirmed</span></div>
 <div class="rs"><b>${c('collected')}</b><span>Awaiting report</span></div>
 <div class="rs"><b>${c('report_ready')}</b><span>Report to send</span></div>
-<div class="rs-wide"><span class="meta">Revenue (paid)</span><b>${money(revenue(list))}</b></div>`;
+${isOp() ? '' : `<div class="rs-wide"><span class="meta">Revenue (paid)</span><b>${money(revenue(list))}</b></div>`}`;
     const F = [['payment_submitted', 'Paid – verify'], ['pending', 'Awaiting payment'], ['confirmed', 'Confirmed'], ['collected', 'Collected'], ['report_ready', 'Report ready'], ['completed', 'Completed'], ['no_show', 'Not available'], ['cancelled', 'Cancelled / expired']];
     $('#filters').innerHTML = F.map(([k, l]) => `<label class="flt"><input type="checkbox" data-flt="${k}" ${cal.filters.has(k) ? 'checked' : ''}> ${l} <span>${k === 'cancelled' ? c('cancelled') + c('expired') : c(k)}</span></label>`).join('');
     $$('[data-flt]').forEach((x) => (x.onchange = () => { x.checked ? cal.filters.add(x.dataset.flt) : cal.filters.delete(x.dataset.flt); pref.set('filters2', [...cal.filters]); renderCal(); }));
@@ -817,12 +862,25 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
 
   async function viewShot(id) {
     try {
-      const r = await fetch(`/api/admin/bookings/${id}/screenshot`, { headers: { 'x-admin-key': KEY } });
+      const r = await fetch(`/api/admin/bookings/${id}/screenshot`, { headers: { 'x-session': KEY } });
       if (!r.ok) throw new Error('Screenshot not found');
       const u = URL.createObjectURL(await r.blob());
       const im = $('#shotImg'); if (im.dataset.u) URL.revokeObjectURL(im.dataset.u); im.src = u; im.dataset.u = u;
       const b = findB(id); $('#shotTitle').textContent = `Payment screenshot · ${b ? b.name : ''}`;
       $('#shotDlg').showModal();
+    } catch (e) { toast(e.message); }
+  }
+  // take the job away from its centre (e.g. after a reschedule request) – the centre is told on WhatsApp
+  async function cancelAtCentre(id) {
+    const b = findB(id); if (!b) return;
+    const c = centreOf(b);
+    if (!confirm(`Cancel this job at ${c ? c.name : 'the centre'}?\n\nThe centre gets a cancellation message on WhatsApp and the booking waits for a new centre.`)) return;
+    try {
+      const r = await post(`/api/admin/bookings/${id}/cancel-centre`, {});
+      await refreshAll();
+      if (r.sent) toast('Job cancelled – the centre was told on WhatsApp');
+      else if (r.manual && r.phone) openMsg({ b, kind: '', title: 'Job cancelled at the centre', sub: `Tell the centre · ${r.phone}`, text: r.text || '', phone: r.phone });
+      else toast(r.queued ? "Job cancelled – couldn't send on WhatsApp, passed to the admin" : 'Job cancelled');
     } catch (e) { toast(e.message); }
   }
   // ---------- mutations ----------
@@ -834,7 +892,9 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
       await post(`/api/admin/bookings/${id}/status`, { status: st });
       await refreshAll();
       const b = findB(id) || b0;
-      if (st === 'confirmed') openMsg({ b, kind: 'confirm', title: 'Payment confirmed ✓', sub: `Send the confirmation to ${b.name} · +91 ${b.phone}`, text: msgText(b, 'confirm') });
+      const autoSend = isOp() || (WA && WA.auto);
+      if (st === 'confirmed' && autoSend) toast(b.centre_id ? `Payment confirmed ✓ – the job goes to ${centreOf(b) ? centreOf(b).name : 'the centre'} on WhatsApp` : 'Payment confirmed ✓ – now assign a collection centre');
+      else if (st === 'confirmed') { if (b.centre_id && centrePhone(b)) openMsg({ b, kind: 'center', title: 'Payment confirmed ✓', sub: `Send the job to the centre · ${centrePhone(b)}`, text: msgText(b, 'center'), phone: centrePhone(b) }); else toast('Payment confirmed ✓ – now assign a collection centre'); }
       else if (st === 'no_show') { sendWa(id, 'missed'); }
       else if (!opts.quiet) toast('Updated');
       else toast('Marked as not sent');
@@ -897,7 +957,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   async function uploadReport(id, file) {
     if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') throw new Error(`${file.name} is not a PDF`);
     if (file.size > 10 * 1024 * 1024) throw new Error(`${file.name} is larger than 10 MB`);
-    const r = await fetch(`/api/admin/bookings/${id}/reports`, { method: 'POST', body: file, headers: { 'content-type': 'application/pdf', 'x-admin-key': KEY, 'x-filename': encodeURIComponent(file.name) } });
+    const r = await fetch(`/api/admin/bookings/${id}/reports`, { method: 'POST', body: file, headers: { 'content-type': 'application/pdf', 'x-session': KEY, 'x-filename': encodeURIComponent(file.name) } });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || 'Upload failed');
     return j;
@@ -944,11 +1004,12 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   $('#repSend').onclick = async () => {
     const b = findB(repId); if (!b) return;
     const files = reportsOf(b).filter((r) => repPicked.has(r.id)); if (!files.length) return;
-    if (WA && WA.auto) { // the patient gets a "reports ready" message and receives the PDFs after a date-of-birth check
+    if (isOp() || (WA && WA.auto)) { // the patient gets a "reports ready" message and receives the PDFs after a date-of-birth check
       $('#repSend').disabled = true;
       try {
         const r = await post(`/api/admin/bookings/${b.id}/send`, { kind: 'report', reportIds: files.map((f) => f.id) });
         if (r.sent) { $('#repDlg').close(); toast('Patient told on WhatsApp ✓ They get the PDFs after a date-of-birth check.'); await refreshAll(); return; }
+        if (isOp()) { $('#repDlg').close(); toast("Couldn't send on WhatsApp – passed to the admin"); await refreshAll(); return; }
         toast(`Couldn't send automatically (${r.error || 'API not available'}) – sending by hand`);
       } catch (e) { toast(e.message); return; } finally { $('#repSend').disabled = false; }
     }
@@ -960,7 +1021,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   async function viewReportFile(rid) {
     const w = window.open('', '_blank');
     try {
-      const r = await fetch(`/api/admin/reports/${rid}`, { headers: { 'x-admin-key': KEY } });
+      const r = await fetch(`/api/admin/reports/${rid}`, { headers: { 'x-session': KEY } });
       if (!r.ok) throw new Error('Report not found');
       const u = URL.createObjectURL(await r.blob());
       if (w) w.location = u; else window.open(u, '_blank');
@@ -1080,7 +1141,8 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     }
     $$('dialog[open]').forEach((d) => d.close());
     $('#formDlg').showModal();
-    setTimeout(() => (mode === 'add' ? $('#fName') : mode === 'tests' ? $('#tSearch') : $('#fDate')).focus(), 50);
+    $('#fFound').hidden = true; $('#fFound').innerHTML = ''; found = null;
+    setTimeout(() => (mode === 'add' ? $('#fPhone') : mode === 'tests' ? $('#tSearch') : $('#fDate')).focus(), 50);
   }
   // pick one or more tests
   let pick = new Set(), amtTouched = false;
@@ -1104,6 +1166,46 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     sel.value = o.value;
   }
   $('#fDate').onchange = () => fillSlots($('#fDate').value, $('#fSlot').value, form.id);
+  // mobile number first: if we know it, the people on it and their addresses are one click away
+  let found = null, lookT;
+  $('#fPhone').addEventListener('input', () => {
+    clearTimeout(lookT);
+    const ph = $('#fPhone').value.replace(/\D/g, '').slice(-10);
+    if (!/^[6-9]\d{9}$/.test(ph)) { $('#fFound').hidden = true; found = null; return; }
+    lookT = setTimeout(async () => {
+      try {
+        const r = await api('/api/admin/lookup?phone=' + ph);
+        if ($('#fPhone').value.replace(/\D/g, '').slice(-10) !== ph) return;
+        found = r; renderFound();
+      } catch (e) {}
+    }, 250);
+  });
+  function renderFound() {
+    const r = found, box = $('#fFound');
+    if (!r) { box.hidden = true; return; }
+    box.hidden = false;
+    if (!r.people.length && !r.addresses.length) { box.innerHTML = '<div class="found-h new"><b>New number.</b> Fill in the details below – they\'re saved for next time.</div>'; return; }
+    box.innerHTML = `<div class="found-h"><b>Returning number</b> · ${r.people.length} ${r.people.length === 1 ? 'person' : 'people'} · ${r.bookings} booking${r.bookings === 1 ? '' : 's'}</div>
+<div class="found-k">Who is the test for?</div><div class="found-l">${r.people.map((p, i) => `<button type="button" class="found-b" data-fp="${i}"><b>${esc(p.name)}</b><small>${p.dob ? 'Born ' + fmt(p.dob, { day: 'numeric', month: 'short', year: 'numeric' }) : 'No date of birth'}${p.last_package ? ' · last: ' + esc(p.last_package) : ''}</small></button>`).join('')}<button type="button" class="found-b" data-fp="new"><b>+ Someone else</b><small>New person on this number</small></button></div>
+${r.addresses.length ? `<div class="found-k">Address</div><div class="found-l">${r.addresses.map((a, i) => `<button type="button" class="found-b" data-fa="${i}"><b>${esc(a.city || a.pincode)}</b><small>${esc(a.address)} · ${esc(a.pincode)}</small></button>`).join('')}</div>` : ''}`;
+  }
+  $('#fFound').addEventListener('click', (e) => {
+    const p = e.target.closest('[data-fp]'), a = e.target.closest('[data-fa]');
+    if (p) {
+      $$('[data-fp]', $('#fFound')).forEach((x) => x.classList.toggle('on', x === p));
+      const person = p.dataset.fp === 'new' ? null : found.people[Number(p.dataset.fp)];
+      $('#fName').value = person ? person.name : ''; $('#fDob').value = person && person.dob ? person.dob : '';
+      if (person && person.last_package) { const pk = PKGS.find((x) => x.active && x.name === person.last_package); if (pk) { pick = new Set([pk.id]); amtTouched = false; renderPick(); } }
+      if (!person) $('#fName').focus();
+      if (found.addresses.length === 1 && !$('#fAddr').value) $('[data-fa="0"]', $('#fFound')).click();
+    }
+    if (a) {
+      $$('[data-fa]', $('#fFound')).forEach((x) => x.classList.toggle('on', x === a));
+      const ad = found.addresses[Number(a.dataset.fa)];
+      $('#fAddr').value = ad.address; $('#fPin').value = ad.pincode || ''; $('#fCity').value = ad.city || ''; setState(ad.state || '');
+      fillSlots($('#fDate').value, $('#fSlot').value, form.id);
+    }
+  });
   $('#fPin').oninput = async () => {
     const v = $('#fPin').value.replace(/\D/g, '').slice(0, 6); $('#fPin').value = v;
     if (v.length !== 6) return;
@@ -1138,7 +1240,8 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
       if (form.mode === 'tests') openDetail(form.id);
       if (form.mode === 'move') {
         const b = findB(form.id);
-        if (b) openMsg({ b, kind: 'confirm', title: form.fee ? 'Rebooked ✓' : 'Booking moved ✓', sub: `Send the new time to ${b.name} · +91 ${b.phone}`, text: msgText(b, 'confirm') });
+        if (b && (isOp() || (WA && WA.auto))) toast(`${form.fee ? 'Rebooked' : 'Moved'} ✓ – the new time goes to the patient${b.centre_id ? ' and the centre' : ''} on WhatsApp`);
+        else if (b) openMsg({ b, kind: 'moved', title: form.fee ? 'Rebooked ✓' : 'Booking moved ✓', sub: `Send the new time to ${b.name} · +91 ${b.phone}`, text: msgText(b, 'moved') });
       }
     } catch (err) { $('#formErr').textContent = err.message; }
     finally { btn.disabled = false; }
@@ -1232,16 +1335,17 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   };
 
   // ================= USERS =================
-  let userRole = 'centre', USERS = [], userEditing = null;
+  let userRole = 'staff', USERS = [], userEditing = null;
+  const ROLE_L = { admin: 'Admin', operator: 'Operator', centre: 'Collection centre', patient: 'Patient' };
   const genPw = () => { const a = 'abcdefghjkmnpqrstuvwxyz23456789'; const r = crypto.getRandomValues(new Uint8Array(10)); return Array.from(r, (x) => a[x % a.length]).join(''); };
   function renderUsersHead() {
     $$('[data-act="users-role"]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.role === userRole)));
-    $('#userAddBtn').hidden = userRole !== 'centre';
-    $('#userNote').innerHTML = userRole === 'centre'
-      ? 'Logins for the <b>centre portal</b> (drsarwantests.com/centre) – the centre sees its bookings, marks samples collected and uploads reports.'
+    $('#userAddBtn').hidden = userRole !== 'staff';
+    $('#userNote').innerHTML = userRole === 'staff'
+      ? '<b>Admins</b> and <b>operators</b> sign in here at drsarwantests.com/admin. <b>Collection centres</b> sign in at drsarwantests.com/centre to accept jobs, add vial numbers and upload reports.'
       : 'Created automatically from bookings. Patients open <b>drsarwantests.com/reports</b> with their mobile number and date of birth.';
-    $('#userHead').innerHTML = userRole === 'centre'
-      ? '<tr><th>Name</th><th>Username</th><th>Centre</th><th>Mobile</th><th>Last sign-in</th><th>Status</th><th></th></tr>'
+    $('#userHead').innerHTML = userRole === 'staff'
+      ? '<tr><th>Name</th><th>Role</th><th>Username</th><th>Mobile</th><th>Last sign-in</th><th>Status</th><th></th></tr>'
       : '<tr><th>Patient</th><th>Mobile</th><th>Date of birth</th><th class="num">Bookings</th><th class="num">Reports</th><th>Last sign-in</th><th>Status</th><th></th></tr>';
   }
   async function loadUsers() {
@@ -1255,10 +1359,10 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     const rows = USERS.filter((u) => !q || `${u.name} ${u.phone || ''} ${u.username || ''} ${u.centre_name || ''}`.toLowerCase().includes(q));
     const st = (u) => `<span class="pill ${u.active ? 'st-confirmed' : 'st-cancelled'}" style="margin:0">${u.active ? 'Active' : 'Blocked'}</span>`;
     const last = (u) => (u.last_login_at ? when(u.last_login_at) : '<span class="meta">Never</span>');
-    $('#userBody').innerHTML = rows.length ? rows.map((u) => userRole === 'centre'
-      ? `<tr class="${u.active ? '' : 'off'}"><td><b>${esc(u.name)}</b></td><td>${esc(u.username)}</td><td>${esc(u.centre_name || '—')}</td><td>${esc(u.phone || '—')}</td><td>${last(u)}</td><td>${st(u)}</td><td><button type="button" class="btn ghost sm" data-act="user-edit" data-uid="${u.id}">Edit</button></td></tr>`
+    $('#userBody').innerHTML = rows.length ? rows.map((u) => userRole === 'staff'
+      ? `<tr class="${u.active ? '' : 'off'}"><td><b>${esc(u.name)}</b></td><td><span class="role-p r-${u.role}">${ROLE_L[u.role] || u.role}</span>${u.role === 'centre' && u.centre_name ? `<small>${esc(u.centre_name)}</small>` : ''}</td><td>${esc(u.username)}</td><td>${esc(u.phone || '—')}</td><td>${last(u)}</td><td>${st(u)}</td><td><button type="button" class="btn ghost sm" data-act="user-edit" data-uid="${u.id}">Edit</button></td></tr>`
       : `<tr class="${u.active ? '' : 'off'}"><td><b>${esc(u.name)}</b>${u.last_date ? `<small>Last booking ${fmtD(u.last_date)}</small>` : ''}</td><td>${esc(u.phone)}</td><td>${u.dob ? fmt(u.dob, { day: 'numeric', month: 'short', year: 'numeric' }) : '<span class="meta">Missing – can\'t sign in</span>'}</td><td class="num">${u.bookings}</td><td class="num">${u.reports}</td><td>${last(u)}</td><td>${st(u)}</td><td><button type="button" class="btn ghost sm" data-act="user-edit" data-uid="${u.id}">Edit</button></td></tr>`).join('')
-      : `<tr><td colspan="8" class="meta">${userRole === 'centre' ? 'No centre logins yet. Add one for each person at a centre.' : 'No patients found.'}</td></tr>`;
+      : `<tr><td colspan="8" class="meta">${userRole === 'staff' ? 'No users yet.' : 'No patients found.'}</td></tr>`;
     $('#userCount').textContent = userRole === 'patient' ? `${rows.length} patient${rows.length === 1 ? '' : 's'}${rows.length >= 1000 ? ' (first 1,000 – search to narrow)' : ''} · ${rows.filter((u) => !u.dob).length} without date of birth` : `${rows.length} login${rows.length === 1 ? '' : 's'}`;
   }
   let ut; $('#userSearch').oninput = () => { if (userRole === 'patient') { clearTimeout(ut); ut = setTimeout(() => loadUsers().catch(() => {}), 300); } else renderUsers(); };
@@ -1271,13 +1375,17 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     $$('#userForm .p-only').forEach((x) => (x.hidden = !patient));
     $('#uCentre').innerHTML = '<option value="">Choose centre</option>' + CENTRES.map((c) => `<option value="${c.id}">${esc(c.name)}${c.active ? '' : ' (off)'}</option>`).join('');
     $('#uPhone').readOnly = patient;
-    $('#userTitle').textContent = !u ? 'Add centre login' : patient ? `Patient · ${u.name}` : `Edit ${u.name}`;
-    $('#userSub').textContent = patient ? 'Patients sign in at drsarwantests.com/reports with mobile + date of birth.' : u ? 'Leave the password empty to keep it.' : 'Share the username and password with the person. They sign in at drsarwantests.com/centre.';
+    $('#userTitle').textContent = !u ? 'Add user' : patient ? `Patient · ${u.name}` : `Edit ${u.name}`;
+    $('#userSub').textContent = patient ? 'Patients sign in at drsarwantests.com/reports with mobile + date of birth.' : u ? 'Leave the password empty to keep it.' : 'Share the username and password with the person.';
+    $('#uRole').value = u && !patient ? u.role : 'operator';
+    const syncRole = () => $$('#userForm .centre-only').forEach((x) => (x.hidden = patient || $('#uRole').value !== 'centre'));
+    $('#uRole').onchange = syncRole;
     $('#uPwLbl').textContent = u ? 'New password (optional)' : 'Password';
     $('#uActiveLbl').textContent = patient ? 'can open the reports portal' : 'can sign in';
     if (u) { $('#uName').value = u.name; $('#uPhone').value = u.phone || ''; $('#uActive').checked = !!u.active;
       if (patient) $('#uDob').value = u.dob || ''; else { $('#uUser').value = u.username || ''; $('#uCentre').value = String(u.centre_id || ''); } }
     else { $('#uPw').value = genPw(); if (CENTRES.length === 1) $('#uCentre').value = String(CENTRES[0].id); }
+    syncRole();
     $('#userDel').hidden = !u || patient;
     $('#userDlg').showModal(); setTimeout(() => $('#uName').focus(), 50);
   }
@@ -1294,7 +1402,9 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
         // show the login once so it can be sent to the person (it can't be read back later)
         const ph = fd.phone ? fd.phone.replace(/\D/g, '').slice(-10) : '';
         openMsg({ title: userEditing ? 'Password changed ✓' : 'Login created ✓', sub: ph ? `Send it to ${fd.name} · +91 ${ph}` : 'Copy it and send it to the person', phone: ph,
-          text: [`Hi ${fd.name.split(' ')[0]} 👋`, 'Your login for the Dr. Sarwan Diagnostic Labs centre portal:', '', 'https://drsarwantests.com/centre/', `Username: ${fd.username}`, `Password: ${fd.password}`, '', 'Here you can see your bookings, mark samples collected with the vial no. and upload reports.'].join('\n') });
+          text: fd.role === 'centre'
+            ? [`Hi ${fd.name.split(' ')[0]} 👋`, 'Your login for the Dr. Sarwan Diagnostic Labs centre portal:', '', 'https://drsarwantests.com/centre/', `Username: ${fd.username}`, `Password: ${fd.password}`, '', 'Here you can see your bookings, mark samples collected with the vial no. and upload reports.'].join('\n')
+            : [`Hi ${fd.name.split(' ')[0]} 👋`, `Your ${fd.role === 'admin' ? 'admin' : 'operator'} login for Dr. Sarwan Diagnostic Labs:`, '', 'https://drsarwantests.com/admin/', `Username: ${fd.username}`, `Password: ${fd.password}`].join('\n') });
       } else toast('Saved');
     } catch (err) { $('#userErr').textContent = err.message; }
     finally { $('#userSave').disabled = false; }
@@ -1305,6 +1415,95 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     try { await api(`/api/admin/users/${u.id}`, { method: 'DELETE' }); $('#userDlg').close(); toast('Login deleted'); await loadUsers(); }
     catch (err) { $('#userErr').textContent = err.message; }
   };
+
+  // ================= OPERATIONS (the operator's dashboard; admins can open it too) =================
+  // Each open booking sits in the step someone in our team has to act on; "late" = waiting longer than usual.
+  const OPS = [
+    { key: 'resched', tag: 'Request', title: 'Reschedule requests', who: 'The patient asked · you decide' },
+    { key: 'pay', tag: 'Step 1', title: 'Confirm payment & assign centre', who: 'You' },
+    { key: 'centre', tag: 'Step 2', title: 'Centre confirmation', who: 'Centre taps Accept · you chase if late' },
+    { key: 'collect', tag: 'Step 3', title: 'Vial submitted to lab', who: 'You confirm after the visit' },
+    { key: 'send', tag: 'Step 4', title: 'Upload & send report', who: 'You check before it goes' },
+  ];
+  const LATE_MIN = { resched: 30, pay: 60, assign: 30, centre: 30, collect: 60, report_wait: 24 * 60, report_send: 120 };
+  let opsView = 'late';
+  const minsSince = (iso) => (iso ? (Date.now() - Date.parse(iso)) / 60000 : 0);
+  const ago = (m) => (m < 60 ? `${Math.max(1, Math.round(m))} min` : m < 1440 ? `${Math.floor(m / 60)} h ${Math.round(m % 60)} m` : `${Math.floor(m / 1440)} day${m >= 2880 ? 's' : ''}`);
+  const visitEnd = (b) => Date.parse(`${b.date}T${b.slot}:00+05:30`) + 30 * 60000;
+  function opsItems() {
+    if (!data) return { items: [], waitingVisit: 0, atLab: 0, unpaid: 0 };
+    const items = []; let waitingVisit = 0, atLab = 0, unpaid = 0;
+    for (const b of data.bookings) {
+      if (['cancelled', 'expired', 'blocked', 'completed', 'no_show'].includes(b.status)) continue;
+      const { all, cur } = flow(b), sent = sentMap(b), reps = reportsOf(b);
+      const idx = cur ? all.indexOf(cur) : -1;
+      const base = { b, step: idx, all, cur };
+      if (b.resched_req) {
+        const m = minsSince(b.resched_at);
+        items.push({ ...base, stage: 'resched', since: m, late: m > LATE_MIN.resched, note: b.resched_req, action: `<button type="button" class="btn sm" data-act="steps" data-id="${b.id}">Handle request</button>` });
+        continue;
+      }
+      if (['pending', 'expired'].includes(b.status) && !hasPaidProof(b)) { unpaid++; continue; }
+      if (idx === 0) {
+        const paidNow = PAID_LIKE.includes(b.status);
+        const m = minsSince(paidNow ? (['declined', 'cancelled'].includes(b.centre_status) && b.centre_status_at ? b.centre_status_at : b.paid_at) : b.paid_at || b.updated_at || b.created_at);
+        const late = m > (paidNow ? LATE_MIN.assign : LATE_MIN.pay);
+        items.push({ ...base, stage: 'pay', since: m, late, note: paidNow ? (b.centre_status === 'declined' ? 'The centre declined – assign another' : b.centre_status === 'cancelled' ? 'Job cancelled at the centre – assign again' : 'Paid · assign a collection centre') : b.has_proof ? 'Payment screenshot sent' : b.utr ? `UPI ref ${b.utr} entered` : 'Payment to check', action: cur.act });
+      } else if (idx === 1) {
+        const m = minsSince(sent.center || b.paid_at);
+        items.push({ ...base, stage: 'centre', since: m, late: m > LATE_MIN.centre, note: `${centreOf(b) ? centreOf(b).name : 'Centre'} · ${sent.center ? 'job sent ' + when(sent.center) : 'job not sent yet'}`, action: cur.act });
+      } else if (idx === 2 || (!cur && b.status === 'confirmed' && all[1].done)) {
+        const end = visitEnd(b);
+        if (b.date > ist()) { waitingVisit++; continue; }
+        const m = (Date.now() - end) / 60000;
+        items.push({ ...base, stage: 'collect', since: m, late: m > LATE_MIN.collect, note: m > 0 ? `Visit was at ${fmtT(slotMin(b.slot))} · vial not confirmed` : `Visit at ${fmtT(slotMin(b.slot))}${b.collector_info ? ' · ' + b.collector_info : ''}`, action: all[2].act, upcoming: m <= 0 });
+      } else if (idx === 3) {
+        if (!reps.length) {
+          const m = minsSince(b.collected_at);
+          if (m <= LATE_MIN.report_wait) { atLab++; }
+          items.push({ ...base, stage: 'send', since: m, late: m > LATE_MIN.report_wait, note: `At lab${b.vial_no ? ' · vial ' + b.vial_no : ''} · waiting for the report`, action: cur.act, quiet: m <= LATE_MIN.report_wait });
+        } else {
+          const m = minsSince(reps[reps.length - 1].created_at);
+          items.push({ ...base, stage: 'send', since: m, late: m > LATE_MIN.report_send, note: `${reps.length} report${reps.length === 1 ? '' : 's'} uploaded · check and send`, action: cur.act });
+        }
+      } else if (!cur && b.status === 'confirmed') waitingVisit++;
+    }
+    items.sort((x, y) => y.since - x.since);
+    return { items, waitingVisit, atLab, unpaid };
+  }
+  function renderOps() {
+    const { items, waitingVisit, atLab, unpaid } = opsItems();
+    const late = items.filter((x) => x.late);
+    $('#opsN').hidden = !late.length; $('#opsN').textContent = late.length;
+    if (tab !== 'ops' || !data) return;
+    $('#opsDate').textContent = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'long', day: 'numeric', month: 'long', hour: 'numeric', minute: '2-digit' });
+    const today = data.bookings.filter((b) => b.date === ist() && ['confirmed', ...AFTER_COLLECT].includes(b.status)).length;
+    $('#opsSum').innerHTML = `<span><b>${items.filter((x) => !x.quiet).length}</b> need you</span><span><b>${today}</b> visit${today === 1 ? '' : 's'} today</span>`;
+    $('#opsAttn').innerHTML = `<span class="ops-attn-n">${late.length}</span><span class="ops-attn-t"><b>${late.length ? 'Need your attention now' : 'Nothing is late'}</b><span>${late.length ? 'Bookings waiting longer than usual at any step – oldest first.' : 'Every booking is moving on time.'}</span></span><span class="ops-attn-c">${opsView === 'late' ? 'Showing below' : 'Show them'}</span>`;
+    $('#opsAttn').classList.toggle('none', !late.length); $('#opsAttn').setAttribute('aria-pressed', String(opsView === 'late'));
+    $('#opsTiles').innerHTML = OPS.map((o) => {
+      const mine = items.filter((x) => x.stage === o.key && !x.quiet), nl = mine.filter((x) => x.late).length, sel = opsView === o.key;
+      return `<button type="button" role="tab" aria-selected="${sel}" class="ops-tile${sel ? ' on' : ''}${o.key === 'resched' ? ' rq-t' : ''}${nl ? ' has-late' : ''}" data-act="ops-view" data-v="${o.key}">
+<span class="ops-n">${mine.length}${nl ? `<em>${nl} late</em>` : ''}</span><span class="ops-tag">${o.tag}</span><b>${o.title}</b><small>${o.who}</small></button>`;
+    }).join('');
+    $('#opsAuto').textContent = `Running by itself: ${waitingVisit} visit${waitingVisit === 1 ? '' : 's'} booked for the coming days, ${atLab} sample${atLab === 1 ? '' : 's'} at the lab${unpaid ? `, ${unpaid} booking${unpaid === 1 ? '' : 's'} waiting for payment` : ''}. The job to the centre, the patient's confirmation, the visit reminder and "sample received" go out automatically from 98180 28755.`;
+    let list, title, sub;
+    if (opsView === 'all') { list = items.slice().sort((x, y) => OPS.findIndex((o) => o.key === x.stage) - OPS.findIndex((o) => o.key === y.stage)); title = 'All open bookings'; sub = 'Everything that needs you now or soon, in step order'; }
+    else if (opsView === 'late') { list = late; title = 'Need your attention now'; sub = late.length ? `${late.length} booking${late.length === 1 ? '' : 's'} waiting longer than usual – oldest first` : 'Nothing is late right now.'; }
+    else { const o = OPS.find((x) => x.key === opsView); list = items.filter((x) => x.stage === opsView); title = o.title; sub = `${list.length} booking${list.length === 1 ? '' : 's'} · ${o.who}`; }
+    $('#opsListH').textContent = title; $('#opsListSub').textContent = sub;
+    $('#opsAllBtn').setAttribute('aria-pressed', String(opsView === 'all'));
+    const bars = (x) => [0, 1, 2, 3].map((i) => `<i class="${x.all[i].done ? 'd' : i === x.step ? (x.late && x.stage !== 'resched' ? 'l' : 'c') : ''}" title="${esc(x.all[i].label)}"></i>`).join('');
+    $('#opsBody').innerHTML = list.length ? list.map((x) => { const b = x.b, o = OPS.find((k) => k.key === x.stage); return `<tr class="${x.late ? 'late' : ''}">
+<td><button type="button" class="lnk" data-act="open" data-id="${b.id}">${esc(b.name)}</button><small>${esc(b.id)}${testsOf(b).length ? ' · ' + esc(testNames(b)) : ''}</small></td>
+<td style="white-space:nowrap">${fmtD(b.date)}<small>${esc(slotLabel(b.slot))}</small></td>
+<td><b>${esc(o.title)}</b><small>${esc(x.note)}</small></td>
+<td class="age">${x.upcoming ? 'due' : ago(x.since)}</td>
+<td><span class="ops-bar" role="img" aria-label="${x.step >= 0 ? 'Step ' + (x.step + 1) + ' of 4' : ''}">${bars(x)}</span></td>
+<td class="ops-act"><div class="nx">${x.action || ''}<button type="button" class="stp-ic" data-act="steps" data-id="${b.id}" aria-label="All steps">${STEPS_SVG}</button></div></td></tr>`; }).join('')
+      : `<tr><td colspan="6" class="meta">${opsView === 'late' ? 'Nothing is late 🎉' : 'Nothing here right now.'}</td></tr>`;
+  }
+  setInterval(() => { if (tab === 'ops' && !document.hidden) renderOps(); }, 60000);
 
   // ================= INBOX =================
   const IB = { chats: [], filter: 'all', q: '', phone: null, chat: null, lastId: 0, file: null, imgs: {} };
@@ -1419,7 +1618,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   }
   async function mediaBlob(id) {
     if (IB.imgs[id]) return IB.imgs[id];
-    const r = await fetch(`/api/admin/wa/media/${id}`, { headers: { 'x-admin-key': KEY } });
+    const r = await fetch(`/api/admin/wa/media/${id}`, { headers: { 'x-session': KEY } });
     if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || 'Could not open the file'); }
     return (IB.imgs[id] = URL.createObjectURL(await r.blob()));
   }
@@ -1433,7 +1632,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
       let r;
       if (IB.file) {
         const fd = new FormData(); fd.append('text', text); fd.append('file', IB.file);
-        r = await fetch(`/api/admin/wa/chats/${IB.phone}`, { method: 'POST', headers: { 'x-admin-key': KEY }, body: fd });
+        r = await fetch(`/api/admin/wa/chats/${IB.phone}`, { method: 'POST', headers: { 'x-session': KEY }, body: fd });
         const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || 'Could not send');
       } else await post(`/api/admin/wa/chats/${IB.phone}`, { text });
       $('#ibText').value = ''; $('#ibText').style.height = ''; IB.file = null; showFileChip();
@@ -1618,6 +1817,10 @@ ${t.meta !== false ? `<button type="button" class="btn ghost sm" data-act="wa-su
     else if (a === 'slotlist') { tip.hidden = true; openSlotList(el.dataset.date, el.dataset.slot); }
     else if (a === 'sel') { cal.sel = id; if (window.innerWidth < 1180) openDetail(id); else renderCal(); }
     else if (a === 'open') openDetail(id);
+    else if (a === 'ops-view') { opsView = el.dataset.v === opsView && el.dataset.v !== 'late' ? 'late' : el.dataset.v; renderOps(); }
+    else if (a === 'chat') { const b = findB(id); if (b) { $$('dialog[open]').forEach((d) => d.close()); showTab('inbox'); openChat(b.phone).catch((x) => toast(x.message)); } }
+    else if (a === 'resched-dismiss') { post(`/api/admin/bookings/${id}/resched`, { action: 'dismiss' }).then(refreshAll).then(() => toast('Request dismissed')).catch((x) => toast(x.message)); }
+    else if (a === 'cancel-centre') cancelAtCentre(id);
     else if (a === 'nav') {
       const dir = Number(el.dataset.dir);
       cal.anchor = cal.view === 'day' ? addDays(cal.anchor, dir) : cal.view === 'week' ? addDays(cal.anchor, 7 * dir) : addMonths(cal.anchor, dir);
@@ -1639,7 +1842,7 @@ ${t.meta !== false ? `<button type="button" class="btn ghost sm" data-act="wa-su
 
   $('#csv').onclick = async () => {
     try {
-      const r = await fetch('/api/admin/export.csv', { headers: { 'x-admin-key': KEY } }); if (!r.ok) throw new Error('Export failed');
+      const r = await fetch('/api/admin/export.csv', { headers: { 'x-session': KEY } }); if (!r.ok) throw new Error('Export failed');
       const u = URL.createObjectURL(await r.blob()); const a = document.createElement('a'); a.href = u; a.download = `bookings_${ist()}.csv`; a.click(); URL.revokeObjectURL(u);
     } catch (e) { toast(e.message); }
   };
@@ -1653,6 +1856,7 @@ ${t.meta !== false ? `<button type="button" class="btn ghost sm" data-act="wa-su
     d.prepend(x);
   });
 
-  if (KEY) refreshAll().then(() => { $('#app').hidden = false; showTab(tab); }).catch(() => logout());
+  if (KEY && ME) { applyRole(); refreshAll().then(() => { $('#app').hidden = false; showTab(tab); }).catch(() => logout()); }
+  else if (KEY) logout();
   else $('#login').hidden = false;
 })();
