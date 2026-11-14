@@ -13,9 +13,11 @@
 
 <div id="login" hidden>
 <img src="/assets/logo.png" alt="Dr. Sarwan Diagnostic Labs" style="height:44px">
-<h1 style="margin-top:14px">Bookings admin</h1>
+<h1 style="margin-top:14px">Team sign-in</h1>
 <form id="loginForm">
-<label for="pw" style="display:block;margin-top:12px;font-weight:600">Admin password</label>
+<label for="un" style="display:block;margin-top:12px;font-weight:600">Username</label>
+<input id="un" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+<label for="pw" style="display:block;margin-top:12px;font-weight:600">Password</label>
 <input id="pw" type="password" autocomplete="current-password" required>
 <p class="err" id="loginErr"></p>
 <button class="btn" style="width:100%">Sign in</button>
@@ -27,17 +29,19 @@
 <div class="top-l">
 <img src="/assets/logo.png" alt="Dr. Sarwan Diagnostic Labs" class="top-logo">
 <nav class="tabs" aria-label="Admin sections">
+<button type="button" class="tab" data-tab="ops">Operations <span class="tab-n late" id="opsN" hidden></span></button>
 <button type="button" class="tab" data-tab="bookings" aria-current="page">Bookings</button>
 <button type="button" class="tab" data-tab="calendar">Calendar</button>
-<button type="button" class="tab" data-tab="tests">Tests</button>
-<button type="button" class="tab" data-tab="centres">Centres</button>
-<button type="button" class="tab" data-tab="users">Users</button>
+<button type="button" class="tab adm" data-tab="tests">Packages</button>
+<button type="button" class="tab adm" data-tab="centres">Centres</button>
+<button type="button" class="tab adm" data-tab="users">Users</button>
 <button type="button" class="tab" data-tab="inbox">Inbox <span class="tab-n" id="inboxN" hidden></span></button>
-<button type="button" class="tab" data-tab="wa">WhatsApp</button>
+<button type="button" class="tab adm" data-tab="wa">WhatsApp</button>
 </nav>
 </div>
 <div class="top-r">
 <button class="btn sm" data-act="add">+ Add booking</button>
+<span class="meta who" id="whoAmI"></span>
 <button class="btn ghost sm" id="logout">Sign out</button>
 </div>
 </header>
@@ -76,8 +80,8 @@
 <main id="view-tests" class="wrap" style="padding-bottom:40px" hidden>
 <div class="card">
 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
-<div><h2 class="h2" style="margin:0">Tests &amp; packages</h2><p class="meta" style="margin:4px 0 0">What patients can book. The <b>website test</b> is the one the booking page on drsarwantests.com sells. Margin is only shown here.</p></div>
-<div style="display:flex;gap:8px;flex-wrap:wrap"><input id="pkgSearch" class="inp" type="search" placeholder="Search tests…" aria-label="Search tests"><button class="btn sm" data-act="pkg-add">+ Add test</button></div>
+<div><h2 class="h2" style="margin:0">Packages</h2><p class="meta" style="margin:4px 0 0">What patients can book. The <b>website test</b> is the one the booking page on drsarwantests.com sells. Margin is only shown here.</p></div>
+<div style="display:flex;gap:8px;flex-wrap:wrap"><input id="pkgSearch" class="inp" type="search" placeholder="Search packages…" aria-label="Search packages"><button class="btn sm" data-act="pkg-add">+ Add test</button></div>
 </div>
 <div class="tbl-wrap"><table class="tbl pkg-t">
 <thead><tr><th>Test / package</th><th style="text-align:center">Before test</th><th class="num">MRP</th><th class="num">Price</th><th class="num">Margin</th><th>Target</th><th class="num">Active bookings</th><th>Status</th><th></th></tr></thead>
@@ -85,6 +89,21 @@
 </table></div>
 <p class="meta" id="pkgCount" style="margin:10px 0 0"></p>
 </div>
+</main>
+
+<!-- ================= OPERATIONS TAB (operator home) ================= -->
+<main id="view-ops" class="wrap ops" hidden>
+<div class="ops-top"><div><p class="ops-k" id="opsDate"></p><h1 class="ops-h">Operations</h1></div><div class="ops-sum" id="opsSum"></div></div>
+<button type="button" class="ops-attn" id="opsAttn" data-act="ops-view" data-v="late"></button>
+<section class="card ops-card" aria-labelledby="opsStepsH">
+<div class="ops-hd"><h2 id="opsStepsH" class="h2" style="margin:0">Your steps</h2><span class="meta">Only the steps you act on. Messages in between go out automatically. Click a step to see its bookings.</span></div>
+<div class="ops-tiles" id="opsTiles" role="tablist" aria-label="Steps"></div>
+<p class="ops-auto" id="opsAuto"></p>
+</section>
+<section class="card ops-card" aria-labelledby="opsListH">
+<div class="ops-hd"><div><h2 id="opsListH" class="h2" style="margin:0"></h2><p class="meta" id="opsListSub" style="margin:2px 0 0"></p></div><button type="button" class="btn ghost sm" data-act="ops-view" data-v="all" id="opsAllBtn">All open bookings</button></div>
+<div class="tbl-wrap"><table class="tbl ops-tbl"><thead><tr><th>Patient</th><th>Visit</th><th>Waiting for</th><th>Waiting</th><th>Your 4 steps</th><th style="text-align:right">Next action</th></tr></thead><tbody id="opsBody"></tbody></table></div>
+</section>
 </main>
 
 <!-- ================= INBOX TAB ================= -->
@@ -173,9 +192,9 @@
 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
 <div><h2 class="h2" style="margin:0">Users</h2><p class="meta" style="margin:4px 0 0" id="userNote"></p></div>
 <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-<div class="seg" role="group" aria-label="User type"><button type="button" data-act="users-role" data-role="centre">Centre logins</button><button type="button" data-act="users-role" data-role="patient">Patients</button></div>
+<div class="seg" role="group" aria-label="User type"><button type="button" data-act="users-role" data-role="staff">Team &amp; centres</button><button type="button" data-act="users-role" data-role="patient">Patients</button></div>
 <input id="userSearch" class="inp" type="search" placeholder="Search name or phone…" aria-label="Search users">
-<button class="btn sm" data-act="user-add" id="userAddBtn">+ Add centre login</button>
+<button class="btn sm" data-act="user-add" id="userAddBtn">+ Add user</button>
 </div>
 </div>
 <div class="tbl-wrap"><table class="tbl"><thead id="userHead"></thead><tbody id="userBody"></tbody></table></div>
@@ -265,11 +284,11 @@
 <form id="bkForm" novalidate>
 <div class="dlg-h"><b id="formTitle">Add booking</b><div class="meta" id="formSub">For phone or walk-in bookings</div></div>
 <div class="dlg-b fgrid">
-<div class="fld wide add-only tests-f"><span class="lbl" id="tLbl">Tests</span><div class="tpick" role="group" aria-labelledby="tLbl"><input id="tSearch" class="inp" type="search" placeholder="Search tests…" aria-label="Search tests" autocomplete="off"><div id="tList" class="tlist"></div></div><span class="meta" id="tSum"></span></div>
+<div class="fld wide add-only"><label for="fPhone">Patient's mobile (WhatsApp)</label><div class="ph-row"><span class="ph-cc">+91</span><input id="fPhone" name="phone" class="inp" inputmode="numeric" maxlength="14" autocomplete="off" placeholder="10-digit number – we fill in the rest if we know them"></div><div id="fFound" class="found" hidden></div></div>
+<div class="fld wide add-only tests-f"><span class="lbl" id="tLbl">Packages</span><div class="tpick" role="group" aria-labelledby="tLbl"><input id="tSearch" class="inp" type="search" placeholder="Search packages…" aria-label="Search packages" autocomplete="off"><div id="tList" class="tlist"></div></div><span class="meta" id="tSum"></span></div>
 <div class="fld add-only tests-f"><label for="fAmt">Amount charged (₹)</label><input id="fAmt" name="amount" class="inp" inputmode="numeric" autocomplete="off"></div>
 <div class="fld add-only"><label for="fStatusNew">Payment</label><select id="fStatusNew" name="status" class="inp"><option value="confirmed">Paid – confirmed</option><option value="payment_submitted">Paid – to verify</option><option value="pending">Not paid yet</option></select></div>
 <div class="fld add-only"><label for="fName">Patient's full name</label><input id="fName" name="name" class="inp" autocomplete="off"></div>
-<div class="fld add-only"><label for="fPhone">Mobile</label><input id="fPhone" name="phone" class="inp" inputmode="numeric" autocomplete="off"></div>
 <div class="fld wide add-only"><label for="fAddr">Address</label><input id="fAddr" name="address" class="inp" placeholder="House / flat, street, area" autocomplete="off"></div>
 <div class="fld add-only"><label for="fPin">Pincode</label><input id="fPin" name="pincode" class="inp" inputmode="numeric" maxlength="6" autocomplete="off"></div>
 <div class="fld add-only"><label for="fCity">City</label><input id="fCity" name="city" class="inp" autocomplete="off"></div>
@@ -364,9 +383,10 @@
 <form id="userForm" novalidate>
 <div class="dlg-h"><b id="userTitle">Add centre login</b><div class="meta" id="userSub"></div></div>
 <div class="dlg-b fgrid">
+<div class="fld wide c-only"><label for="uRole">Role</label><select id="uRole" name="role" class="inp"><option value="operator">Operator – runs bookings from the Operations dashboard</option><option value="admin">Admin – everything, incl. settings, money and sending by hand</option><option value="centre">Collection centre – centre page: accept jobs, vial no., reports</option></select></div>
 <div class="fld wide"><label for="uName">Name</label><input id="uName" name="name" class="inp" autocomplete="off" required></div>
 <div class="fld c-only"><label for="uUser">Username</label><input id="uUser" name="username" class="inp" autocomplete="off" autocapitalize="none" spellcheck="false"></div>
-<div class="fld c-only"><label for="uCentre">Centre</label><select id="uCentre" name="centre_id" class="inp"></select></div>
+<div class="fld c-only centre-only"><label for="uCentre">Centre</label><select id="uCentre" name="centre_id" class="inp"></select></div>
 <div class="fld"><label for="uPhone">Mobile</label><input id="uPhone" name="phone" class="inp" inputmode="numeric" autocomplete="off"></div>
 <div class="fld p-only"><label for="uDob">Date of birth</label><input id="uDob" name="dob" type="date" class="inp"></div>
 <div class="fld c-only"><label for="uPw" id="uPwLbl">Password</label><input id="uPw" name="password" type="text" class="inp" autocomplete="new-password" spellcheck="false"><button type="button" class="lnk-b" data-act="user-genpw" style="align-self:flex-start;padding-left:0">Make a password</button></div>

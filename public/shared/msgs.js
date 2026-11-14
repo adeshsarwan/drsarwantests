@@ -43,6 +43,17 @@
       body: [
         'Hi {{first_name}} 👋', 'Reminder: our phlebotomist will visit you *{{day_word}}, {{slot}}* for your *{{tests}}*.', '📍 {{address}}', '',
         'Before the test:', '{{prep}}', '', 'Need to change the time? Reply here.', SIGN].join('\n') },
+    { key: 'moved', label: 'Visit moved (new date / time)', to: 'patient', wa_name: 'dsl_visit_moved',
+      buttons: [{ id: 'prep', text: 'How to prepare' }, { id: 'menu', text: 'Menu' }],
+      body: [
+        'Hi {{first_name}} 👋', 'Your home sample collection has been moved ✅', '',
+        '📅 New date: *{{date_long}}*', '⏰ New time: *{{slot}}*', '📍 {{address}}', '',
+        "We'll share the collector's details once they confirm. Questions? Reply here.", SIGN].join('\n') },
+    { key: 'centre_cancel', label: 'Job cancelled – to collection centre', to: 'centre', wa_name: 'dsl_centre_job_cancelled', buttons: [],
+      body: [
+        '❌ *Job cancelled* – Dr. Sarwan Diagnostic Labs', '',
+        'Ref: {{ref}}', 'Patient: {{name}}', 'Was booked for: {{date_long}}, {{slot}}', '',
+        "Please don't go for this collection. Thank you 🙏"].join('\n') },
     { key: 'collected', label: 'Sample received at lab', to: 'patient', wa_name: 'dsl_sample_received', buttons: [],
       body: [
         'Hi {{first_name}} 👋', 'Your blood sample has reached our lab ✅', 'Vial no.: *{{vial}}*', '',
