@@ -86,6 +86,7 @@
   let PKGS = [];
   let CENTRES = [];
   let WA = null; // WhatsApp settings, message texts, menus (Admin → WhatsApp)
+  let waDirty = false; // the WhatsApp settings form has unsaved changes
   let detailId = null;
 
   const findB = (id) => (cal.data && cal.data.bookings.find((b) => b.id === id)) || (data && data.bookings.find((b) => b.id === id));
@@ -1478,7 +1479,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   function renderWa(live) {
     if (!WA) return;
     const S = WA.settings;
-    if (!live) {
+    if (!live && !waDirty) {
       $('#waMode').value = S.wa_mode; $('#waPhoneId').value = S.wa_phone_id || ''; $('#waWaba').value = S.wa_waba_id || '';
       $('#waTeam').value = S.team_numbers || ''; $('#waAutoRep').checked = S.auto_reports === '1';
     }
@@ -1521,12 +1522,15 @@ ${t.meta !== false ? `<button type="button" class="btn ghost sm" data-act="wa-su
 <div style="margin-top:10px;display:flex;gap:8px;align-items:center"><button type="button" class="btn sm" data-act="wa-msave" data-role="${role}">Save ${ROLE_T[role].toLowerCase()} menu</button><span class="meta" data-mmsg="${role}"></span></div></div>`;
     }).join('');
   }
+  // once something is changed in the settings form, nothing overwrites it until it's saved
+  $('#waForm').addEventListener('input', () => { waDirty = true; $('#waErr').textContent = 'Not saved yet – press Save.'; });
+  $('#waForm').addEventListener('change', () => { waDirty = true; $('#waErr').textContent = 'Not saved yet – press Save.'; });
   $('#waForm').onsubmit = async (e) => {
     e.preventDefault(); $('#waErr').textContent = '';
     const fd = Object.fromEntries(new FormData($('#waForm')).entries());
     fd.auto_reports = $('#waAutoRep').checked;
     $('#waSave').disabled = true;
-    try { await post('/api/admin/wa/settings', fd); await loadWa(); toast('WhatsApp settings saved'); }
+    try { await post('/api/admin/wa/settings', fd); waDirty = false; await loadWa(); toast(fd.wa_mode === 'auto' ? 'Saved – sending is now Automatic' : 'WhatsApp settings saved'); }
     catch (err) { $('#waErr').textContent = err.message; } finally { $('#waSave').disabled = false; }
   };
   async function waAct(a, el) {
