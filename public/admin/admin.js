@@ -119,7 +119,7 @@
   $$('.tab').forEach((t) => (t.onclick = () => showTab(t.getAttribute('data-tab'))));
 
   async function refreshAll() {
-    await Promise.all([load(), loadPkgs().catch(() => {}), loadCentres().catch(() => {}), loadWa().catch(() => {})]);
+    await Promise.all([load(), loadPkgs().catch(() => {}), loadCentres().catch(() => {}), loadWa(true).catch(() => {})]);
     if (tab === 'calendar' || cal.data) await loadCal();
     if (detailId && $('#detailDlg').open) { const b = findB(detailId); if (b) $('#detailBody').innerHTML = detailHTML(b); }
     else if (slotOpen && $('#detailDlg').open && cal.data) $('#detailBody').innerHTML = slotListHTML(slotOpen.date, slotOpen.slot);
@@ -1304,10 +1304,11 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   };
 
   // ================= WHATSAPP =================
-  async function loadWa() {
+  // live = background refresh: update status and message lists only, never the fields someone may be typing in
+  async function loadWa(live) {
     WA = await api('/api/admin/wa');
     renderWaBanner();
-    if (tab === 'wa') renderWa();
+    if (tab === 'wa') renderWa(live === true);
   }
   function renderWaBanner() {
     const el = $('#waBanner'); if (!el || !WA) return;
@@ -1319,11 +1320,13 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   const META_ST = { APPROVED: ['Approved ✓', 'st-confirmed'], PENDING: ['Waiting for WhatsApp', 'st-pending'], IN_APPEAL: ['In appeal', 'st-pending'], REJECTED: ['Rejected', 'st-no_show'], PAUSED: ['Paused', 'st-no_show'], DISABLED: ['Disabled', 'st-no_show'] };
   const ROLE_T = { patient: 'Patient', centre: 'Collection centre', team: 'Our team' };
   const OUT_ST = { sent: ['Sent', 'st-collected'], delivered: ['Delivered', 'st-confirmed'], read: ['Read ✓✓', 'st-confirmed'], failed: ['Failed', 'st-no_show'], manual: ['Sent by hand', 'st-completed'], dismissed: ['Not needed', 'st-cancelled'] };
-  function renderWa() {
+  function renderWa(live) {
     if (!WA) return;
     const S = WA.settings;
-    $('#waMode').value = S.wa_mode; $('#waPhoneId').value = S.wa_phone_id || ''; $('#waWaba').value = S.wa_waba_id || '';
-    $('#waTeam').value = S.team_numbers || ''; $('#waAutoRep').checked = S.auto_reports === '1';
+    if (!live) {
+      $('#waMode').value = S.wa_mode; $('#waPhoneId').value = S.wa_phone_id || ''; $('#waWaba').value = S.wa_waba_id || '';
+      $('#waTeam').value = S.team_numbers || ''; $('#waAutoRep').checked = S.auto_reports === '1';
+    }
     const st = WA.down ? ['API paused', 'st-no_show'] : WA.auto ? ['Automatic – on', 'st-confirmed'] : WA.ready ? ['Ready · manual mode', 'st-pending'] : ['Manual (API not set up)', 'st-cancelled'];
     $('#waState').className = 'pill ' + st[1]; $('#waState').textContent = st[0];
     $('#waResume').hidden = !WA.down;
@@ -1334,6 +1337,13 @@ Webhook URL for Meta → WhatsApp → Configuration: <code>${esc(WA.webhook)}</c
     $('#waFail').innerHTML = WA.failed.length ? WA.failed.map((f) => `<div class="wa-f"><div><b>${esc(MSG[f.kind] || (WA.templates.find((t) => t.key === f.kind) || {}).label || f.kind)}</b> → ${esc(ROLE_T[f.to_role] || '')} ${f.to_phone ? '+91 ' + esc(f.to_phone) : ''}${f.patient ? ` · ${esc(f.patient)}` : ''} <span class="meta">${f.booking_id ? esc(f.booking_id) + ' · ' : ''}${when(f.created_at)}</span><br><small class="meta">${esc(f.error || '')}</small></div>
 <div style="display:flex;gap:6px"><button type="button" class="btn wa sm" data-act="wa-hand" data-oid="${f.id}">Send</button><button type="button" class="btn ghost sm" data-act="wa-dismiss" data-oid="${f.id}">Not needed</button></div></div>`).join('')
       : '<p class="meta" style="margin:0">Nothing waiting ✓</p>';
+    if (!live) renderWaEdit();
+    $('#waRecent').innerHTML = WA.recent.length ? WA.recent.map((o) => `<tr><td>${when(o.created_at)}</td><td>${o.booking_id ? esc(o.booking_id) : ''}${o.patient ? `<small>${esc(o.patient)}</small>` : ''}</td><td>${esc(MSG[o.kind] || o.kind)}</td>
+<td>${esc(ROLE_T[o.to_role] || '')}<small>${o.to_phone ? '+91 ' + esc(o.to_phone) : ''}</small></td><td><span class="pill ${(OUT_ST[o.status] || ['', ''])[1]}" style="margin:0">${(OUT_ST[o.status] || [o.status])[0]}</span>${o.error && o.status === 'failed' ? `<small>${esc(o.error)}</small>` : ''}</td></tr>`).join('')
+      : '<tr><td colspan="5" class="meta">No messages sent through the API yet.</td></tr>';
+  }
+  // message texts + menus (editable) – drawn only when the tab opens or after a save
+  function renderWaEdit() {
     $('#waVars').innerHTML = WA.vars.map(([k, d]) => `<code>{{${k}}}</code> ${esc(d)}`).join(' · ');
     $('#waTexts').innerHTML = WA.templates.map((t) => {
       const ms = t.meta === false ? ['Only inside an open chat', 'st-cancelled'] : META_ST[t.wa_status] || ['Not sent for approval', 'st-cancelled'];
@@ -1355,9 +1365,6 @@ ${t.meta !== false ? `<button type="button" class="btn ghost sm" data-act="wa-su
 <div class="mv"><button type="button" class="ibtn" data-act="wa-mup" aria-label="Move up">↑</button><button type="button" class="ibtn" data-act="wa-mdown" aria-label="Move down">↓</button></div></div>`).join('')}
 <div style="margin-top:10px;display:flex;gap:8px;align-items:center"><button type="button" class="btn sm" data-act="wa-msave" data-role="${role}">Save ${ROLE_T[role].toLowerCase()} menu</button><span class="meta" data-mmsg="${role}"></span></div></div>`;
     }).join('');
-    $('#waRecent').innerHTML = WA.recent.length ? WA.recent.map((o) => `<tr><td>${when(o.created_at)}</td><td>${o.booking_id ? esc(o.booking_id) : ''}${o.patient ? `<small>${esc(o.patient)}</small>` : ''}</td><td>${esc(MSG[o.kind] || o.kind)}</td>
-<td>${esc(ROLE_T[o.to_role] || '')}<small>${o.to_phone ? '+91 ' + esc(o.to_phone) : ''}</small></td><td><span class="pill ${(OUT_ST[o.status] || ['', ''])[1]}" style="margin:0">${(OUT_ST[o.status] || [o.status])[0]}</span>${o.error && o.status === 'failed' ? `<small>${esc(o.error)}</small>` : ''}</td></tr>`).join('')
-      : '<tr><td colspan="5" class="meta">No messages sent through the API yet.</td></tr>';
   }
   $('#waForm').onsubmit = async (e) => {
     e.preventDefault(); $('#waErr').textContent = '';
@@ -1391,7 +1398,7 @@ ${t.meta !== false ? `<button type="button" class="btn ghost sm" data-act="wa-su
         const f = WA.failed.find((x) => x.id === Number(el.dataset.oid)); if (!f) return;
         if (a === 'wa-hand') openWhatsApp(f.to_phone, f.text);
         await post(`/api/admin/wa/outbox/${f.id}`, { action: a === 'wa-hand' ? 'done' : 'dismiss' });
-        await Promise.all([loadWa(), load()]); toast(a === 'wa-hand' ? 'Opened in WhatsApp – marked as sent' : 'Removed');
+        await Promise.all([loadWa(true), load()]); toast(a === 'wa-hand' ? 'Opened in WhatsApp – marked as sent' : 'Removed');
       } else if (a === 'wa-open') showTab('wa');
     } catch (err) { if (msgEl) msgEl.textContent = ''; toast(err.message); }
   }
