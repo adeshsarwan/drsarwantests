@@ -796,6 +796,7 @@ async function adminSent(env, req, id) {
   if (String(kind).startsWith("done:")) {
     if (!DONE_KINDS.includes(kind.slice(5))) return bad("Invalid step");
     await env.DB.prepare("INSERT INTO msg_log (booking_id, kind, at) VALUES (?1, ?2, ?3)").bind(id, kind, now).run();
+    if (kind === "done:centre_ok") later(req, waEvent(env, "accepted_hand", id));
     return json({ ok: true });
   }
   if (!MSG_KINDS.includes(kind)) return bad("Invalid message type");
@@ -1542,11 +1543,12 @@ async function waEvent(env, ev, id, extra = {}) {
   const done = async (k) => !!(await env.DB.prepare("SELECT 1 FROM msg_log WHERE booking_id=?1 AND kind IN (?2, ?3) LIMIT 1").bind(id, k, "done:" + k).first());
   const once = async (k, o = {}) => { if (!(await done(k))) await deliver(env, b, k, { S, T, ...o }); };
   const team = (alert) => deliver(env, b, "team_alert", { S, T, alert });
+  // the patient's booking confirmation goes out once the collection centre has accepted the visit
   if (ev === "confirmed") {
-    await once("confirm");
     if (b.centre_id) await once("center"); else await deliver(env, b, "team_paid", { S, T });
   } else if (ev === "assigned") await once("center");
-  else if (ev === "accepted") await deliver(env, b, "collector", { S, T });
+  else if (ev === "accepted") { await once("confirm"); await deliver(env, b, "collector", { S, T }); }
+  else if (ev === "accepted_hand") await once("confirm");
   else if (ev === "declined") await team(`${extra.centre || "The centre"} can't do this collection – please choose another centre`);
   else if (ev === "collected") await once("collected");
   else if (ev === "report") {
