@@ -1309,7 +1309,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   // ================= INBOX =================
   const IB = { chats: [], filter: 'all', q: '', phone: null, chat: null, lastId: 0, file: null, imgs: {} };
   const ROLE_N = { patient: 'Patient', centre: 'Centre', team: 'Team' };
-  const BY_N = { auto: 'Automatic message', bot: 'Bot', team: 'Team' };
+  const BY_N = { auto: 'Automatic message', bot: 'Bot', team: 'Team', hand: 'Sent by hand from your own WhatsApp' };
   const initials = (c) => (c.role === 'centre' ? 'C' : c.role === 'team' ? 'T' : (String(c.name || '').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('') || '#')).toUpperCase();
   const ibTime = (iso) => {
     const d = new Date(iso), today = new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' }), dd = d.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
@@ -1398,7 +1398,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
       const d = new Date(m.at).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'short', day: 'numeric', month: 'short' });
       const sep = d !== day ? `<div class="ib-day">${d}</div>` : ''; day = d;
       const t = new Date(m.at).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit' });
-      const tick = m.dir === 'out' ? (m.status === 'read' ? '<span class="tick read">✓✓</span>' : m.status === 'delivered' ? '<span class="tick">✓✓</span>' : m.status === 'failed' ? ' ⚠' : '<span class="tick">✓</span>') : '';
+      const tick = m.dir === 'out' ? (m.status === 'hand' ? ' ✋' : m.status === 'read' ? '<span class="tick read">✓✓</span>' : m.status === 'delivered' ? '<span class="tick">✓✓</span>' : m.status === 'failed' ? ' ⚠' : '<span class="tick">✓</span>') : '';
       const isImg = m.media_id && (m.media_type === 'image' || /^image\//.test(m.media_type || '') || m.type === 'image' || m.type === 'sticker');
       const media = m.media_id ? (isImg ? `<img data-img="${m.id}" alt="Photo">` : `<button type="button" class="ib-file" data-file="${m.id}">${m.type === 'audio' ? '🎤' : m.type === 'video' ? '🎬' : '📄'} Open ${esc(m.media_name || m.type)}</button>`) : '';
       const hideBody = m.media_id && /^(📷 Photo|📄 Document|🎤 Voice message|🎬 Video|Sticker)$/.test(m.body || '') || (m.media_name && m.body === `📄 ${m.media_name}`);

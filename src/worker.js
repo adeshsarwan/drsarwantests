@@ -762,6 +762,18 @@ async function adminVial(env, req, id) {
 // Admin opened WhatsApp with a message. Sending the report completes the job.
 const MSG_KINDS = ["pay", "confirm", "center", "collector", "reminder", "slots", "missed", "collected", "report", "prep", "chat"];
 const DONE_KINDS = ["confirm", "center", "centre_ok", "collector", "reminder", "collected"]; // message steps that can be ticked as done by hand
+// A message sent by hand from someone's own WhatsApp (manual mode / "Send by hand") – also shown in Admin → Inbox.
+async function logHand(env, bookingId, kind, toPhone) {
+  try {
+    const b = await bookingFull(env, bookingId);
+    if (!b) return;
+    const m = msgFor(env, await templates(env), b, kind);
+    const to = toPhone || (m.t.to === "patient" ? b.phone : m.t.to === "centre" ? b.centre_phone : null);
+    if (!to) return;
+    await env.DB.prepare("INSERT INTO wa_inbox (wa_id, phone, type, body, at, dir, by_who, status) VALUES (?1, ?2, 'text', ?3, ?4, 'out', 'hand', 'hand')")
+      .bind(`hand-${crypto.randomUUID()}`, to, m.text.slice(0, 4000), isoNow()).run();
+  } catch (e) { console.log("hand log failed", String(e)); }
+}
 async function adminSent(env, req, id) {
   const body = await req.json().catch(() => ({}));
   const kind = body.kind;
@@ -787,6 +799,7 @@ async function adminSent(env, req, id) {
     return json({ ok: true });
   }
   if (!MSG_KINDS.includes(kind)) return bad("Invalid message type");
+  later(req, logHand(env, id, kind));
   const stmts = [env.DB.prepare("INSERT INTO msg_log (booking_id, kind, at) VALUES (?1, ?2, ?3)").bind(id, kind, now)];
   let completed = false, marked = [];
   if (kind === "report") {
@@ -2269,6 +2282,7 @@ async function adminWaOutbox(env, req, id) {
     const stmts = [env.DB.prepare("UPDATE wa_outbox SET status='manual', updated_at=?1 WHERE id=?2").bind(now, id)];
     if (o.booking_id && o.to_role !== "team" && MSG_KINDS.includes(o.kind)) stmts.push(env.DB.prepare("INSERT INTO msg_log (booking_id, kind, at) VALUES (?1, ?2, ?3)").bind(o.booking_id, o.kind, now));
     await env.DB.batch(stmts);
+    if (o.booking_id && o.to_phone) await logHand(env, o.booking_id, o.kind, o.to_phone);
     if (o.kind === "report" && o.booking_id) await releaseReports(env, await bookingFull(env, o.booking_id));
   } else await env.DB.prepare("UPDATE wa_outbox SET status='dismissed', updated_at=?1 WHERE id=?2").bind(now, id).run();
   return json({ ok: true });
