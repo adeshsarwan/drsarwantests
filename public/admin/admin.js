@@ -110,6 +110,8 @@
     $('#view-centres').hidden = name !== 'centres';
     $('#view-users').hidden = name !== 'users';
     $('#view-wa').hidden = name !== 'wa';
+    $('#view-inbox').hidden = name !== 'inbox';
+    if (name === 'inbox') loadChats().catch((e) => toast(e.message));
     if (name === 'calendar') loadCal().catch((e) => toast(e.message));
     if (name === 'tests') loadPkgs().catch((e) => toast(e.message));
     if (name === 'centres') loadCentres().catch((e) => toast(e.message));
@@ -119,7 +121,7 @@
   $$('.tab').forEach((t) => (t.onclick = () => showTab(t.getAttribute('data-tab'))));
 
   async function refreshAll() {
-    await Promise.all([load(), loadPkgs().catch(() => {}), loadCentres().catch(() => {}), loadWa(true).catch(() => {})]);
+    await Promise.all([load(), loadPkgs().catch(() => {}), loadCentres().catch(() => {}), loadWa(true).catch(() => {}), loadChats().catch(() => {})]);
     if (tab === 'calendar' || cal.data) await loadCal();
     if (detailId && $('#detailDlg').open) { const b = findB(detailId); if (b) $('#detailBody').innerHTML = detailHTML(b); }
     else if (slotOpen && $('#detailDlg').open && cal.data) $('#detailBody').innerHTML = slotListHTML(slotOpen.date, slotOpen.slot);
@@ -1302,6 +1304,159 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     try { await api(`/api/admin/users/${u.id}`, { method: 'DELETE' }); $('#userDlg').close(); toast('Login deleted'); await loadUsers(); }
     catch (err) { $('#userErr').textContent = err.message; }
   };
+
+  // ================= INBOX =================
+  const IB = { chats: [], filter: 'all', q: '', phone: null, chat: null, lastId: 0, file: null, imgs: {} };
+  const ROLE_N = { patient: 'Patient', centre: 'Centre', team: 'Team' };
+  const BY_N = { auto: 'Automatic message', bot: 'Bot', team: 'Team' };
+  const initials = (c) => (c.role === 'centre' ? 'C' : c.role === 'team' ? 'T' : (String(c.name || '').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('') || '#')).toUpperCase();
+  const ibTime = (iso) => {
+    const d = new Date(iso), today = new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' }), dd = d.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
+    return dd === today ? d.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit' }) : d.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short' });
+  };
+  async function loadChats() {
+    const r = await api('/api/admin/wa/chats');
+    IB.chats = r.chats;
+    const n = r.chats.filter((c) => c.unread > 0).length;
+    $('#inboxN').hidden = !n; $('#inboxN').textContent = n;
+    if (tab === 'inbox') renderChatList();
+  }
+  function renderChatList() {
+    const q = IB.q.toLowerCase().replace(/\s+/g, '');
+    const list = IB.chats.filter((c) => (IB.filter === 'all' || (IB.filter === 'unread' ? c.unread > 0 : c.role === IB.filter))
+      && (!q || (c.name + c.wa_name + c.phone + c.bookings.map((b) => b.id).join('')).toLowerCase().replace(/\s+/g, '').includes(q)));
+    $('#ibItems').innerHTML = list.length ? list.map((c) => {
+      const l = c.last || {};
+      const pre = l.dir === 'out' ? (l.by_who === 'team' ? 'You: ' : '↪ ') : '';
+      return `<button type="button" class="ib-it${c.unread ? ' unread' : ''}" data-ph="${c.phone}" ${c.phone === IB.phone ? 'aria-current="true"' : ''}>
+<span class="ib-av ${c.role}">${esc(initials(c))}</span>
+<span style="min-width:0"><b>${esc(c.name || '+91 ' + c.phone)}</b><small>${esc(pre + String(l.body || '').split('\n')[0])}</small></span>
+<span class="ib-r">${l.at ? ibTime(l.at) : ''}${c.unread ? `<span class="ib-badge">${c.unread}</span>` : c.role !== 'patient' ? `<span>${ROLE_N[c.role]}</span>` : ''}</span></button>`;
+    }).join('') : `<p class="meta" style="padding:16px">${IB.chats.length ? 'No chats match.' : 'No WhatsApp messages yet. They appear here as soon as someone writes to +91 98180 28755 or we send them a message.'}</p>`;
+  }
+  $('#ibItems').onclick = (e) => { const b = e.target.closest('[data-ph]'); if (b) openChat(b.dataset.ph); };
+  $('#ibSearch').oninput = (e) => { IB.q = e.target.value; renderChatList(); };
+  $('#ibFilt').onclick = (e) => {
+    const b = e.target.closest('[data-f]'); if (!b) return;
+    IB.filter = b.dataset.f; $$('#ibFilt [data-f]').forEach((x) => x.setAttribute('aria-pressed', x === b)); renderChatList();
+  };
+  $('#ibNew').onsubmit = (e) => {
+    e.preventDefault();
+    const ph = $('#ibNewPh').value.replace(/\D/g, '').slice(-10);
+    if (!/^[6-9]\d{9}$/.test(ph)) return toast('Enter a 10-digit mobile number');
+    $('#ibNewPh').value = ''; openChat(ph);
+  };
+  async function openChat(phone, keep) {
+    const r = await api(`/api/admin/wa/chats/${phone}`);
+    const changed = IB.phone !== phone;
+    IB.phone = phone; IB.chat = r;
+    const c = IB.chats.find((x) => x.phone === phone); if (c) c.unread = 0;
+    $('#ib').classList.add('open');
+    if (changed || !keep) { IB.file = null; renderChat(); } else renderChatBody();
+    renderChatList();
+    const n = IB.chats.filter((x) => x.unread > 0).length; $('#inboxN').hidden = !n; $('#inboxN').textContent = n;
+  }
+  function renderChat() {
+    const w = IB.chat.who;
+    const bk = w.bookings.map((b) => { const st = ST[b.status] || {}; return `<button type="button" data-bk="${b.id}" style="background:${st.bg || '#eef1f4'};color:${st.fg || '#3b4a68'}" title="${esc(st.label || b.status)} · ${esc(b.date || '')}">${esc(b.id)}</button>`; }).join('');
+    $('#ibChat').innerHTML = `<div class="ib-head"><button type="button" class="ibtn ib-back" data-ib="back" aria-label="Back to chats">‹</button>
+<span class="ib-av ${w.role}">${esc(initials(w))}</span>
+<div class="ib-who"><b>${esc(w.name || '+91 ' + w.phone)}</b><small>+91 ${esc(w.phone)} · ${ROLE_N[w.role]}${w.wa_name && w.wa_name !== w.name ? ` · WhatsApp name: ${esc(w.wa_name)}` : ''}${w.opted_out ? ' · replied STOP (no reminders)' : ''}</small></div>
+<div class="ib-bk">${bk}</div></div>
+<div class="ib-msgs" id="ibMsgs"></div>
+<div id="ibNote"></div>
+<div class="ib-fchip" id="ibFile" hidden></div>
+<form class="ib-comp" id="ibComp">
+<label class="ibtn ib-attach" title="Attach a PDF or photo" aria-label="Attach a PDF or photo">📎<input type="file" id="ibFileIn" accept="application/pdf,image/jpeg,image/png"></label>
+<textarea id="ibText" rows="1" placeholder="Type a message" aria-label="Message"></textarea>
+<button class="btn" type="submit" id="ibSend">Send</button></form>`;
+    renderChatBody(true);
+    const ta = $('#ibText');
+    ta.oninput = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 160) + 'px'; };
+    ta.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('#ibComp').requestSubmit(); } };
+    $('#ibFileIn').onchange = (e) => {
+      const f = e.target.files[0]; e.target.value = '';
+      if (!f) return;
+      if (!/^(application\/pdf|image\/(jpeg|png))$/.test(f.type)) return toast('You can send a PDF or a JPG/PNG photo');
+      if (f.size > 10 * 1024 * 1024) return toast('Files can be up to 10 MB');
+      IB.file = f; showFileChip();
+    };
+    $('#ibComp').onsubmit = sendChat;
+    if (window.matchMedia('(min-width: 821px)').matches) ta.focus();
+  }
+  function showFileChip() {
+    const el = $('#ibFile'); el.hidden = !IB.file;
+    if (IB.file) { el.innerHTML = `${IB.file.type === 'application/pdf' ? '📄' : '📷'} ${esc(IB.file.name)} <button type="button" class="ibtn xs" data-ib="nofile" aria-label="Remove file">✕</button>`; }
+  }
+  function renderChatBody(scroll) {
+    const box = $('#ibMsgs'); if (!box) return;
+    const atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+    const msgs = IB.chat.messages;
+    let day = '';
+    box.innerHTML = msgs.length ? msgs.map((m) => {
+      const d = new Date(m.at).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'short', day: 'numeric', month: 'short' });
+      const sep = d !== day ? `<div class="ib-day">${d}</div>` : ''; day = d;
+      const t = new Date(m.at).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit' });
+      const tick = m.dir === 'out' ? (m.status === 'read' ? '<span class="tick read">✓✓</span>' : m.status === 'delivered' ? '<span class="tick">✓✓</span>' : m.status === 'failed' ? ' ⚠' : '<span class="tick">✓</span>') : '';
+      const isImg = m.media_id && (m.media_type === 'image' || /^image\//.test(m.media_type || '') || m.type === 'image' || m.type === 'sticker');
+      const media = m.media_id ? (isImg ? `<img data-img="${m.id}" alt="Photo">` : `<button type="button" class="ib-file" data-file="${m.id}">${m.type === 'audio' ? '🎤' : m.type === 'video' ? '🎬' : '📄'} Open ${esc(m.media_name || m.type)}</button>`) : '';
+      const hideBody = m.media_id && /^(📷 Photo|📄 Document|🎤 Voice message|🎬 Video|Sticker)$/.test(m.body || '') || (m.media_name && m.body === `📄 ${m.media_name}`);
+      return `${sep}<div class="ib-m ${m.dir} ${m.by_who || ''}${m.status === 'failed' ? ' failed' : ''}">${m.dir === 'out' ? `<span class="ib-by">${BY_N[m.by_who] || 'Sent'}</span>` : ''}${media}${hideBody ? '' : esc(m.body || '')}<span class="ib-t">${t}${tick}</span></div>`;
+    }).join('') : '<p class="meta" style="margin:auto;text-align:center">No messages with this number yet.</p>';
+    box.querySelectorAll('img[data-img]').forEach(loadImg);
+    if (scroll || atEnd) box.scrollTop = box.scrollHeight;
+    IB.lastId = msgs.length ? msgs[msgs.length - 1].id : 0;
+    // notes: 24-hour window and bot pause
+    const w = IB.chat.who, notes = [];
+    if (w.human_until) notes.push(`<div class="ib-note paused">🤫 The bot is quiet in this chat until ${new Date(w.human_until).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit' })} because you're replying. They can still type <b>menu</b>. <button type="button" class="btn ghost sm" data-ib="bot-on">Let the bot answer again</button></div>`);
+    if (!IB.chat.ready) notes.push('<div class="ib-note">The WhatsApp API isn\'t set up yet (Admin → WhatsApp), so you can read but not send.</div>');
+    else if (!w.open) notes.push(`<div class="ib-note">${w.last_in_at ? `Last message from them: ${when(w.last_in_at)}. ` : 'They haven\'t written to us yet. '}WhatsApp only allows a free message within 24 hours of their last message, so you can't type here right now. Use the message buttons on their booking (approved templates), or <a href="https://wa.me/91${w.phone}" target="_blank" rel="noopener">open in your own WhatsApp</a>.</div>`);
+    $('#ibNote').innerHTML = notes.join('');
+    const can = IB.chat.ready && w.open;
+    $('#ibText').disabled = !can; $('#ibSend').disabled = !can; $('#ibFileIn').disabled = !can;
+    $('#ibText').placeholder = can ? 'Type a message' : 'Replies are possible once they message us';
+  }
+  async function mediaBlob(id) {
+    if (IB.imgs[id]) return IB.imgs[id];
+    const r = await fetch(`/api/admin/wa/media/${id}`, { headers: { 'x-admin-key': KEY } });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || 'Could not open the file'); }
+    return (IB.imgs[id] = URL.createObjectURL(await r.blob()));
+  }
+  function loadImg(img) { mediaBlob(img.dataset.img).then((u) => (img.src = u)).catch(() => img.replaceWith(Object.assign(document.createElement('small'), { className: 'meta', textContent: 'Photo no longer available' }))); }
+  async function sendChat(e) {
+    e.preventDefault();
+    const text = $('#ibText').value.trim();
+    if (!text && !IB.file) return;
+    $('#ibSend').disabled = true;
+    try {
+      let r;
+      if (IB.file) {
+        const fd = new FormData(); fd.append('text', text); fd.append('file', IB.file);
+        r = await fetch(`/api/admin/wa/chats/${IB.phone}`, { method: 'POST', headers: { 'x-admin-key': KEY }, body: fd });
+        const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || 'Could not send');
+      } else await post(`/api/admin/wa/chats/${IB.phone}`, { text });
+      $('#ibText').value = ''; $('#ibText').style.height = ''; IB.file = null; showFileChip();
+      await openChat(IB.phone, true); $('#ibMsgs').scrollTop = $('#ibMsgs').scrollHeight;
+      loadChats().catch(() => {});
+    } catch (err) { toast(err.message); } finally { $('#ibSend').disabled = !(IB.chat && IB.chat.ready && IB.chat.who.open); }
+  }
+  $('#ibChat').onclick = async (e) => {
+    const a = e.target.closest('[data-ib]'), f = e.target.closest('[data-file]'), im = e.target.closest('img[data-img]'), bk = e.target.closest('[data-bk]');
+    try {
+      if (a && a.dataset.ib === 'back') { $('#ib').classList.remove('open'); IB.phone = null; renderChatList(); }
+      else if (a && a.dataset.ib === 'nofile') { IB.file = null; showFileChip(); }
+      else if (a && a.dataset.ib === 'bot-on') { await post(`/api/admin/wa/chats/${IB.phone}/bot`, { pause: false }); await openChat(IB.phone, true); toast('The bot will answer this chat again'); }
+      else if (f || im) { const w = window.open('', '_blank'); try { const u = await mediaBlob((f || im).dataset.file || (f || im).dataset.img); if (w) w.location = u; else location.href = u; } catch (err) { if (w) w.close(); throw err; } }
+      else if (bk) { if (findB(bk.dataset.bk)) openDetail(bk.dataset.bk); else toast(`${bk.dataset.bk} is older than the bookings list – search it in Bookings`); }
+    } catch (err) { toast(err.message); }
+  };
+  setInterval(() => {
+    if (!KEY || document.hidden || tab !== 'inbox') return;
+    loadChats().then(() => {
+      const c = IB.phone && IB.chats.find((x) => x.phone === IB.phone);
+      if (c && c.last && c.last.id !== IB.lastId) openChat(IB.phone, true).catch(() => {});
+    }).catch(() => {});
+  }, 12000);
 
   // ================= WHATSAPP =================
   // live = background refresh: update status and message lists only, never the fields someone may be typing in

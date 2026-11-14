@@ -291,7 +291,10 @@ function ensureSchema(env) {
         }
       }
       await env.DB.batch(SCHEMA.map((q) => env.DB.prepare(q)));
-      try { await env.DB.prepare("ALTER TABLE wa_contacts ADD COLUMN opted_out TEXT").run(); } catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
+      for (const [tbl, col] of [["wa_contacts", "opted_out"], ["wa_contacts", "read_at"], ["wa_contacts", "human_until"], ["wa_inbox", "dir"], ["wa_inbox", "by_who"],
+        ["wa_inbox", "status"], ["wa_inbox", "media_id"], ["wa_inbox", "media_type"], ["wa_inbox", "media_name"]]) {
+        try { await env.DB.prepare(`ALTER TABLE ${tbl} ADD COLUMN ${col} TEXT`).run(); } catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
+      }
       if (!have.size) for (const [c, t] of Object.entries(NEW_COLS)) {
         try { await env.DB.prepare(`ALTER TABLE bookings ADD COLUMN ${c} ${t}`).run(); } catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
       }
@@ -1363,29 +1366,53 @@ async function noteOutage(env, e) {
   if (!WA_OUTAGE.includes(Number(e && e.code))) return;
   await setSettings(env, { wa_down_until: new Date(Date.now() + 30 * 60000).toISOString(), wa_down_reason: String(e.message).slice(0, 300) });
 }
-async function waSend(env, S, to, payload) {
+// Every message we send is also written to the chat history (Admin → Inbox).
+// meta: { by: "bot" | "auto" | "team", text: what to show in the inbox (for templates) }
+async function waSend(env, S, to, payload, meta = {}) {
   const j = await graph(env, S, `${S.wa_phone_id}/messages`, { method: "POST", body: { messaging_product: "whatsapp", recipient_type: "individual", to: "91" + to, ...payload } });
-  return j.messages && j.messages[0] ? j.messages[0].id : null;
+  const id = j.messages && j.messages[0] ? j.messages[0].id : null;
+  try {
+    const med = payload.document || payload.image || null;
+    await env.DB.prepare("INSERT OR IGNORE INTO wa_inbox (wa_id, phone, type, body, at, dir, by_who, status, media_id, media_type, media_name) VALUES (?1, ?2, ?3, ?4, ?5, 'out', ?6, 'sent', ?7, ?8, ?9)")
+      .bind(id || `local-${crypto.randomUUID()}`, to, payload.type, String(meta.text || waSummary(payload)).slice(0, 4000), isoNow(), meta.by || "bot",
+        med ? med.id || null : null, med ? (payload.document ? "application/pdf" : "image") : null, med ? med.filename || null : null).run();
+  } catch (e) { console.log("chat log failed", String(e)); }
+  return id;
 }
-const waText = (env, S, to, body) => waSend(env, S, to, { type: "text", text: { body: String(body).slice(0, 4096), preview_url: false } });
-const waButtons = (env, S, to, body, buttons) => waSend(env, S, to, { type: "interactive", interactive: { type: "button", body: { text: String(body).slice(0, 1024) },
-  action: { buttons: buttons.slice(0, 3).map((b) => ({ type: "reply", reply: { id: b.id.slice(0, 256), title: b.title.slice(0, 20) } })) } } });
-const waList = (env, S, to, body, button, rows) => waSend(env, S, to, { type: "interactive", interactive: { type: "list", body: { text: String(body).slice(0, 1024) },
-  action: { button: button.slice(0, 20), sections: [{ title: "Choose", rows: rows.slice(0, 10).map((r) => ({ id: r.id.slice(0, 200), title: r.title.slice(0, 24), ...(r.description ? { description: r.description.slice(0, 72) } : {}) })) }] } } });
+function waSummary(p) {
+  if (p.type === "text") return p.text.body;
+  if (p.type === "interactive") {
+    const i = p.interactive, opts = i.type === "button" ? i.action.buttons.map((b) => b.reply.title) : i.action.sections.flatMap((x) => x.rows.map((r) => r.title));
+    return `${i.body.text}\n[ ${opts.join(" · ")} ]`;
+  }
+  if (p.type === "document") return p.document.caption || `📄 ${p.document.filename || "Document"}`;
+  if (p.type === "image") return p.image.caption || "📷 Photo";
+  if (p.type === "template") return `Template: ${p.template.name}`;
+  return p.type;
+}
+const waText = (env, S, to, body, meta) => waSend(env, S, to, { type: "text", text: { body: String(body).slice(0, 4096), preview_url: false } }, meta);
+const waButtons = (env, S, to, body, buttons, meta) => waSend(env, S, to, { type: "interactive", interactive: { type: "button", body: { text: String(body).slice(0, 1024) },
+  action: { buttons: buttons.slice(0, 3).map((b) => ({ type: "reply", reply: { id: b.id.slice(0, 256), title: b.title.slice(0, 20) } })) } } }, meta);
+const waList = (env, S, to, body, button, rows, meta) => waSend(env, S, to, { type: "interactive", interactive: { type: "list", body: { text: String(body).slice(0, 1024) },
+  action: { button: button.slice(0, 20), sections: [{ title: "Choose", rows: rows.slice(0, 10).map((r) => ({ id: r.id.slice(0, 200), title: r.title.slice(0, 24), ...(r.description ? { description: r.description.slice(0, 72) } : {}) })) }] } } }, meta);
 async function waMedia(env, S, mediaId) {
   const meta = await graph(env, S, mediaId);
   const r = await fetch(meta.url, { headers: { authorization: `Bearer ${env.WA_TOKEN}` } });
   if (!r.ok) throw new WaError("Could not download the file from WhatsApp", r.status);
   return { bytes: new Uint8Array(await r.arrayBuffer()), mime: meta.mime_type || r.headers.get("content-type") || "" };
 }
-async function waSendPdf(env, S, to, bytes, filename) {
+async function waSendFile(env, S, to, bytes, mime, filename, caption, meta) {
   const form = new FormData();
   form.append("messaging_product", "whatsapp");
-  form.append("type", "application/pdf");
-  form.append("file", new Blob([bytes], { type: "application/pdf" }), filename);
+  form.append("type", mime);
+  form.append("file", new Blob([bytes], { type: mime }), filename);
   const up = await graph(env, S, `${S.wa_phone_id}/media`, { method: "POST", form });
-  return waSend(env, S, to, { type: "document", document: { id: up.id, filename } });
+  const cap = caption ? { caption: String(caption).slice(0, 1024) } : {};
+  return mime === "application/pdf"
+    ? waSend(env, S, to, { type: "document", document: { id: up.id, filename, ...cap } }, meta)
+    : waSend(env, S, to, { type: "image", image: { id: up.id, ...cap } }, meta);
 }
+const waSendPdf = (env, S, to, bytes, filename, meta) => waSendFile(env, S, to, bytes, "application/pdf", filename, "", meta);
 async function reportBytes(env, rid) {
   const { results } = await env.DB.prepare("SELECT data FROM report_parts WHERE report_id=?1 ORDER BY idx").bind(rid).all();
   return Uint8Array.from(atob(results.map((r) => r.data).join("")), (c) => c.charCodeAt(0));
@@ -1428,9 +1455,9 @@ async function sendOne(env, S, b, m, to) {
   const { t, v, text } = m;
   const btns = (t.buttons || []).map((x) => ({ id: `a:${x.id}:${b.id}`, title: x.text }));
   if (await chatOpen(env, to)) {
-    if (btns.length && text.length <= 1024) return waButtons(env, S, to, text, btns);
-    const id = await waText(env, S, to, text);
-    if (btns.length) await waButtons(env, S, to, "Anything else?", btns);
+    if (btns.length && text.length <= 1024) return waButtons(env, S, to, text, btns, { by: "auto" });
+    const id = await waText(env, S, to, text, { by: "auto" });
+    if (btns.length) await waButtons(env, S, to, "Anything else?", btns, { by: "auto" });
     return id;
   }
   if (t.meta === false) throw new WaError("This message can only go out while the chat is open (the person wrote to us in the last 24 hours).", "window");
@@ -1439,7 +1466,8 @@ async function sendOne(env, S, b, m, to) {
   const comps = [];
   if (params.length) comps.push({ type: "body", parameters: params.map((k) => ({ type: "text", parameter_name: k, text: M.oneLine(v[k]).slice(0, 900) })) });
   (t.buttons || []).forEach((x, i) => comps.push({ type: "button", sub_type: "quick_reply", index: String(i), parameters: [{ type: "payload", payload: `a:${x.id}:${b.id}` }] }));
-  return waSend(env, S, to, { type: "template", template: { name: t.wa_name, language: { code: "en" }, components: comps } });
+  return waSend(env, S, to, { type: "template", template: { name: t.wa_name, language: { code: "en" }, components: comps } },
+    { by: "auto", text: text + (t.buttons && t.buttons.length ? `\n[ ${t.buttons.map((x) => x.text).join(" · ")} ]` : "") });
 }
 // Reports count as sent (and show in the patient portal) once the patient has been told they're ready.
 async function releaseReports(env, b, reportIds) {
@@ -1587,6 +1615,13 @@ async function waProcess(env, body) {
 }
 // delivery reports: sent → delivered → read, or failed (then the step is undone and it goes to "send by hand")
 async function waStatus(env, st) {
+  const R = { sent: 1, delivered: 2, read: 3, failed: 9 };
+  if (R[st.status]) {
+    const err = st.status === "failed" ? (st.errors || []).map((e) => e.title || e.message || "Failed").join("; ") : "";
+    await env.DB.prepare(`UPDATE wa_inbox SET status=?1, body = CASE WHEN ?3 = '' THEN body ELSE body || ?3 END WHERE wa_id=?2 AND dir='out'
+      AND CASE status WHEN 'read' THEN 3 WHEN 'delivered' THEN 2 WHEN 'failed' THEN 9 ELSE 1 END < ?4`)
+      .bind(st.status, st.id, err ? `\n⚠ Not delivered: ${err}` : "", R[st.status]).run().catch(() => {});
+  }
   const o = await env.DB.prepare("SELECT * FROM wa_outbox WHERE wa_id=?1").bind(st.id).first();
   if (!o) return;
   const rank = { sent: 1, delivered: 2, read: 3 };
@@ -1609,7 +1644,14 @@ async function waInbound(env, S, msg, name) {
   const text = msg.type === "text" ? String((msg.text && msg.text.body) || "").trim()
     : msg.type === "interactive" ? String((msg.interactive.button_reply && msg.interactive.button_reply.id) || (msg.interactive.list_reply && msg.interactive.list_reply.id) || "")
     : msg.type === "button" ? String((msg.button && (msg.button.payload || msg.button.text)) || "") : "";
-  const ins = await env.DB.prepare("INSERT OR IGNORE INTO wa_inbox (wa_id, phone, type, body, at) VALUES (?1, ?2, ?3, ?4, ?5)").bind(msg.id, phone, msg.type, text.slice(0, 1000), now).run();
+  const med = msg[msg.type] && msg[msg.type].id ? msg[msg.type] : null; // image, document, audio, video, sticker
+  const shown = msg.type === "interactive" ? String((msg.interactive.button_reply && msg.interactive.button_reply.title) || (msg.interactive.list_reply && msg.interactive.list_reply.title) || text)
+    : msg.type === "button" ? String((msg.button && msg.button.text) || text)
+    : med ? String(med.caption || med.filename || ({ image: "📷 Photo", document: "📄 Document", audio: "🎤 Voice message", video: "🎬 Video", sticker: "Sticker" }[msg.type] || msg.type))
+    : msg.type === "location" ? `📍 Location ${msg.location.latitude},${msg.location.longitude}`
+    : text || `(${msg.type})`;
+  const ins = await env.DB.prepare("INSERT OR IGNORE INTO wa_inbox (wa_id, phone, type, body, at, dir, media_id, media_type, media_name) VALUES (?1, ?2, ?3, ?4, ?5, 'in', ?6, ?7, ?8)")
+    .bind(msg.id, phone, msg.type, shown.slice(0, 4000), now, med ? med.id : null, med ? med.mime_type || msg.type : null, med ? med.filename || null : null).run();
   if (!ins.meta.changes) return; // WhatsApp sometimes delivers the same message twice
   await env.DB.prepare(`INSERT INTO wa_contacts (phone, name, last_in_at) VALUES (?1, ?2, ?3)
     ON CONFLICT(phone) DO UPDATE SET last_in_at=excluded.last_in_at, name=COALESCE(NULLIF(excluded.name, ''), wa_contacts.name)`).bind(phone, name, now).run();
@@ -1651,6 +1693,8 @@ class Bot {
       await this.state(null);
       return this.action(action, id, extra);
     }
+    // someone from our team is chatting with this person in Admin → Inbox: the bot stays quiet unless they ask for the menu
+    if (this.c.human_until && Date.parse(this.c.human_until) > Date.now() && !/^(menu|0)$/i.test(text)) return;
     if (msg.type === "document" || msg.type === "image") return this.media(msg, st);
     if (role === "patient" && /^(stop|unsubscribe)$/i.test(text)) {
       await this.state(null);
@@ -2007,6 +2051,99 @@ async function adminWa(env, url) {
     webhook: `${url.origin}/api/wa/webhook`, templates: T, vars: M.VARS, menus, actions: MENU_ACTIONS, failed, recent,
   });
 }
+// ---- Admin → Inbox: every WhatsApp conversation, and replies from the team ----
+async function chatPeople(env, S, phones) {
+  const out = {};
+  if (!phones.length) return out;
+  const team = teamNumbers(S);
+  const q = phones.map((_, i) => `?${i + 1}`).join(",");
+  const [{ results: cs }, { results: cn }, { results: bk }] = await Promise.all([
+    env.DB.prepare(`SELECT phone, name, last_in_at, read_at, human_until, opted_out FROM wa_contacts WHERE phone IN (${q})`).bind(...phones).all(),
+    env.DB.prepare(`SELECT n.phone, n.name, c.name AS centre FROM centre_numbers n JOIN centres c ON c.id = n.centre_id WHERE n.phone IN (${q})`).bind(...phones).all(),
+    env.DB.prepare(`SELECT phone, name, id, date, status FROM bookings WHERE phone IN (${q}) AND status NOT IN ('blocked') ORDER BY created_at DESC`).bind(...phones).all(),
+  ]);
+  for (const ph of phones) {
+    const c = cs.find((x) => x.phone === ph) || {}, n = cn.find((x) => x.phone === ph), b = bk.find((x) => x.phone === ph);
+    const role = team.includes(ph) ? "team" : n ? "centre" : "patient";
+    out[ph] = {
+      phone: ph, role, wa_name: c.name || "", name: role === "centre" ? `${n.centre}${n.name ? " · " + n.name : ""}` : role === "team" ? `Team${c.name ? " · " + c.name : ""}` : (b && b.name) || c.name || "",
+      last_in_at: c.last_in_at || null, read_at: c.read_at || null, open: !!(c.last_in_at && Date.now() - Date.parse(c.last_in_at) < 23.5 * 3600000),
+      human_until: c.human_until && Date.parse(c.human_until) > Date.now() ? c.human_until : null, opted_out: !!c.opted_out,
+      bookings: bk.filter((x) => x.phone === ph).slice(0, 5).map((x) => ({ id: x.id, date: x.date, status: x.status })),
+    };
+  }
+  return out;
+}
+async function adminChats(env) {
+  const S = await getSettings(env);
+  const { results } = await env.DB.prepare(`SELECT i.phone, MAX(i.id) AS last_id,
+      SUM(CASE WHEN COALESCE(i.dir, 'in') = 'in' AND i.at > COALESCE(c.read_at, '') THEN 1 ELSE 0 END) AS unread
+    FROM wa_inbox i LEFT JOIN wa_contacts c ON c.phone = i.phone GROUP BY i.phone ORDER BY last_id DESC LIMIT 300`).all();
+  const last = {};
+  for (let i = 0; i < results.length; i += 90) {
+    const ids = results.slice(i, i + 90).map((r) => r.last_id);
+    const { results: rows } = await env.DB.prepare(`SELECT id, phone, body, at, dir, by_who, status FROM wa_inbox WHERE id IN (${ids.map((_, k) => `?${k + 1}`).join(",")})`).bind(...ids).all();
+    for (const r of rows) last[r.phone] = r;
+  }
+  const people = {};
+  for (let i = 0; i < results.length; i += 90) Object.assign(people, await chatPeople(env, S, results.slice(i, i + 90).map((r) => r.phone)));
+  return json({ chats: results.map((r) => ({ ...people[r.phone], unread: r.unread || 0, last: last[r.phone] || null })), ready: waReady(env, S) });
+}
+async function adminChat(env, phone) {
+  const S = await getSettings(env);
+  const { results } = await env.DB.prepare("SELECT id, wa_id, type, body, at, dir, by_who, status, media_id, media_type, media_name FROM wa_inbox WHERE phone=?1 ORDER BY id DESC LIMIT 300").bind(phone).all();
+  await env.DB.prepare(`INSERT INTO wa_contacts (phone, read_at) VALUES (?1, ?2) ON CONFLICT(phone) DO UPDATE SET read_at=excluded.read_at`).bind(phone, isoNow()).run();
+  const who = (await chatPeople(env, S, [phone]))[phone];
+  return json({ who, messages: results.reverse().map((m) => ({ ...m, dir: m.dir || "in" })), ready: waReady(env, S) });
+}
+const CHAT_FILE_MAX = 10 * 1024 * 1024;
+async function adminChatSend(env, req, phone) {
+  const S = await getSettings(env);
+  if (!waReady(env, S)) return bad("The WhatsApp API isn't set up yet (Admin → WhatsApp).");
+  if (!(await chatOpen(env, phone)))
+    return bad("WhatsApp only allows a free message within 24 hours of this person's last message. Use a booking's message buttons (they go out as approved templates), or wait for them to write to us.", 409);
+  let text = "", file = null;
+  if ((req.headers.get("content-type") || "").includes("multipart/form-data")) {
+    const fd = await req.formData();
+    text = String(fd.get("text") || "").trim();
+    const f = fd.get("file");
+    if (f && typeof f === "object" && f.size) {
+      if (f.size > CHAT_FILE_MAX) return bad("Files can be up to 10 MB.");
+      const mime = f.type === "application/pdf" ? "application/pdf" : /^image\/(jpeg|png)$/.test(f.type) ? f.type : null;
+      if (!mime) return bad("You can send a PDF or a JPG/PNG photo.");
+      file = { bytes: new Uint8Array(await f.arrayBuffer()), mime, name: clean(f.name || (mime === "application/pdf" ? "document.pdf" : "photo.jpg"), 120) };
+    }
+  } else {
+    const b = await req.json().catch(() => ({}));
+    text = String(b.text || "").trim();
+  }
+  if (!text && !file) return bad("Type a message first.");
+  if (text.length > 4000) return bad("That message is too long (4000 characters max).");
+  try {
+    if (file) await waSendFile(env, S, phone, file.bytes, file.mime, file.name, file.mime === "application/pdf" ? "" : text, { by: "team", ...(file.mime === "application/pdf" ? {} : text ? { text } : {}) });
+    if (text && (!file || file.mime === "application/pdf")) await waText(env, S, phone, text, { by: "team" });
+  } catch (e) { return bad(`WhatsApp said: ${e.message}`, 502); }
+  // the bot stays quiet in this chat for an hour, so it doesn't interrupt the conversation
+  const until = new Date(Date.now() + 60 * 60000).toISOString();
+  await env.DB.prepare("UPDATE wa_contacts SET human_until=?1, state=NULL, read_at=?2 WHERE phone=?3").bind(until, isoNow(), phone).run();
+  return json({ ok: true, human_until: until });
+}
+async function adminChatBot(env, req, phone) {
+  const b = await req.json().catch(() => ({}));
+  const until = b.pause ? new Date(Date.now() + 60 * 60000).toISOString() : null;
+  await env.DB.prepare(`INSERT INTO wa_contacts (phone, human_until) VALUES (?1, ?2) ON CONFLICT(phone) DO UPDATE SET human_until=excluded.human_until`).bind(phone, until).run();
+  return json({ ok: true, human_until: until });
+}
+async function adminChatMedia(env, id) {
+  const row = await env.DB.prepare("SELECT media_id, media_type, media_name FROM wa_inbox WHERE id=?1").bind(id).first();
+  if (!row || !row.media_id) return bad("No file", 404);
+  const S = await getSettings(env);
+  try {
+    const f = await waMedia(env, S, row.media_id);
+    const name = (row.media_name || `whatsapp-${id}`).replace(/[^\w.\- ]/g, "_");
+    return new Response(f.bytes, { headers: { "content-type": f.mime || "application/octet-stream", "content-disposition": `inline; filename="${name}"`, "cache-control": "private, max-age=3600" } });
+  } catch (e) { return bad("WhatsApp no longer has this file (files are kept for about 30 days).", 410); }
+}
 async function adminWaSettings(env, req) {
   const b = await req.json().catch(() => ({}));
   const set = {};
@@ -2212,6 +2349,14 @@ export default {
           m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/send$/);
           if (m && req.method === "POST") return adminSend(env, req, m[1]);
           if (p === "/api/admin/wa" && req.method === "GET") return adminWa(env, url);
+          if (p === "/api/admin/wa/chats" && req.method === "GET") return adminChats(env);
+          m = p.match(/^\/api\/admin\/wa\/chats\/(\d{10})$/);
+          if (m && req.method === "GET") return adminChat(env, m[1]);
+          if (m && req.method === "POST") return adminChatSend(env, req, m[1]);
+          m = p.match(/^\/api\/admin\/wa\/chats\/(\d{10})\/bot$/);
+          if (m && req.method === "POST") return adminChatBot(env, req, m[1]);
+          m = p.match(/^\/api\/admin\/wa\/media\/(\d{1,12})$/);
+          if (m && req.method === "GET") return adminChatMedia(env, Number(m[1]));
           if (p === "/api/admin/wa/settings" && req.method === "POST") return adminWaSettings(env, req);
           if (p === "/api/admin/wa/test" && req.method === "POST") return adminWaTest(env);
           if (p === "/api/admin/wa/sync" && req.method === "POST") return adminWaSync(env);
