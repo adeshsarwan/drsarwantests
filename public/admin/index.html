@@ -32,6 +32,7 @@
 <button type="button" class="tab" data-tab="tests">Tests</button>
 <button type="button" class="tab" data-tab="centres">Centres</button>
 <button type="button" class="tab" data-tab="users">Users</button>
+<button type="button" class="tab" data-tab="inbox">Inbox <span class="tab-n" id="inboxN" hidden></span></button>
 <button type="button" class="tab" data-tab="wa">WhatsApp</button>
 </nav>
 </div>
@@ -83,6 +84,25 @@
 <tbody id="pkgBody"></tbody>
 </table></div>
 <p class="meta" id="pkgCount" style="margin:10px 0 0"></p>
+</div>
+</main>
+
+<!-- ================= INBOX TAB ================= -->
+<main id="view-inbox" class="wrap ib-wrap" hidden>
+<div class="ib" id="ib">
+<aside class="ib-list">
+<div class="ib-lhead">
+<input class="inp" id="ibSearch" type="search" placeholder="Search name, number or booking" aria-label="Search chats">
+<div class="ib-filt" id="ibFilt" role="group" aria-label="Show">
+<button type="button" data-f="all" aria-pressed="true">All</button><button type="button" data-f="unread">Unread</button><button type="button" data-f="patient">Patients</button><button type="button" data-f="centre">Centres</button><button type="button" data-f="team">Team</button>
+</div>
+<form id="ibNew" class="ib-new"><input class="inp" id="ibNewPh" inputmode="numeric" placeholder="New chat: 10-digit number" aria-label="Mobile number for a new chat"><button class="btn sm" type="submit">Open</button></form>
+</div>
+<div class="ib-items" id="ibItems"><p class="meta" style="padding:16px">Loading…</p></div>
+</aside>
+<section class="ib-chat" id="ibChat">
+<div class="ib-empty"><b>WhatsApp inbox</b><p class="meta">Every message to and from +91 98180 28755: patients, collection centres and the team. Choose a chat to read it and reply.</p></div>
+</section>
 </div>
 </main>
 
