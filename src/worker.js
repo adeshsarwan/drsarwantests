@@ -1604,6 +1604,13 @@ async function waProcess(env, body) {
   const S = await getSettings(env);
   for (const en of body.entry || []) for (const ch of en.changes || []) {
     const v = ch.value || {};
+    // Meta tells us when a message text (template) is approved, rejected or paused
+    if (ch.field === "message_template_status_update" && v.message_template_id && v.event) {
+      const reason = v.reason && v.reason !== "NONE" ? String(v.reason).replace(/_/g, " ").toLowerCase() : null;
+      await env.DB.prepare("UPDATE msg_templates SET wa_status=?1, wa_reason=?2, updated_at=?3 WHERE wa_id=?4")
+        .bind(String(v.event).toUpperCase(), reason, isoNow(), String(v.message_template_id)).run().catch(() => {});
+      continue;
+    }
     if (S.wa_phone_id && v.metadata && v.metadata.phone_number_id && String(v.metadata.phone_number_id) !== String(S.wa_phone_id)) continue;
     for (const st of v.statuses || []) await waStatus(env, st);
     for (const msg of v.messages || []) {
