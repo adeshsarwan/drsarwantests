@@ -183,7 +183,6 @@
         act: s === 'payment_submitted' || (unpaid && hasPaidProof(b))
           ? `<button type="button" class="btn sm" data-act="status" data-id="${b.id}" data-st="confirmed">Confirm payment</button>${b.has_proof ? `<button type="button" class="btn ghost sm" data-act="shot" data-id="${b.id}">Screenshot</button>` : ''}`
           : W('pay', 'Payment reminder') },
-      M('confirm', 'confirm', 'Booking confirmation sent to patient', 'Send confirmation'),
       { key: 'assign', label: centreOf(b) ? `Collection centre: ${centreOf(b).name}` : 'Collection centre chosen', btn: 'Choose centre', cls: '',
         done: !!b.centre_id, at: null, avail: PAID_LIKE.includes(s),
         act: `<button type="button" class="btn sm" data-act="assign-open" data-id="${b.id}">Choose centre</button>`,
@@ -193,6 +192,7 @@
         label: b.centre_status === 'accepted' ? `Centre accepted${b.collector_info ? ' · collector ' + b.collector_info : ''}` : b.centre_status === 'declined' && !b.centre_id ? 'Centre declined – choose another centre' : 'Centre accepted the visit',
         done: b.centre_status === 'accepted' || !!sent.centre_ok, hand: b.centre_status !== 'accepted' && !!sent.manual.centre_ok, at: b.centre_status === 'accepted' ? null : sent.centre_ok,
         avail: PAID_LIKE.includes(s) && !!b.centre_id, act: `<button type="button" class="btn sm" data-act="step-mark" data-kind="centre_ok" data-id="${b.id}">Mark accepted</button>`, again: '' },
+      M('confirm', 'confirm', 'Booking confirmation sent to patient', 'Send confirmation'),
       M('collector', 'collector', b.collector_info ? `Collector details sent to patient (${b.collector_info})` : 'Collector details sent to patient', 'Send to patient'),
       M('reminder', 'reminder', 'Visit reminder sent to patient', 'Send reminder'),
       { key: 'collect', label: AFTER_COLLECT.includes(s) ? (b.vial_no ? `Sample collected · vial ${b.vial_no}` : 'Sample collected · ⚠ vial no. missing') : 'Sample collected (enter vial no.)',
