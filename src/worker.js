@@ -291,6 +291,7 @@ function ensureSchema(env) {
         }
       }
       await env.DB.batch(SCHEMA.map((q) => env.DB.prepare(q)));
+      try { await env.DB.prepare("ALTER TABLE wa_contacts ADD COLUMN opted_out TEXT").run(); } catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
       if (!have.size) for (const [c, t] of Object.entries(NEW_COLS)) {
         try { await env.DB.prepare(`ALTER TABLE bookings ADD COLUMN ${c} ${t}`).run(); } catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
       }
@@ -1523,7 +1524,8 @@ async function waDaily(env) {
   if (!waAuto(env, S)) return;
   const tomorrow = addDays(istParts().date, 1);
   const { results } = await env.DB.prepare(`SELECT id FROM bookings WHERE date=?1 AND status='confirmed'
-    AND NOT EXISTS (SELECT 1 FROM msg_log l WHERE l.booking_id = bookings.id AND l.kind IN ('reminder','done:reminder'))`).bind(tomorrow).all();
+    AND NOT EXISTS (SELECT 1 FROM msg_log l WHERE l.booking_id = bookings.id AND l.kind IN ('reminder','done:reminder'))
+    AND phone NOT IN (SELECT phone FROM wa_contacts WHERE opted_out IS NOT NULL)`).bind(tomorrow).all();
   const T = await templates(env);
   for (const r of results) await deliver(env, r.id, "reminder", { S, T });
 }
@@ -1650,6 +1652,16 @@ class Bot {
       return this.action(action, id, extra);
     }
     if (msg.type === "document" || msg.type === "image") return this.media(msg, st);
+    if (role === "patient" && /^(stop|unsubscribe)$/i.test(text)) {
+      await this.state(null);
+      await this.db.prepare("UPDATE wa_contacts SET opted_out=?1 WHERE phone=?2").bind(isoNow(), this.phone).run();
+      return this.say("You won't get reminders from us any more. We'll still message you about a booking you make and send your reports here.\n\nReply *START* to turn reminders back on.");
+    }
+    if (role === "patient" && /^start$/i.test(text) && this.c.opted_out) {
+      await this.db.prepare("UPDATE wa_contacts SET opted_out=NULL WHERE phone=?1").bind(this.phone).run();
+      this.c.opted_out = null;
+      await this.say("Reminders are back on ✅");
+    }
     if (st && text && !/^(menu|hi|hello|hey|start|0|cancel)$/i.test(text)) return this.answer(st, this.c.state_data, text);
     await this.state(null);
     return this.menu(true);
