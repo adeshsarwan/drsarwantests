@@ -216,8 +216,9 @@
         again: '', detail: b.collector_info ? `Collector: ${b.collector_info}` : '',
         autos: [['confirm', 'Booking confirmation to the patient'], ['collector', 'Collector details to the patient'], ['reminder', 'Visit reminder (evening before)']] },
       { key: 'collect', label: 'Vial submitted to lab', done: AFTER_COLLECT.includes(s), at: b.collected_at, avail: s === 'confirmed' && accepted,
-        act: btn('collect', 'Enter vial no.', 'blue'), again: b.vial_no ? btn('vial-edit', 'Edit vial', 'ghost') : btn('vial-edit', 'Add vial no.'),
-        detail: AFTER_COLLECT.includes(s) ? (b.vial_no ? `Vial ${b.vial_no}` : '⚠ vial no. missing') : '',
+        act: btn('collect', b.vial_reported ? 'Check &amp; confirm vial' : 'Enter vial no.', 'blue'), again: b.vial_no ? btn('vial-edit', 'Edit vial', 'ghost') : btn('vial-edit', 'Add vial no.'),
+        detail: AFTER_COLLECT.includes(s) ? (b.vial_no ? `Vial ${b.vial_no}` : '⚠ vial no. missing') + (b.vial_reported ? ` · the centre sent ${b.vial_reported} – check it` : '')
+          : b.vial_reported ? `The centre sent vial ${b.vial_reported} – check it against the tube and confirm` : '',
         autos: [['collected', '"Lab has received your sample" to the patient']] },
       { key: 'send', label: 'Report uploaded & sent', done: s === 'completed' || (reps.length > 0 && nSent === reps.length), at: b.completed_at, avail: AFTER_COLLECT.includes(s),
         act: reps.length ? `<button type="button" class="btn purple sm" data-act="reports" data-id="${b.id}">Check &amp; send report</button>` : `<button type="button" class="btn purple sm" data-act="reports" data-id="${b.id}">Upload report</button>`,
@@ -914,15 +915,17 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   function openVial(id, edit, then) {
     const b = findB(id); if (!b) return;
     vialCtx = { id, edit, force: false, then: then || null };
-    $('#vialTitle').textContent = edit ? (b.vial_no ? 'Edit vial number' : 'Add vial number') : 'Sample collected';
+    $('#vialTitle').textContent = edit ? (b.vial_no ? 'Edit vial number' : 'Add vial number') : 'Confirm vial at lab';
     $('#vialSub').textContent = `${b.name} · ${fmtD(b.date)}, ${slotLabel(b.slot)}`;
     const notes = [];
     if (!edit && then) notes.push(`The sample has to be marked collected first – then you'll ${THEN_LBL[then]}.`);
     if (!edit && b.status === 'payment_submitted') notes.push('This also marks the payment as verified.');
+    if (b.vial_reported) notes.push(`The centre sent vial ${b.vial_reported}. Check it matches the label on the tube before you confirm.`);
+    if (!edit) notes.push('Confirming tells the patient on WhatsApp that the lab has received the sample.');
     $('#vialNote').textContent = notes.join(' '); $('#vialNote').hidden = !notes.length;
-    $('#vialSkip').hidden = !!edit;
-    $('#vialNo').value = b.vial_no || ''; $('#vialErr').textContent = '';
-    $('#vialSave').textContent = edit ? 'Save vial number' : then ? 'Save & continue' : 'Save & mark collected';
+    $('#vialSkip').hidden = !!edit || isOp();
+    $('#vialNo').value = b.vial_reported || b.vial_no || ''; $('#vialErr').textContent = '';
+    $('#vialSave').textContent = edit ? 'Save vial number' : then ? 'Save & continue' : 'Confirm vial at lab';
     $('#vialEg').textContent = (b.vial_no || 'AB1234') + '.pdf';
     $$('dialog[open]').forEach((x) => x.close());
     $('#vialDlg').showModal(); setTimeout(() => $('#vialNo').focus(), 50);
@@ -1461,6 +1464,9 @@ ${r.addresses.length ? `<div class="found-k">Address</div><div class="found-l">$
       } else if (idx === 1) {
         const m = minsSince(sent.center || b.paid_at);
         items.push({ ...base, stage: 'centre', since: m, late: m > LATE_MIN.centre, note: `${centreOf(b) ? centreOf(b).name : 'Centre'} · ${sent.center ? 'job sent ' + when(sent.center) : 'job not sent yet'}`, action: cur.act });
+      } else if (b.status === 'confirmed' && b.vial_reported) {
+        const m = minsSince(b.vial_reported_at);
+        items.push({ ...base, stage: 'collect', since: m, late: m > LATE_MIN.collect, note: `The centre sent vial ${b.vial_reported} · check and confirm`, action: all[2].act });
       } else if (idx === 2 || (!cur && b.status === 'confirmed' && all[1].done)) {
         const end = visitEnd(b);
         if (b.date > ist()) { waitingVisit++; continue; }
