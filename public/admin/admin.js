@@ -300,12 +300,21 @@
 <div class="t"><b>${esc(st.label)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}<ul class="aul">${autoLines(b, st)}</ul></div><div class="a">${acts}</div></li>`;
     }).join('');
     return `<div class="dlg-h"><b>Steps · ${esc(b.name)}</b><div class="meta">${esc(b.id)} · ${fmtD(b.date)}, ${esc(slotLabel(b.slot))} · <span class="pill st-${b.status}" style="margin:0">${ST[b.status].label}</span></div></div>
-<div class="dlg-b">${reschedBox(b)}<p class="meta" style="margin:0 0 10px">Messages go out automatically from WhatsApp +91 98180 28755.${isOp() ? ' If one can’t be delivered, it’s passed to the admin.' : ''}</p><ol class="steps">${rows}</ol></div>`;
+<div class="dlg-b">${reschedBox(b)}<p class="meta" style="margin:0 0 10px">Messages go out automatically from WhatsApp +91 98180 28755.${isOp() ? ' If one can’t be delivered, it’s passed to the admin.' : ''}</p><ol class="steps">${rows}</ol>
+<details class="act-log"><summary>History – who did what</summary><ol id="actLog" class="act-l"><li class="meta">Loading…</li></ol></details></div>`;
+  }
+  async function loadActivity(id) {
+    try {
+      const r = await api(`/api/admin/bookings/${id}/activity`);
+      const el = $('#actLog'); if (!el || stepsId !== id) return;
+      el.innerHTML = r.activity.length ? r.activity.map((a) => `<li><span class="act-w">${when(a.at)}</span><span><b>${esc(a.what)}</b><small>${esc(a.who || '')}</small></span></li>`).join('')
+        : '<li class="meta">Nothing recorded yet. History is kept from 15 Nov 2026 onwards.</li>';
+    } catch (e) { const el = $('#actLog'); if (el) el.innerHTML = `<li class="meta">${esc(e.message)}</li>`; }
   }
   let stepsId = null;
   function openSteps(id) {
     const b = findB(id); if (!b) return;
-    stepsId = id; $('#stepsBody').innerHTML = stepsPopHTML(b);
+    stepsId = id; $('#stepsBody').innerHTML = stepsPopHTML(b); loadActivity(id);
     $$('dialog[open]').forEach((x) => x !== $('#stepsDlg') && x.close());
     if (!$('#stepsDlg').open) $('#stepsDlg').showModal();
   }
