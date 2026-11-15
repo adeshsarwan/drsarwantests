@@ -579,3 +579,7 @@ button.stat:hover{border-color:var(--teal);box-shadow:0 0 0 2px #d8ecef}
 .act-l li{display:grid;grid-template-columns:130px 1fr;gap:10px}
 .act-l .act-w{color:var(--muted);font-size:12.5px}
 .act-l small{display:block;color:var(--muted);font-size:12px}
+
+/* late rows: the next action turns red */
+.ops-tbl tr.late .ops-act .btn:not(.ghost){background:#b3261e;border-color:#b3261e;color:#fff}
+.ops-tbl tr.late td small{color:#8c1d16}
