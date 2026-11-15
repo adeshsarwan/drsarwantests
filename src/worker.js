@@ -663,6 +663,7 @@ async function adminSetStatus(env, req, id) {
   const now = isoNow();
   const set = { status, updated_at: now };
   if (status === "collected") {
+    if (AFTER_COLLECT_STATES.includes(row.status) && STAFF.get(req) && STAFF.get(req).role !== "admin") return bad("The vial is already confirmed – only an admin can change it.", 403);
     const vial = clean(body.vial_no, 40).toUpperCase();
     // vial no. can be added later (no_vial) – the admin shows a "vial no. missing" warning until it is
     const st = STAFF.get(req);
@@ -1312,7 +1313,7 @@ const OPERATOR_OK = [
   ["POST", /^\/api\/admin\/bookings$/],
   ["GET", /^\/api\/admin\/lookup$/],
   ["GET", /^\/api\/admin\/bookings\/DSL-[A-Z0-9]{6}\/(screenshot|reports?|activity)$/],
-  ["POST", /^\/api\/admin\/bookings\/DSL-[A-Z0-9]{6}\/(move|reports?|tests|vial|sent|status|centre|send|resched|cancel-centre)$/],
+  ["POST", /^\/api\/admin\/bookings\/DSL-[A-Z0-9]{6}\/(move|reports?|tests|sent|status|centre|send|resched|cancel-centre)$/], // vial changes: admin only
   ["GET", /^\/api\/admin\/reports\/\d{1,9}$/],
   ["DELETE", /^\/api\/admin\/reports\/\d{1,9}$/],
   ["GET", /^\/api\/admin\/wa\/(chats|chats\/\d{10}|media\/\d{1,12})$/],
