@@ -279,7 +279,8 @@ let schemaReady = null;
 const NEW_COLS = { city: "TEXT", state: "TEXT", vial_no: "TEXT", collected_at: "TEXT", report_name: "TEXT", report_size: "INTEGER",
   report_token: "TEXT", report_at: "TEXT", completed_at: "TEXT", fee_due: "INTEGER", fee_paid_at: "TEXT", missed_slot: "TEXT", package_id: "INTEGER", package_name: "TEXT",
   centre_id: "INTEGER", patient_id: "INTEGER", consent_at: "TEXT", centre_status: "TEXT", centre_status_at: "TEXT", collector_info: "TEXT",
-  resched_req: "TEXT", resched_at: "TEXT", resched_date: "TEXT", resched_slot: "TEXT" };
+  resched_req: "TEXT", resched_at: "TEXT", resched_date: "TEXT", resched_slot: "TEXT",
+  vial_reported: "TEXT", vial_reported_at: "TEXT" };
 function ensureSchema(env) {
   if (!schemaReady) {
     schemaReady = (async () => {
@@ -514,7 +515,7 @@ async function adminList(env, url, staff) {
   const { results } = await env.DB.prepare(
     `SELECT id, date, slot, name, phone, address, pincode, city, state, cycle, notes, amount, status, utr, source, created_at, paid_at, updated_at,
        package_id, package_name, vial_no, collected_at, report_name, report_size, report_token, report_at, completed_at, fee_due, fee_paid_at, missed_slot,
-       centre_id, patient_id, consent_at, centre_status, centre_status_at, collector_info, resched_req, resched_at, resched_date, resched_slot, (SELECT dob FROM users u WHERE u.id = bookings.patient_id) AS dob,
+       centre_id, patient_id, consent_at, centre_status, centre_status_at, collector_info, resched_req, resched_at, resched_date, resched_slot, vial_reported, vial_reported_at, (SELECT dob FROM users u WHERE u.id = bookings.patient_id) AS dob,
        EXISTS(SELECT 1 FROM payment_proofs p WHERE p.booking_id = bookings.id) AS has_proof,
        (SELECT group_concat(kind || '@' || at, ',') FROM msg_log l WHERE l.booking_id = bookings.id) AS msgs,
        (SELECT group_concat(kind || ':' || id, ',') FROM wa_outbox o WHERE o.booking_id = bookings.id AND o.status = 'failed') AS failed
@@ -662,13 +663,15 @@ async function adminSetStatus(env, req, id) {
   if (status === "collected") {
     const vial = clean(body.vial_no, 40).toUpperCase();
     // vial no. can be added later (no_vial) – the admin shows a "vial no. missing" warning until it is
-    if (!vial && !body.no_vial) return bad("Enter the vial number written on the sample.");
+    const st = STAFF.get(req);
+    if (!vial && (!body.no_vial || (st && st.role !== "admin"))) return bad("Enter the vial number written on the sample.");
     if (vial && !body.force) {
       const dup = await env.DB.prepare("SELECT id, name FROM bookings WHERE vial_no=?1 AND id!=?2 LIMIT 1").bind(vial, id).first();
       if (dup) return json({ error: `Vial ${vial} is already used for ${dup.name} (${dup.id}). Check the number.`, code: "dup_vial" }, 409);
     }
     set.vial_no = vial || row.vial_no || null;
     set.collected_at = row.collected_at || now;
+    set.vial_reported = null; set.vial_reported_at = null;
   }
   if (status === "report_ready" && !(await env.DB.prepare("SELECT 1 FROM report_files WHERE booking_id=?1 LIMIT 1").bind(id).first())) return bad("Upload the report PDF first.");
   if (HOLDING.includes(status) && !HOLDING.includes(row.status)) {
@@ -773,7 +776,7 @@ async function adminVial(env, req, id) {
     const dup = await env.DB.prepare("SELECT id, name FROM bookings WHERE vial_no=?1 AND id!=?2 LIMIT 1").bind(vial, id).first();
     if (dup) return json({ error: `Vial ${vial} is already used for ${dup.name} (${dup.id}). Check the number.`, code: "dup_vial" }, 409);
   }
-  const r = await env.DB.prepare("UPDATE bookings SET vial_no=?1, updated_at=?2 WHERE id=?3 AND status IN ('collected','report_ready','completed')").bind(vial, isoNow(), id).run();
+  const r = await env.DB.prepare("UPDATE bookings SET vial_no=?1, vial_reported=NULL, vial_reported_at=NULL, updated_at=?2 WHERE id=?3 AND status IN ('collected','report_ready','completed')").bind(vial, isoNow(), id).run();
   if (!r.meta.changes) return bad("Mark the sample as collected first.", 409);
   return json({ ok: true });
 }
@@ -972,9 +975,21 @@ async function closeOldBookings(env) {
     env.DB.prepare("INSERT OR REPLACE INTO settings (k, v) VALUES (?1, ?2)").bind(flag, now),
   ]);
 }
+// One-time (15 Nov 2026): DSL-DVBY8Y was moved to "collected" straight from the centre's vial no. – put it back
+// so the operator checks and confirms the vial (the centre's number is kept as the reported one).
+async function reopenVialCheck(env) {
+  const flag = "mig_reopen_vial_20261115";
+  if (await env.DB.prepare("SELECT 1 FROM settings WHERE k=?1").bind(flag).first()) return;
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE bookings SET status='confirmed', vial_reported=vial_no, vial_reported_at=collected_at, vial_no=NULL, collected_at=NULL, updated_at=?1
+      WHERE id='DSL-DVBY8Y' AND status='collected' AND NOT EXISTS (SELECT 1 FROM report_files f WHERE f.booking_id='DSL-DVBY8Y')`).bind(isoNow()),
+    env.DB.prepare("INSERT OR REPLACE INTO settings (k, v) VALUES (?1, ?2)").bind(flag, isoNow()),
+  ]);
+}
 async function seedAccounts(env) {
   const now = isoNow();
   await closeOldBookings(env);
+  await reopenVialCheck(env);
   // the first admin login: username "admin" with the existing admin password
   const pw = String(env.ADMIN_PASSWORD || "").trim();
   if (pw && !(await env.DB.prepare("SELECT 1 FROM users WHERE role='admin' LIMIT 1").first())) {
@@ -1318,7 +1333,7 @@ async function centreBookings(env, user, url) {
   const from = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get("from") || "") ? url.searchParams.get("from") : addDays(today, -30);
   const to = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get("to") || "") ? url.searchParams.get("to") : addDays(today, BOOK_DAYS_AHEAD);
   const c = await env.DB.prepare("SELECT id, name FROM centres WHERE id=?1").bind(user.centre_id).first();
-  const { results } = await env.DB.prepare(`SELECT id, date, slot, name, phone, address, pincode, city, state, cycle, notes, status, vial_no, collected_at, package_name, centre_status, collector_info
+  const { results } = await env.DB.prepare(`SELECT id, date, slot, name, phone, address, pincode, city, state, cycle, notes, status, vial_no, vial_reported, collected_at, package_name, centre_status, collector_info
     FROM bookings WHERE centre_id=?1 AND date BETWEEN ?2 AND ?3 AND status IN (${PAID_STATES.map((_, i) => "?" + (i + 4)).join(",")}) ORDER BY date, slot`)
     .bind(user.centre_id, from, to, ...PAID_STATES).all();
   const ids = results.map((r) => r.id);
@@ -1341,27 +1356,24 @@ async function centreCollected(env, user, req, id) {
   const row = await centreBookingRow(env, user, id);
   if (!row) return bad("Booking not found", 404);
   const b = await req.json().catch(() => ({}));
-  const r = await markCollected(env, row, b.vial_no);
+  const r = await reportVial(env, row, b.vial_no);
   if (r.err) return bad(r.err, 409);
-  if (r.collected) later(req, waEvent(env, "collected", id));
-  return json({ ok: true });
+  if (r.reported) later(req, waEvent(env, "vial_reported", id));
+  return json({ ok: true, reported: !!r.reported });
 }
 // centre (portal or WhatsApp) gives the vial no.: confirmed → collected, or a correction of the vial no.
-async function markCollected(env, row, vialIn) {
+// The centre (portal or WhatsApp) only REPORTS the vial no. Nothing moves and the patient isn't told until
+// someone in our team checks it and confirms the vial at the lab (Operations → Step 3).
+async function reportVial(env, row, vialIn) {
   const vial = clean(vialIn, 40).toUpperCase().replace(/\s+/g, "");
   if (!vial) return { err: "Enter the vial number written on the sample." };
+  if (!["confirmed", "collected", "report_ready", "completed"].includes(row.status)) return { err: "This booking can't take a vial no." };
   const dup = await env.DB.prepare("SELECT id FROM bookings WHERE vial_no=?1 AND id!=?2 LIMIT 1").bind(vial, row.id).first();
   if (dup) return { err: `Vial ${vial} is already used for another booking. Check the number.` };
+  if (vial === row.vial_no) return { ok: true, vial, same: true };
   const now = isoNow();
-  if (row.status === "confirmed") {
-    await env.DB.prepare("UPDATE bookings SET status='collected', vial_no=?1, collected_at=COALESCE(collected_at, ?2), updated_at=?2 WHERE id=?3 AND status='confirmed'").bind(vial, now, row.id).run();
-    return { ok: true, collected: true, vial };
-  }
-  if (["collected", "report_ready", "completed"].includes(row.status)) {
-    await env.DB.prepare("UPDATE bookings SET vial_no=?1, updated_at=?2 WHERE id=?3").bind(vial, now, row.id).run();
-    return { ok: true, vial };
-  }
-  return { err: "This booking can't be marked collected." };
+  await env.DB.prepare("UPDATE bookings SET vial_reported=?1, vial_reported_at=?2, updated_at=?2 WHERE id=?3").bind(vial, now, row.id).run();
+  return { ok: true, vial, reported: true };
 }
 // centre takes the job (with the collector's name / mobile / time for the patient) or gives it back
 async function centreAccept(env, user, req, id, what) {
@@ -1662,6 +1674,7 @@ async function waEvent(env, ev, id, extra = {}) {
   else if (ev === "accepted_hand") await once("confirm");
   else if (ev === "declined") await team(`${extra.centre || "The centre"} can't do this collection – please choose another centre`);
   else if (ev === "collected") await once("collected");
+  else if (ev === "vial_reported") await team(`The centre sent vial no. ${b.vial_reported} – check it and confirm the vial at the lab on the dashboard`);
   else if (ev === "report") {
     if (S.auto_reports === "1") await deliver(env, b, "report", { S, T });
     else await team("Report uploaded – check it and send it to the patient");
@@ -2094,11 +2107,11 @@ class Bot {
       return this.menu(false);
     }
     if (st === "vial") {
-      const r = await markCollected(env, b, text);
+      const r = await reportVial(env, b, text);
       if (r.err) return this.say(r.err + " Send the vial no. again.");
       await this.state(null);
-      if (r.collected) await waEvent(env, "collected", b.id);
-      await this.say(`Saved ✅ ${b.name} – vial *${r.vial}*${r.collected ? " – sample collected." : "."}`);
+      if (r.reported) await waEvent(env, "vial_reported", b.id);
+      await this.say(r.same ? `Vial *${r.vial}* is already saved for ${b.name} ✅` : `Thank you ✅ ${b.name} – vial *${r.vial}*. Our team will check it and confirm.`);
       return this.menu(false);
     }
     if (st === "upload") return this.say("Please send the report as a *PDF document* (📎 → Document).");
