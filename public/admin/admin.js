@@ -301,16 +301,24 @@
     }).join('');
     return `<div class="dlg-h"><b>Steps · ${esc(b.name)}</b><div class="meta">${esc(b.id)} · ${fmtD(b.date)}, ${esc(slotLabel(b.slot))} · <span class="pill st-${b.status}" style="margin:0">${ST[b.status].label}</span></div></div>
 <div class="dlg-b">${reschedBox(b)}<p class="meta" style="margin:0 0 10px">Messages go out automatically from WhatsApp +91 98180 28755.${isOp() ? ' If one can’t be delivered, it’s passed to the admin.' : ''}</p><ol class="steps">${rows}</ol>
-<details class="act-log"><summary>History – who did what</summary><ol id="actLog" class="act-l"><li class="meta">Loading…</li></ol></details></div>`;
+${histHTML(b.id)}</div>`;
   }
+  // "History – who did what": collapsed by default, remembers open/closed and the last list while the page refreshes
+  const ACT = {}, histOpen = new Set();
+  const actItems = (id) => ACT[id] == null ? '<li class="meta">Loading…</li>' : typeof ACT[id] === 'string' ? `<li class="meta">${esc(ACT[id])}</li>`
+    : ACT[id].length ? ACT[id].map((a) => `<li><span class="act-w">${when(a.at)}</span><span><b>${esc(a.what)}</b><small>${esc(a.who || '')}</small></span></li>`).join('')
+    : '<li class="meta">Nothing recorded yet. History is kept from 15 Nov 2026 onwards.</li>';
+  const histHTML = (id) => `<details class="act-log" data-hist="${esc(id)}"${histOpen.has(id) ? ' open' : ''}><summary>History – who did what</summary><ol class="act-l" data-act-for="${esc(id)}">${actItems(id)}</ol></details>`;
   async function loadActivity(id) {
-    try {
-      const r = await api(`/api/admin/bookings/${id}/activity`);
-      const el = $('#actLog'); if (!el || stepsId !== id) return;
-      el.innerHTML = r.activity.length ? r.activity.map((a) => `<li><span class="act-w">${when(a.at)}</span><span><b>${esc(a.what)}</b><small>${esc(a.who || '')}</small></span></li>`).join('')
-        : '<li class="meta">Nothing recorded yet. History is kept from 15 Nov 2026 onwards.</li>';
-    } catch (e) { const el = $('#actLog'); if (el) el.innerHTML = `<li class="meta">${esc(e.message)}</li>`; }
+    try { ACT[id] = (await api(`/api/admin/bookings/${id}/activity`)).activity; }
+    catch (e) { ACT[id] = e.message; }
+    $$('[data-act-for]').forEach((el) => { if (el.getAttribute('data-act-for') === id) el.innerHTML = actItems(id); });
   }
+  document.addEventListener('toggle', (e) => {
+    const d = e.target; if (!(d instanceof HTMLDetailsElement) || !d.hasAttribute('data-hist')) return;
+    const id = d.getAttribute('data-hist');
+    if (d.open) { if (!histOpen.has(id)) { histOpen.add(id); loadActivity(id); } } else histOpen.delete(id);
+  }, true);
   let stepsId = null;
   function openSteps(id) {
     const b = findB(id); if (!b) return;
@@ -471,41 +479,39 @@
     const f = [];
     if (b.status === 'no_show') f.push(nextStep(b));
     if (b.status === 'report_ready') f.push(`<button class="btn ghost" data-act="status" data-id="${b.id}" data-st="completed">Mark job complete</button>`);
-    if (b.status === 'confirmed') f.push(`<button class="btn warn" data-act="status" data-id="${b.id}" data-st="no_show">Reached – patient not available</button>`);
+    if (b.status === 'confirmed' && !b.vial_reported) f.push(`<button class="btn warn" data-act="status" data-id="${b.id}" data-st="no_show">Reached – patient not available</button>`);
     if (b.status === 'cancelled' && hasPaidProof(b)) f.push(`<button class="btn ghost" data-act="status" data-id="${b.id}" data-st="confirmed">Restore &amp; confirm</button>`);
     if (CANCELLABLE.includes(b.status)) f.push(`<button class="btn warn" data-act="status" data-id="${b.id}" data-st="cancelled">Cancel &amp; free slot</button>`);
     const payNote = b.status === 'payment_submitted' ? 'Payment submitted · check your Paytm app'
       : ['pending', 'expired'].includes(b.status) ? (hasPaidProof(b) ? 'Screenshot uploaded · slot not held' : 'Not paid yet · slot not reserved')
       : PAID.includes(b.status) ? 'Payment verified' : '—';
-    const other = [];
-    if (['pending', 'expired'].includes(b.status)) other.push('pay');
-    if (['pending', 'expired', 'payment_submitted', 'confirmed'].includes(b.status)) other.push('slots');
-    if (b.status === 'no_show') other.push('missed');
-    if (!isOp()) other.push('chat');
-    const sent = sentMap(b);
     const t = testsOf(b);
+    // once the sample is collected (centre sent a vial no., or it's confirmed) the visit can't be moved or given to another centre
+    const locked = AFTER_COLLECT.includes(b.status) || !!b.vial_reported;
+    const lockTip = 'The sample is already collected, so this can’t be changed.';
+    const resBtn = b.status === 'no_show' ? `<button type="button" class="btn ghost sm" data-act="move" data-id="${b.id}">Rebook</button>`
+      : MOVABLE.includes(b.status) || locked ? `<button type="button" class="btn ghost sm" data-act="move" data-id="${b.id}"${locked ? ` disabled title="${lockTip}"` : ''}>Reschedule</button>` : '';
     return `<div class="dt-h">
 <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px"><div><div class="dt-name">${esc(b.name)}</div><div class="meta" style="margin-top:2px">Ref ${esc(b.id)} · +91 ${esc(b.phone)}</div></div>
 <span class="pill st-${b.status}" style="margin:0;flex:none">${s.label}</span></div>
-<div class="dt-when"><span>${fmtD(b.date)} · ${esc(slotLabel(b.slot))}</span>${MOVABLE.includes(b.status) ? `<button type="button" class="btn ghost sm" style="margin-left:auto" data-act="move" data-id="${b.id}">${b.status === 'no_show' ? 'Rebook' : 'Reschedule'}</button>` : ''}</div>
+<div class="dt-tests"><ul class="tl">${t.map((x) => `<li><b>${esc(x.name)}</b><span>${money(x.price)}</span></li>`).join('') || '<li class="meta">No test recorded</li>'}</ul>${b.status !== 'cancelled' ? `<button type="button" class="btn ghost sm" data-act="tests-edit" data-id="${b.id}">Edit tests</button>` : ''}</div>
+<div class="dt-when"><span>${fmtD(b.date)} · ${esc(slotLabel(b.slot))}</span><span style="margin-left:auto">${resBtn}</span></div>
+<div class="dt-addr"><span>${esc(b.address)}<br><b>${esc(b.city || '')}</b>${b.state ? ', ' + esc(b.state) : ''} – ${esc(b.pincode)}</span><a href="${mapUrl(b)}" target="_blank" rel="noopener">Map</a></div>
 </div>
 <div class="dt-b">
 ${reschedBox(b)}
 ${b.status === 'no_show' ? `<div class="fee">Phlebotomist reached${b.missed_slot ? ` on ${fmtD(b.missed_slot.slice(0, 10))}, ${fmtT(slotMin(b.missed_slot.slice(11)))}` : ''} – patient not available. <b>${money(b.fee_due || CFG.visitFee)} visit fee</b> is due before rebooking.</div>` : ''}
 ${b.fee_paid_at ? `<div class="meta">Visit fee ${money(b.fee_due)} received ${when(b.fee_paid_at)} · rebooked</div>` : ''}
-<div class="dt-sec"><div class="dt-k" style="display:flex;justify-content:space-between;align-items:center">Tests (${t.length})${b.status !== 'cancelled' ? `<button type="button" class="btn ghost sm" data-act="tests-edit" data-id="${b.id}">Edit tests</button>` : ''}</div>
-<ul class="tl">${t.map((x) => `<li><b>${esc(x.name)}</b><span>${money(x.price)}</span></li>`).join('') || '<li class="meta">No test recorded</li>'}</ul>
-<div class="pay"><div style="min-width:0;flex:1"><b>${money(b.amount)}</b><div class="meta">${payNote}${b.utr ? ` · UTR ${esc(b.utr)}` : ''}${t.some((x) => x.margin != null) ? ` · margin ${money(marginOf(b))}` : ''}</div></div>${b.has_proof ? `<button type="button" class="btn ghost sm" data-act="shot" data-id="${b.id}">Screenshot</button>` : ''}</div></div>
-${b.status !== 'blocked' ? `<div class="dt-sec"><div class="dt-k" style="display:flex;justify-content:space-between;align-items:center">Collection centre<button type="button" class="btn ghost sm" data-act="assign-open" data-id="${b.id}">${b.centre_id ? 'Change' : 'Choose'}</button></div><div style="margin-top:2px">${centreOf(b) ? `<b>${esc(centreOf(b).name)}</b>${centrePhone(b) ? ` <span class="meta">· ${esc(centrePhone(b))}</span>` : ''}` : '<span class="meta">Not chosen yet</span>'}</div></div>` : ''}
+<div class="pay"><div style="min-width:0;flex:1"><b>${money(b.amount)}</b><div class="meta">${payNote}${b.utr ? ` · UTR ${esc(b.utr)}` : ''}${t.some((x) => x.margin != null) ? ` · margin ${money(marginOf(b))}` : ''}</div></div>${b.has_proof ? `<button type="button" class="btn ghost sm" data-act="shot" data-id="${b.id}">Screenshot</button>` : ''}</div>
+${b.status !== 'blocked' ? `<div class="dt-sec"><div class="dt-k" style="display:flex;justify-content:space-between;align-items:center">Collection centre<button type="button" class="btn ghost sm" data-act="assign-open" data-id="${b.id}"${locked && b.centre_id ? ` disabled title="${lockTip}"` : ''}>${b.centre_id ? 'Change' : 'Choose'}</button></div><div style="margin-top:2px">${centreOf(b) ? `<b>${esc(centreOf(b).name)}</b>${centrePhone(b) ? ` <span class="meta">· ${esc(centrePhone(b))}</span>` : ''}` : '<span class="meta">Not chosen yet</span>'}</div></div>` : ''}
 ${stepsCompact(b) ? `<div class="dt-sec"><div class="dt-k">Steps</div>${stepsCompact(b)}</div>` : ''}
 <div class="dt-sec"><div class="dt-k" style="display:flex;justify-content:space-between;align-items:center">Reports (${reps.length})${AFTER_COLLECT.includes(b.status) ? `<button type="button" class="btn ghost sm" data-act="reports" data-id="${b.id}">${reps.length ? 'Manage / send' : 'Upload'}</button>` : ''}</div>
 ${reps.length ? `<ul class="rl">${reps.map((r) => `<li>📄 ${esc(r.name)} <span class="${r.sent_at ? 'm-ok' : 'meta'}">${r.sent_at ? 'sent ' + when(r.sent_at) : 'not sent'}</span></li>`).join('')}</ul>` : `<div class="meta">${AFTER_COLLECT.includes(b.status) ? 'No reports uploaded yet.' : 'Reports can be uploaded after the sample is collected.'}</div>`}</div>
-<div class="dt-sec"><div class="dt-k">Other WhatsApp messages</div><div class="wa-list">${other.map((k) => `<button type="button" class="wa-btn" data-act="wa" data-kind="${k}" data-id="${b.id}"><span class="ic">✆</span><span><b>${MSG[k]}</b></span>${sent[k] ? `<span class="ok">Sent ${when(sent[k])}</span>` : ''}</button>`).join('')}</div></div>
-<div class="dt-links"><a class="call" href="tel:+91${esc(b.phone)}">Call</a><a class="wa" href="#" data-act="wa" data-kind="chat" data-id="${b.id}">${isOp() ? 'Chat in Inbox' : 'WhatsApp'}</a><a href="${mapUrl(b)}" target="_blank" rel="noopener">Map</a></div>
-<div><div class="dt-k">Collection address</div><div style="margin-top:2px;line-height:1.45">${esc(b.address)}<br><b>${esc(b.city || '')}</b>${b.state ? ', ' + esc(b.state) : ''} – ${esc(b.pincode)}</div></div>
+<div class="dt-links"><a class="call" href="tel:+91${esc(b.phone)}">Call</a><a class="wa" href="#" data-act="wa" data-kind="chat" data-id="${b.id}">${isOp() ? 'Chat in Inbox' : 'WhatsApp'}</a></div>
 <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">${b.cycle ? `<div><div class="dt-k">Cycle</div><div style="margin-top:2px">${esc(b.cycle)}</div></div>` : ''}<div><div class="dt-k">Source</div><div style="margin-top:2px">${esc(srcLabel(b.source))}</div></div></div>
 ${b.dob ? `<div><div class="dt-k">Date of birth</div><div style="margin-top:2px">${fmt(b.dob, { day: 'numeric', month: 'short', year: 'numeric' })}</div></div>` : ''}
 ${b.notes ? `<div><div class="dt-k">Notes</div><div style="margin-top:2px">${esc(b.notes)}</div></div>` : ''}
+${histHTML(b.id)}
 </div>
 ${f.length ? `<div class="dt-f">${f.join('')}</div>` : ''}`;
   }
