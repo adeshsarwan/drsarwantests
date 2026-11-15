@@ -596,3 +596,8 @@ button.stat:hover{border-color:var(--teal);box-shadow:0 0 0 2px #d8ecef}
 .dt-ic .ic-call{color:var(--teal)}
 .dt-ic .ic-wa{color:#1f9d55;border-color:#bfe5cc;background:#effaf3}
 .dt-ic a:hover{filter:brightness(.95)}
+.dt-ic button{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;border:1px solid var(--line);background:#fff;color:#c2410c;cursor:pointer;padding:0}
+.dt-ic button.on{background:#fff4ec;border-color:#f5c9a8}
+.dt-addr[hidden]{display:none}
+.dt-addr{flex-direction:column;gap:6px;background:var(--bg);border-radius:12px;padding:10px 12px}
+.dt-addr a{align-self:flex-start;border:0;padding:0}
