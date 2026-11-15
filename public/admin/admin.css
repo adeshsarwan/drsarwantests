@@ -583,3 +583,10 @@ button.stat:hover{border-color:var(--teal);box-shadow:0 0 0 2px #d8ecef}
 /* late rows: the next action turns red */
 .ops-tbl tr.late .ops-act .btn:not(.ghost){background:#b3261e;border-color:#b3261e;color:#fff}
 .ops-tbl tr.late td small{color:#8c1d16}
+/* booking panel: tests → date → address at the top */
+.dt-tests{margin-top:12px;display:flex;align-items:flex-start;gap:10px}
+.dt-tests .tl{flex:1;min-width:0;margin:0}
+.dt-addr{margin-top:8px;display:flex;align-items:flex-start;gap:10px;font-size:14px;line-height:1.45}
+.dt-addr span{flex:1;min-width:0;overflow-wrap:anywhere}
+.dt-addr a{flex:none;font-weight:700;color:var(--teal);text-decoration:none;border:1px solid var(--line);border-radius:10px;padding:4px 10px}
+.btn[disabled]{opacity:.45;cursor:not-allowed}

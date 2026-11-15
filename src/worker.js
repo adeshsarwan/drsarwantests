@@ -617,8 +617,9 @@ async function adminSetTests(env, req, id) {
 async function adminMove(env, req, id) {
   const { date, slot, feePaid } = await req.json().catch(() => ({}));
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date || "") || !SLOTS.includes(slot)) return bad("Pick a date and slot.");
-  const row = await env.DB.prepare("SELECT status, city FROM bookings WHERE id=?1").bind(id).first();
+  const row = await env.DB.prepare("SELECT status, city, vial_reported FROM bookings WHERE id=?1").bind(id).first();
   if (!row || ["blocked", "cancelled"].includes(row.status)) return bad("Booking not found", 404);
+  if (row.vial_reported) return bad("The sample is already collected, so this booking can't be moved.", 409);
   const room = await slotRoom(env, date, slot, row.city, id);
   if (!room.ok) return bad(room.msg, 409);
   if (["collected", "report_ready", "completed"].includes(row.status)) return bad("The sample is already collected, so this booking can't be moved.", 409);
@@ -1171,8 +1172,10 @@ async function adminAssignCentre(env, req, id) {
     if (!c) return bad("Centre not found", 404);
     if (!c.active) return bad("That centre is switched off. Turn it on in the Centres tab first.", 409);
   }
-  const cur = await env.DB.prepare("SELECT centre_id FROM bookings WHERE id=?1 AND status != 'blocked'").bind(id).first();
+  const cur = await env.DB.prepare("SELECT centre_id, status, vial_reported FROM bookings WHERE id=?1 AND status != 'blocked'").bind(id).first();
   if (!cur) return bad("Booking not found", 404);
+  if (cur.centre_id && (cur.vial_reported || ["collected", "report_ready", "completed"].includes(cur.status)))
+    return bad("The sample is already collected, so the collection centre can't be changed.", 409);
   await assignCentre(env, id, cid);
   if (cid && cid !== cur.centre_id) later(req, centreJob(env, req, id, "assigned"));
   return json({ ok: true });
