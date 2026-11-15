@@ -1459,6 +1459,9 @@ ${r.addresses.length ? `<div class="found-k">Address</div><div class="found-l">$
   const minsSince = (iso) => (iso ? (Date.now() - Date.parse(iso)) / 60000 : 0);
   const ago = (m) => (m < 60 ? `${Math.max(1, Math.round(m))} min` : m < 1440 ? `${Math.floor(m / 60)} h ${Math.round(m % 60)} m` : `${Math.floor(m / 1440)} day${m >= 2880 ? 's' : ''}`);
   const visitEnd = (b) => Date.parse(`${b.date}T${b.slot}:00+05:30`) + 30 * 60000;
+  // the sample has to be confirmed at the lab by the end of the visit day (7 PM IST); after that it shows red
+  const COLLECT_EOD = '19:00';
+  const collectDeadline = (b) => Date.parse(`${b.date}T${COLLECT_EOD}:00+05:30`);
   function opsItems() {
     if (!data) return { items: [], waitingVisit: 0, atLab: 0, unpaid: 0 };
     const items = []; let waitingVisit = 0, atLab = 0, unpaid = 0;
@@ -1482,13 +1485,13 @@ ${r.addresses.length ? `<div class="found-k">Address</div><div class="found-l">$
         const m = minsSince(sent.center || b.paid_at);
         items.push({ ...base, stage: 'centre', since: m, late: m > LATE_MIN.centre, note: `${centreOf(b) ? centreOf(b).name : 'Centre'} · ${sent.center ? 'job sent ' + when(sent.center) : 'job not sent yet'}`, action: cur.act });
       } else if (b.status === 'confirmed' && b.vial_reported) {
-        const m = minsSince(b.vial_reported_at);
-        items.push({ ...base, stage: 'collect', since: m, late: m > LATE_MIN.collect, note: `The centre sent vial ${b.vial_reported} · check and confirm`, action: all[2].act });
+        const m = minsSince(b.vial_reported_at), late = Date.now() > collectDeadline(b);
+        items.push({ ...base, stage: 'collect', since: m, late, note: late ? `Collection not yet confirmed for this patient · the centre sent a vial no.` : `The centre sent a vial no. · check and confirm`, action: all[2].act });
       } else if (idx === 2 || (!cur && b.status === 'confirmed' && all[1].done)) {
         const end = visitEnd(b);
         if (b.date > ist()) { waitingVisit++; continue; }
-        const m = (Date.now() - end) / 60000;
-        items.push({ ...base, stage: 'collect', since: m, late: m > LATE_MIN.collect, note: m > 0 ? `Visit was at ${fmtT(slotMin(b.slot))} · vial not confirmed` : `Visit at ${fmtT(slotMin(b.slot))}${b.collector_info ? ' · ' + b.collector_info : ''}`, action: all[2].act, upcoming: m <= 0 });
+        const m = (Date.now() - end) / 60000, late = Date.now() > collectDeadline(b);
+        items.push({ ...base, stage: 'collect', since: m, late, note: late ? `Collection not yet confirmed for this patient (visit was ${b.date === ist() ? 'today' : fmtD(b.date)} at ${fmtT(slotMin(b.slot))})` : m > 0 ? `Visit was at ${fmtT(slotMin(b.slot))} · confirm the vial by 7 PM` : `Visit at ${fmtT(slotMin(b.slot))}${b.collector_info ? ' · ' + b.collector_info : ''}`, action: all[2].act, upcoming: m <= 0 });
       } else if (idx === 3) {
         if (!reps.length) {
           const m = minsSince(b.collected_at);
