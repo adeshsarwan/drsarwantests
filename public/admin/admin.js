@@ -473,6 +473,15 @@ ${histHTML(b.id)}</div>`;
   };
 
   // ---------- detail (side panel on calendar, dialog everywhere else) ----------
+  // address is tucked behind the location icon next to the name; stays open across refreshes
+  const addrOpen = new Set();
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-addr]'); if (!btn) return;
+    const id = btn.getAttribute('data-addr'), box = btn.closest('.dt-h')?.querySelector('.dt-addr');
+    if (addrOpen.has(id)) addrOpen.delete(id); else addrOpen.add(id);
+    if (box) box.hidden = !addrOpen.has(id);
+    btn.classList.toggle('on', addrOpen.has(id));
+  });
   function detailHTML(b) {
     if (!b) return `<div class="dt-empty"><b>Select a booking</b>Click any booking in the calendar to see the patient's details, the steps and WhatsApp messages here.</div>`;
     const s = ST[b.status], reps = reportsOf(b);
@@ -493,10 +502,10 @@ ${histHTML(b.id)}</div>`;
       : MOVABLE.includes(b.status) || locked ? `<button type="button" class="btn ghost sm" data-act="move" data-id="${b.id}"${locked ? ` disabled title="${lockTip}"` : ''}>Reschedule</button>` : '';
     return `<div class="dt-h">
 <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px"><div style="min-width:0"><div class="dt-name">${esc(b.name)}</div><div class="meta" style="margin-top:2px">Ref ${esc(b.id)} · +91 ${esc(b.phone)}</div></div>
-<div class="dt-hr"><span class="pill st-${b.status}" style="margin:0">${s.label}</span><span class="dt-ic"><a class="ic-call" href="tel:+91${esc(b.phone)}" title="Call +91 ${esc(b.phone)}" aria-label="Call"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1z"/></svg></a><a class="ic-wa" href="#" data-act="wa" data-kind="chat" data-id="${b.id}" title="${isOp() ? 'Chat in Inbox' : 'WhatsApp'}" aria-label="WhatsApp"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2zm4.5-6.1c-.25-.12-1.47-.72-1.7-.8s-.39-.12-.56.12-.64.8-.78.97-.29.19-.54.06a6.7 6.7 0 0 1-3.3-2.9c-.25-.43.25-.4.71-1.33a.45.45 0 0 0-.02-.42c-.06-.12-.56-1.34-.76-1.84s-.4-.42-.56-.43h-.48a.92.92 0 0 0-.66.31 2.8 2.8 0 0 0-.87 2.07 4.8 4.8 0 0 0 1 2.56 11 11 0 0 0 4.2 3.7c1.56.67 2.17.73 2.95.62a2.5 2.5 0 0 0 1.66-1.17 2 2 0 0 0 .14-1.17c-.06-.1-.23-.17-.48-.29z"/></svg></a></span></div></div>
+<div class="dt-hr"><span class="pill st-${b.status}" style="margin:0">${s.label}</span><span class="dt-ic"><button type="button" class="ic-loc${addrOpen.has(b.id) ? ' on' : ''}" data-addr="${esc(b.id)}" title="Address" aria-label="Show address"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 2a7 7 0 0 0-7 7c0 5.25 7 13 7 13s7-7.75 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg></button><a class="ic-call" href="tel:+91${esc(b.phone)}" title="Call +91 ${esc(b.phone)}" aria-label="Call"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1z"/></svg></a><a class="ic-wa" href="#" data-act="wa" data-kind="chat" data-id="${b.id}" title="${isOp() ? 'Chat in Inbox' : 'WhatsApp'}" aria-label="WhatsApp"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2zm4.5-6.1c-.25-.12-1.47-.72-1.7-.8s-.39-.12-.56.12-.64.8-.78.97-.29.19-.54.06a6.7 6.7 0 0 1-3.3-2.9c-.25-.43.25-.4.71-1.33a.45.45 0 0 0-.02-.42c-.06-.12-.56-1.34-.76-1.84s-.4-.42-.56-.43h-.48a.92.92 0 0 0-.66.31 2.8 2.8 0 0 0-.87 2.07 4.8 4.8 0 0 0 1 2.56 11 11 0 0 0 4.2 3.7c1.56.67 2.17.73 2.95.62a2.5 2.5 0 0 0 1.66-1.17 2 2 0 0 0 .14-1.17c-.06-.1-.23-.17-.48-.29z"/></svg></a></span></div></div>
 <div class="dt-tests"><ul class="tl">${t.map((x) => `<li><b>${esc(x.name)}</b><span>${money(x.price)}</span></li>`).join('') || '<li class="meta">No test recorded</li>'}</ul>${b.status !== 'cancelled' ? `<button type="button" class="btn ghost sm" data-act="tests-edit" data-id="${b.id}">Edit tests</button>` : ''}</div>
 <div class="dt-when"><span>${fmtD(b.date)} · ${esc(slotLabel(b.slot))}</span><span style="margin-left:auto">${resBtn}</span></div>
-<div class="dt-addr"><span>${esc(b.address)}<br><b>${esc(b.city || '')}</b>${b.state ? ', ' + esc(b.state) : ''} – ${esc(b.pincode)}</span><a href="${mapUrl(b)}" target="_blank" rel="noopener">Map</a></div>
+<div class="dt-addr"${addrOpen.has(b.id) ? '' : ' hidden'}><span>${esc(b.address)}<br><b>${esc(b.city || '')}</b>${b.state ? ', ' + esc(b.state) : ''} – ${esc(b.pincode)}</span><a href="${mapUrl(b)}" target="_blank" rel="noopener">Open in Maps ↗</a></div>
 </div>
 <div class="dt-b">
 ${reschedBox(b)}
