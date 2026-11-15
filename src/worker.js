@@ -675,6 +675,12 @@ async function adminSetStatus(env, req, id) {
     set.collected_at = row.collected_at || now;
     set.vial_reported = null; set.vial_reported_at = null;
   }
+  // finishing a booking whose sample was never confirmed at the lab needs the vial no. too
+  if (["report_ready", "completed"].includes(status) && !["collected", "report_ready", "completed"].includes(row.status) && !row.vial_no) {
+    const v = clean(body.vial_no, 40).toUpperCase(), st2 = STAFF.get(req);
+    if (!v && !(body.no_vial && st2 && st2.role === "admin")) return bad("Confirm the vial at the lab first – the vial number is missing.", 409);
+    if (v) { set.vial_no = v; set.collected_at = row.collected_at || now; }
+  }
   if (status === "report_ready" && !(await env.DB.prepare("SELECT 1 FROM report_files WHERE booking_id=?1 LIMIT 1").bind(id).first())) return bad("Upload the report PDF first.");
   if (HOLDING.includes(status) && !HOLDING.includes(row.status)) {
     const room = await slotRoom(env, row.date, row.slot, row.city, id);

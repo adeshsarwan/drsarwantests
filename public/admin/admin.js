@@ -932,7 +932,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     if (b.vial_reported) notes.push(`The centre sent vial ${b.vial_reported}. Check it matches the label on the tube before you confirm.`);
     if (!edit) notes.push('Confirming tells the patient on WhatsApp that the lab has received the sample.');
     $('#vialNote').textContent = notes.join(' '); $('#vialNote').hidden = !notes.length;
-    $('#vialSkip').hidden = !!edit || isOp();
+    $('#vialSkip').hidden = true; // only offered (to admins) after trying to save with an empty vial no.
     $('#vialNo').value = b.vial_reported || b.vial_no || ''; $('#vialErr').textContent = '';
     $('#vialSave').textContent = edit ? 'Save vial number' : then ? 'Save & continue' : 'Confirm vial at lab';
     $('#vialEg').textContent = (b.vial_no || 'AB1234') + '.pdf';
@@ -942,7 +942,11 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   $('#vialNo').oninput = () => { if (vialCtx) vialCtx.force = false; $('#vialEg').textContent = (norm($('#vialNo').value) || 'AB1234') + '.pdf'; };
   async function saveVial(noVial) {
     const v = noVial ? '' : $('#vialNo').value.trim();
-    if (!v && !noVial) { $('#vialErr').textContent = 'Enter the vial number (or continue without it).'; return; }
+    if (!v && !noVial) {
+      $('#vialErr').textContent = 'The vial number is empty. Enter it exactly as written on the tube.';
+      if (!isOp() && !vialCtx.edit) $('#vialSkip').hidden = false;
+      $('#vialNo').focus(); return;
+    }
     const { id, edit, force, then } = vialCtx;
     $('#vialSave').disabled = $('#vialSkip').disabled = true;
     try {
@@ -961,7 +965,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   }
   $('#vialForm').onsubmit = (e) => { e.preventDefault(); saveVial(false); };
   $('#vialSkip').onclick = () => {
-    if (!confirm('Mark the sample collected without a vial number?\n\nThe vial no. is needed to match the reports – the booking will show "vial no. missing" until you add it.')) return;
+    if (!confirm('The vial number is empty.\n\nConfirm the sample WITHOUT a vial number? The patient is told the lab has the sample, and the booking shows "vial no. missing" until you add it.\n\nPress Cancel to go back and enter the vial number.')) return;
     saveVial(true);
   };
 
