@@ -168,6 +168,8 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS wa_outbox_status ON wa_outbox(status, created_at)`,
   // people who wrote to us: open 24-hour chat window + where they are in a menu
   `CREATE TABLE IF NOT EXISTS wa_contacts (phone TEXT PRIMARY KEY, name TEXT, last_in_at TEXT, state TEXT, state_data TEXT, state_at TEXT)`,
+  `CREATE TABLE IF NOT EXISTS activity (id INTEGER PRIMARY KEY AUTOINCREMENT, booking_id TEXT NOT NULL, at TEXT NOT NULL, who TEXT, role TEXT, what TEXT NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS activity_booking ON activity(booking_id, id)`,
   `CREATE TABLE IF NOT EXISTS wa_inbox (id INTEGER PRIMARY KEY AUTOINCREMENT, wa_id TEXT UNIQUE, phone TEXT NOT NULL, type TEXT, body TEXT, at TEXT NOT NULL)`,
 ];
 
@@ -1303,7 +1305,7 @@ const OPERATOR_OK = [
   ["GET", /^\/api\/admin\/(bookings|packages|centres|me)$/],
   ["POST", /^\/api\/admin\/bookings$/],
   ["GET", /^\/api\/admin\/lookup$/],
-  ["GET", /^\/api\/admin\/bookings\/DSL-[A-Z0-9]{6}\/(screenshot|reports?)$/],
+  ["GET", /^\/api\/admin\/bookings\/DSL-[A-Z0-9]{6}\/(screenshot|reports?|activity)$/],
   ["POST", /^\/api\/admin\/bookings\/DSL-[A-Z0-9]{6}\/(move|reports?|tests|vial|sent|status|centre|send|resched|cancel-centre)$/],
   ["GET", /^\/api\/admin\/reports\/\d{1,9}$/],
   ["DELETE", /^\/api\/admin\/reports\/\d{1,9}$/],
@@ -1972,6 +1974,7 @@ class Bot {
         // paid visits are moved by our team (the collection centre has to agree to the new time)
         await env.DB.prepare("UPDATE bookings SET resched_req=?1, resched_at=?2, resched_date=?3, resched_slot=?4, updated_at=?2 WHERE id=?5")
           .bind(`Asked for ${M.fmtDate(d)}, ${M.slotLabel(slot)}`, isoNow(), d, slot, b.id).run();
+        await logAct(env, b.id, `Patient (WhatsApp +91 ${this.phone})`, "patient", `Reschedule request: ${M.fmtDate(d)}, ${M.slotLabel(slot)}`);
         await this.say(`Thank you 🙏 We've asked for *${M.fmtDate(d)}, ${M.slotLabel(slot)}*.\n\nOur team will confirm the new time with the collector and message you here shortly. Until then your visit stays on *${M.fmtDate(b.date)}, ${M.slotLabel(b.slot)}*.`);
         await waEvent(env, "resched_req", b.id);
         return;
@@ -2040,6 +2043,7 @@ class Bot {
       await this.db.prepare("UPDATE bookings SET status='payment_submitted', paid_at=?1, updated_at=?1 WHERE id=?2 AND status IN ('pending','expired')").bind(now, b.id).run();
     }
     await this.state(null);
+    await logAct(env, b.id, `Patient (WhatsApp +91 ${this.phone})`, "patient", "Payment screenshot sent on WhatsApp");
     await this.say(`Thanks! We've received your payment screenshot for ${b.id} ✅ We'll confirm your booking as soon as we've checked it.`);
     return waEvent(env, "payment", b.id);
   }
@@ -2077,11 +2081,13 @@ class Bot {
       return this.list(msgFor(env, await templates(env), full, "center").text.slice(0, 1000), "What next?", rows);
     }
     if (a === "c_accept") {
+      await logAct(env, b.id, `${this.who.centre || "Centre"} (WhatsApp +91 ${this.phone})`, "centre", "Centre accepted the job on WhatsApp");
       await this.db.prepare("UPDATE bookings SET centre_status='accepted', centre_status_at=?1, updated_at=?1 WHERE id=?2").bind(isoNow(), b.id).run();
       await this.state("collector", b.id);
       return this.say(`Thank you ✅ Please reply with the *collector's name, mobile and arrival time* for ${b.name} – e.g.\nRamesh, 98765 43210, 8:30 AM\n\nWe'll send it to the patient.`);
     }
     if (a === "c_decline") {
+      await logAct(env, b.id, `${this.who.centre || "Centre"} (WhatsApp +91 ${this.phone})`, "centre", "Centre declined the job on WhatsApp");
       await this.db.prepare("UPDATE bookings SET centre_id=NULL, centre_status='declined', centre_status_at=?1, collector_info=NULL, updated_at=?1 WHERE id=?2").bind(isoNow(), b.id).run();
       await this.db.prepare("DELETE FROM msg_log WHERE booking_id=?1 AND kind IN ('center','done:center','done:centre_ok')").bind(b.id).run();
       await this.say("Noted 👍 We'll give this visit to another centre.");
@@ -2100,6 +2106,7 @@ class Bot {
       const info = clean(text, 200);
       if (info.length < 5) return this.say("Please send the collector's name, mobile and time, e.g. Ramesh, 98765 43210, 8:30 AM");
       await this.db.prepare("UPDATE bookings SET collector_info=?1, centre_status='accepted', centre_status_at=COALESCE(centre_status_at, ?2), updated_at=?2 WHERE id=?3").bind(info, isoNow(), b.id).run();
+      await logAct(env, b.id, `Centre (WhatsApp +91 ${this.phone})`, "centre", `Collector details: ${info}`);
       await this.state(null);
       const S = this.S;
       if (waAuto(env, S)) { await waEvent(env, "accepted", b.id); await this.say("Saved ✅ We've sent the collector details to the patient."); }
@@ -2110,7 +2117,7 @@ class Bot {
       const r = await reportVial(env, b, text);
       if (r.err) return this.say(r.err + " Send the vial no. again.");
       await this.state(null);
-      if (r.reported) await waEvent(env, "vial_reported", b.id);
+      if (r.reported) { await logAct(env, b.id, `Centre (WhatsApp +91 ${this.phone})`, "centre", `Vial no. sent by the centre: ${r.vial}`); await waEvent(env, "vial_reported", b.id); }
       await this.say(r.same ? `Vial *${r.vial}* is already saved for ${b.name} ✅` : `Thank you ✅ ${b.name} – vial *${r.vial}*. Our team will check it and confirm.`);
       return this.menu(false);
     }
@@ -2131,6 +2138,7 @@ class Bot {
     if (f.bytes.length > MAX_REPORT_BYTES) return this.say("That file is larger than 10 MB. Please send a smaller PDF.");
     if (String.fromCharCode(...f.bytes.subarray(0, 5)) !== "%PDF-") return this.say("That isn't a PDF. Please send the report as a PDF document.");
     await storeReport(env, b.id, f.bytes, clean(msg.document.filename || `${b.vial_no || b.id}.pdf`, 120));
+    await logAct(env, b.id, `Centre (WhatsApp +91 ${this.phone})`, "centre", "Report uploaded on WhatsApp");
     await waEvent(env, "report", b.id);
     return this.say(`Report saved for ${b.name} ✅ Send another PDF if there's more, or type *menu*.`);
   }
@@ -2486,6 +2494,42 @@ async function adminCancelCentre(env, req, id) {
   return json({ ok: true, sent: !!r.sent, queued: !r.sent && op, manual: !r.sent && !op, text: !r.sent && !op ? msgFor(env, await templates(env), row, "centre_cancel").text : undefined, phone: row.centre_phone || null });
 }
 
+// ---- activity log: who did what to a booking ----
+async function logAct(env, id, who, role, what) {
+  if (!id || !what) return;
+  await env.DB.prepare("INSERT INTO activity (booking_id, at, who, role, what) VALUES (?1, ?2, ?3, ?4, ?5)").bind(id, isoNow(), who || null, role || null, String(what).slice(0, 300)).run();
+}
+const STATUS_TXT = { pending: "Awaiting payment", payment_submitted: "Paid – to verify", confirmed: "Payment confirmed", collected: "Vial confirmed at lab", report_ready: "Report ready",
+  completed: "Completed", no_show: "Patient not available", cancelled: "Cancelled", expired: "Expired" };
+async function auditApi(env, req, am, b, res) {
+  const st = STAFF.get(req) || {};
+  const [, area, idIn, action] = am;
+  let id = idIn;
+  b = b || {};
+  if (!id && area === "admin") { const j = await res.json().catch(() => ({})); id = j.id; }
+  if (!id) return;
+  const centreName = async (cid) => { const c = cid ? await env.DB.prepare("SELECT name FROM centres WHERE id=?1").bind(cid).first() : null; return c ? c.name : "none"; };
+  let what = "";
+  if (!action) what = `Booking added (${STATUS_TXT[b.status] || "Payment confirmed"})${b.centre_id ? " · centre: " + (await centreName(b.centre_id)) : ""}`;
+  else if (area === "centre") what = action === "collected" ? `Vial no. sent by the centre: ${clean(b.vial_no, 40).toUpperCase()}` : action === "accept" ? `Centre accepted${b.collector ? " · collector: " + clean(b.collector, 120) : ""}` : action === "decline" ? "Centre declined the job" : action === "reports" ? "Report uploaded by the centre" : action;
+  else if (action === "status") what = `${STATUS_TXT[b.status] || b.status}${b.vial_no ? " · vial " + clean(b.vial_no, 40).toUpperCase() : b.status === "collected" && b.no_vial ? " · without vial no." : ""}`;
+  else if (action === "vial") what = `Vial no. changed to ${clean(b.vial_no, 40).toUpperCase()}`;
+  else if (action === "centre") what = `Collection centre: ${await centreName(b.centre_id)}`;
+  else if (action === "move") what = `Moved to ${M.fmtDate(b.date)}, ${M.slotLabel(b.slot)}`;
+  else if (action === "sent") what = b.kind === "done:centre_ok" ? "Centre acceptance ticked by hand" : b.kind === "undo-done" ? `Undid “${b.target}”` : String(b.kind).startsWith("done:") ? `Ticked “${String(b.kind).slice(5)}” as done` : `Sent “${b.kind}” by hand (own WhatsApp)`;
+  else if (action === "send") what = `Sent “${b.kind}” on WhatsApp`;
+  else if (action === "tests") what = "Packages changed";
+  else if (action === "reports" || action === "report") what = "Report uploaded";
+  else if (action === "resched") what = "Reschedule request dismissed";
+  else if (action === "cancel-centre") what = "Job cancelled at the centre";
+  else what = action;
+  await logAct(env, id, st.name || "Admin", st.role || null, what);
+}
+async function adminActivity(env, id) {
+  const { results } = await env.DB.prepare("SELECT at, who, role, what FROM activity WHERE booking_id=?1 ORDER BY id DESC LIMIT 100").bind(id).all();
+  return json({ activity: results });
+}
+
 // ---- router ----
 // run work after the response is sent (e.g. WhatsApp messages after an admin click)
 const CTX = new WeakMap();
@@ -2501,6 +2545,14 @@ export default {
     ctx.waitUntil((async () => { await ensureSchema(env); await waDaily(env); })());
   },
   async fetch(req, env, ctx) {
+    const path = new URL(req.url).pathname;
+    const am = req.method !== "GET" && path.match(/^\/api\/(admin|centre)\/bookings(?:\/(DSL-[A-Z0-9]{6})(?:\/([a-z-]+))?)?$/);
+    const body = am && (req.headers.get("content-type") || "").includes("json") ? await req.clone().json().catch(() => null) : null;
+    const res = await this.handle(req, env, ctx);
+    if (am && res.ok && env.DB) ctx.waitUntil(auditApi(env, req, am, body, res.clone()).catch((e) => console.log("audit", String(e))));
+    return res;
+  },
+  async handle(req, env, ctx) {
     CTX.set(req, ctx);
     const url = new URL(req.url);
     const p = url.pathname;
@@ -2563,6 +2615,8 @@ export default {
           if (m && req.method === "POST") return adminAssignCentre(env, req, m[1]);
           m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/send$/);
           if (m && req.method === "POST") return adminSend(env, req, m[1]);
+          m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/activity$/);
+          if (m && req.method === "GET") return adminActivity(env, m[1]);
           m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/resched$/);
           if (m && req.method === "POST") return adminResched(env, req, m[1]);
           m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/cancel-centre$/);
@@ -2606,6 +2660,7 @@ export default {
           if (p === "/api/centre/logout" && req.method === "POST") return logoutSession(env, req);
           const user = await getSession(env, req, "centre");
           if (!user) return bad("Please sign in again.", 401);
+          STAFF.set(req, { id: user.id, role: "centre", name: user.name + " (centre login)" });
           if (p === "/api/centre/bookings" && req.method === "GET") return centreBookings(env, user, url);
           m = p.match(/^\/api\/centre\/bookings\/(DSL-[A-Z0-9]{6})\/collected$/);
           if (m && req.method === "POST") return centreCollected(env, user, req, m[1]);
