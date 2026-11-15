@@ -216,7 +216,7 @@
         again: '', detail: b.collector_info ? `Collector: ${b.collector_info}` : '',
         autos: [['confirm', 'Booking confirmation to the patient'], ['collector', 'Collector details to the patient'], ['reminder', 'Visit reminder (evening before)']] },
       { key: 'collect', label: 'Vial submitted to lab', done: AFTER_COLLECT.includes(s), at: b.collected_at, avail: s === 'confirmed' && accepted,
-        act: btn('collect', b.vial_reported ? 'Check &amp; confirm vial' : 'Enter vial no.', 'blue'), again: b.vial_no ? btn('vial-edit', 'Edit vial', 'ghost') : btn('vial-edit', 'Add vial no.'),
+        act: btn('collect', b.vial_reported ? 'Check &amp; confirm vial' : 'Enter vial no.', 'blue'), again: isOp() ? '' : b.vial_no ? btn('vial-edit', 'Edit vial', 'ghost') : btn('vial-edit', 'Add vial no.'),
         detail: AFTER_COLLECT.includes(s) ? (b.vial_no ? `Vial ${b.vial_no}` : '⚠ vial no. missing') + (b.vial_reported ? ` · the centre sent ${b.vial_reported} – check it` : '')
           : b.vial_reported ? `The centre sent vial ${b.vial_reported} – check it against the tube and confirm` : '',
         autos: [['collected', '"Lab has received your sample" to the patient']] },
@@ -265,7 +265,7 @@
     return `<button type="button" class="stp-ic${sk ? ' sk' : ''}" data-act="steps" data-id="${b.id}" title="All steps${sk ? ` · ${sk} skipped` : ''} – click to do any step" aria-label="All steps, ${n} of ${all.length} done${sk ? `, ${sk} skipped` : ''}">${STEPS_SVG}<span>${n}/${all.length}</span></button>`;
   }
   const nextBar = (b) => `<div class="nx">${nextStep(b)}${stepsBtn(b)}</div>`;
-  const vialWarn = (b) => (AFTER_COLLECT.includes(b.status) && !b.vial_no ? `<button type="button" class="vial miss" data-act="vial-edit" data-id="${b.id}" title="Add the vial number">⚠ vial no. missing</button>` : '');
+  const vialWarn = (b) => (AFTER_COLLECT.includes(b.status) && !b.vial_no ? (isOp() ? '<span class="vial miss">⚠ vial no. missing</span>' : `<button type="button" class="vial miss" data-act="vial-edit" data-id="${b.id}" title="Add the vial number">⚠ vial no. missing</button>`) : '');
 
   // compact progress for the booking panel: dots + the next step + "All steps"
   function stepsCompact(b) {
@@ -929,11 +929,12 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     const notes = [];
     if (!edit && then) notes.push(`The sample has to be marked collected first – then you'll ${THEN_LBL[then]}.`);
     if (!edit && b.status === 'payment_submitted') notes.push('This also marks the payment as verified.');
-    if (b.vial_reported) notes.push(`The centre sent vial ${b.vial_reported}. Check it matches the label on the tube before you confirm.`);
+    if (!edit && b.vial_reported) notes.push('The centre has also sent a vial number. Type the number from the tube label – it is checked against the centre’s.');
+    if (!edit && isOp()) notes.push('Once confirmed, only an admin can change it.');
     if (!edit) notes.push('Confirming tells the patient on WhatsApp that the lab has received the sample.');
     $('#vialNote').textContent = notes.join(' '); $('#vialNote').hidden = !notes.length;
     $('#vialSkip').hidden = true; // only offered (to admins) after trying to save with an empty vial no.
-    $('#vialNo').value = b.vial_reported || b.vial_no || ''; $('#vialErr').textContent = '';
+    $('#vialNo').value = edit ? b.vial_no || '' : ''; $('#vialErr').textContent = '';
     $('#vialSave').textContent = edit ? 'Save vial number' : then ? 'Save & continue' : 'Confirm vial at lab';
     $('#vialEg').textContent = (b.vial_no || 'AB1234') + '.pdf';
     $$('dialog[open]').forEach((x) => x.close());
@@ -948,6 +949,9 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
       $('#vialNo').focus(); return;
     }
     const { id, edit, force, then } = vialCtx;
+    const bk = findB(id);
+    if (!edit && v && bk && bk.vial_reported && norm(v) !== norm(bk.vial_reported) &&
+      !confirm(`${norm(v)} doesn't match the vial number the centre sent (${bk.vial_reported}).\n\nCheck the tube label. Press OK only if ${norm(v)} is correct.`)) { $('#vialNo').focus(); return; }
     $('#vialSave').disabled = $('#vialSkip').disabled = true;
     try {
       if (edit) await post(`/api/admin/bookings/${id}/vial`, { vial_no: v, force });
@@ -1817,7 +1821,7 @@ ${t.meta !== false ? `<button type="button" class="btn ghost sm" data-act="wa-su
     else if (a === 'shot') viewShot(id);
     else if (a === 'wa') sendWa(id, el.dataset.kind);
     else if (a === 'collect') openVial(id, false);
-    else if (a === 'vial-edit') openVial(id, true);
+    else if (a === 'vial-edit') { if (isOp()) toast('Only an admin can change a confirmed vial number'); else openVial(id, true); }
     else if (a === 'reports') openReports(id);
     else if (a === 'steps') openSteps(id);
     else if (a === 'step') runStep(id, el.dataset.key);
