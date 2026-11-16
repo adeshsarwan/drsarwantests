@@ -1319,8 +1319,6 @@ const OPERATOR_OK = [
   ["POST", /^\/api\/admin\/bookings\/DSL-[A-Z0-9]{6}\/(move|reports?|tests|sent|status|centre|send|resched|cancel-centre)$/], // vial changes: admin only
   ["GET", /^\/api\/admin\/reports\/\d{1,9}$/],
   ["DELETE", /^\/api\/admin\/reports\/\d{1,9}$/],
-  ["GET", /^\/api\/admin\/wa\/(chats|chats\/\d{10}|media\/\d{1,12})$/],
-  ["POST", /^\/api\/admin\/wa\/chats\/\d{10}(\/bot)?$/],
 ];
 const operatorMay = (method, p) => OPERATOR_OK.some(([m, re]) => m === method && re.test(p));
 
