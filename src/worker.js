@@ -1292,6 +1292,18 @@ async function adminDeleteUser(env, id) {
 // ---- centre portal ----
 // New booking: everything we know about a mobile number (people on it, their addresses, last packages).
 async function adminLookup(env, url) {
+  // ?q=digits: patients whose number contains them, one row per person + address they used (latest first)
+  const q = String(url.searchParams.get("q") || "").replace(/\D/g, "").slice(-10);
+  if (url.searchParams.has("q")) {
+    if (q.length < 3) return json({ matches: [] });
+    const { results } = await env.DB.prepare(
+      `SELECT b.phone, b.patient_id, COALESCE(u.name, b.name) AS name, u.dob, b.address, b.pincode, b.city, b.state, b.package_name AS last_package, b.date AS last_date, MAX(b.created_at) AS last_at
+       FROM bookings b LEFT JOIN users u ON u.id = b.patient_id
+       WHERE b.phone LIKE ?1 AND b.status != 'blocked' AND b.name != ''
+       GROUP BY b.phone, COALESCE(CAST(b.patient_id AS TEXT), lower(b.name)), lower(trim(b.address)), b.pincode
+       ORDER BY (b.phone LIKE ?2) DESC, last_at DESC LIMIT 8`).bind(`%${q}%`, `${q}%`).all();
+    return json({ matches: results.map(({ last_at, patient_id, ...m }) => m) });
+  }
   const phone = normPhone(url.searchParams.get("phone") || "");
   if (!phone) return bad("Enter a valid 10-digit mobile number.");
   const [{ results: people }, { results: rows }] = await Promise.all([

@@ -613,3 +613,14 @@ button.stat:hover{border-color:var(--teal);box-shadow:0 0 0 2px #d8ecef}
 .pay-hint.ok{color:#17694a;font-weight:700}
 .pay-hint.warn{color:#8a5a00;font-weight:700}
 .pay-row select[hidden],.pay-hint[hidden]{display:none}
+/* add booking: patient autocomplete under the mobile number */
+#bkForm .fld:has(#fPhone){position:relative}
+.sug{position:absolute;left:0;right:0;top:100%;z-index:20;margin-top:4px;background:#fff;border:1px solid var(--line,#dfe6ec);border-radius:12px;box-shadow:0 12px 30px rgba(27,42,78,.16);max-height:340px;overflow-y:auto;padding:4px}
+.sug[hidden]{display:none}
+.sug-i{display:flex;flex-direction:column;gap:2px;width:100%;text-align:left;background:none;border:0;border-radius:9px;padding:9px 12px;font:inherit;color:inherit;cursor:pointer}
+.sug-i:hover,.sug-i.on{background:#f0f6f8}
+.sug-t{display:flex;justify-content:space-between;gap:10px}
+.sug-t span{color:var(--muted,#5a6880);font-variant-numeric:tabular-nums;white-space:nowrap}
+.sug-i small{color:var(--muted,#5a6880);font-size:12.5px;line-height:1.35}
+.sug-new b{color:var(--teal,#1f6977)}
+.sug-none{margin:0;padding:10px 12px;color:var(--muted,#5a6880);font-size:13.5px}

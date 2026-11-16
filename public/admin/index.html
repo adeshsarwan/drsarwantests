@@ -284,7 +284,7 @@
 <form id="bkForm" novalidate>
 <div class="dlg-h"><b id="formTitle">Add booking</b><div class="meta" id="formSub">For phone or walk-in bookings</div></div>
 <div class="dlg-b fgrid">
-<div class="fld wide add-only"><label for="fPhone">Patient's mobile (WhatsApp)</label><div class="ph-row"><span class="ph-cc">+91</span><input id="fPhone" name="phone" class="inp" inputmode="numeric" maxlength="14" autocomplete="off" placeholder="10-digit number – we fill in the rest if we know them"></div><div id="fFound" class="found" hidden></div></div>
+<div class="fld wide add-only"><label for="fPhone">Patient's mobile (WhatsApp)</label><div class="ph-row"><span class="ph-cc">+91</span><input id="fPhone" name="phone" class="inp" inputmode="numeric" maxlength="14" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="fFound" aria-expanded="false" placeholder="Type the number – pick the patient from the list"></div><div id="fFound" class="sug" role="listbox" aria-label="Matching patients" hidden></div></div>
 <div class="fld wide add-only tests-f"><span class="lbl" id="tLbl">Packages</span><div class="tpick" role="group" aria-labelledby="tLbl"><input id="tSearch" class="inp" type="search" placeholder="Search packages…" aria-label="Search packages" autocomplete="off"><div id="tList" class="tlist"></div></div><span class="meta" id="tSum"></span></div>
 <div class="fld add-only tests-f"><label for="fAmt">Amount charged (₹)</label><input id="fAmt" name="amount" class="inp" inputmode="numeric" autocomplete="off"></div>
 <div class="fld add-only"><label for="fCentre">Collection centre</label><select id="fCentre" name="centre_id" class="inp"></select></div>
