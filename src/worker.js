@@ -555,7 +555,8 @@ async function adminCreate(env, req) {
   const phone = normPhone(b.phone);
   const staff = STAFF.get(req), op = staff && staff.role !== "admin";
   // paid & confirmed, paid but to verify, or not paid yet (then the patient gets the payment link / a reminder on WhatsApp)
-  const status = ["confirmed", "payment_submitted", "pending"].includes(b.status) ? b.status : "confirmed";
+  // operators only take bookings that are already paid
+  const status = op ? "confirmed" : ["confirmed", "payment_submitted", "pending"].includes(b.status) ? b.status : "confirmed";
   const utr = String(b.utr || "").replace(/\s/g, "");
   if (utr && !/^[A-Za-z0-9]{6,22}$/.test(utr)) return bad("That transaction ID doesn't look right (6–22 letters or digits). You can leave it empty.");
   const centreId = b.centre_id ? parseInt(b.centre_id, 10) : null;

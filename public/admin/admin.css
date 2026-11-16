@@ -612,3 +612,4 @@ button.stat:hover{border-color:var(--teal);box-shadow:0 0 0 2px #d8ecef}
 .pay-hint{font-size:13px;color:var(--muted,#5a6880);margin-top:6px}
 .pay-hint.ok{color:#17694a;font-weight:700}
 .pay-hint.warn{color:#8a5a00;font-weight:700}
+.pay-row select[hidden],.pay-hint[hidden]{display:none}
