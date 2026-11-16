@@ -64,6 +64,11 @@
         'Hi {{first_name}} 👋', 'Your test results are ready 📄', '', '{{reports_list}}', '', 'Vial no.: {{vial}}',
         'Please share them with your doctor. Questions? Reply here or call 8368143677.', '',
         'You can open your reports any time on https://drsarwantests.com/reports/ with your mobile number and date of birth.', SIGN].join('\n') },
+    { key: 'paylink', label: 'Payment link (booked by our team, not paid yet)', to: 'patient', wa_name: 'dsl_payment_link', buttons: [],
+      body: [
+        'Hi {{first_name}} 👋', 'Your home test *{{tests}}* is booked for *{{date}}, {{slot}}*.', '',
+        'Please pay *{{amount}}* on this page – scan the QR code or open your UPI app, then upload the payment screenshot there:', '{{pay_link}}', '',
+        'Your visit is confirmed once we receive the payment. Questions? Reply here or call 8368143677.', SIGN].join('\n') },
     { key: 'pay', label: 'Payment reminder', to: 'patient', wa_name: 'dsl_payment_reminder', buttons: [{ id: 'pay', text: 'How to pay' }],
       body: [
         'Hi {{first_name}} 👋', "We received your request for *{{tests}}* on *{{date}}, {{slot}}*, but your payment hasn't reached us yet.", '',
@@ -94,7 +99,7 @@
     ['tests', 'Test names, comma separated'], ['tests_detail', 'Test name with what it includes (list if several)'], ['prep', '"Before the test" lines of the tests'],
     ['amount', 'e.g. ₹1,899'], ['upi_id', 'UPI ID'], ['fee', 'Visit fee after a missed visit'], ['missed_when', 'When the missed visit was'],
     ['notes', 'Booking notes'], ['vial', 'Vial no.'], ['centre', 'Collection centre name'], ['collector', 'Collector name, phone and time from the centre'],
-    ['reports_list', 'Names of the reports being sent'], ['slots_reason', 'Why new slots are offered'], ['slots_list', 'Numbered free slots'], ['alert', 'Team alert text'],
+    ['reports_list', 'Names of the reports being sent'], ['slots_reason', 'Why new slots are offered'], ['slots_list', 'Numbered free slots'], ['alert', 'Team alert text'], ['pay_link', 'Payment page link (QR code + screenshot upload)'],
   ];
   const MULTILINE = ['prep', 'slots_list', 'reports_list', 'tests_detail'];
 
@@ -146,6 +151,7 @@
       slots_list: sug.map((s, i) => `${i + 1}) ${fmtDate(s.date)}, ${slotLabel(s.slot)}`).join('\n') ||
         (ctx.kind === 'missed' ? '(please call us for a slot)' : '(no free slots in the next few days – please call us)'),
       alert: ctx.alert || '',
+      pay_link: b.token ? `https://drsarwantests.com/?pay=${b.id}&t=${b.token}#book` : 'https://drsarwantests.com/#book',
     };
   }
 

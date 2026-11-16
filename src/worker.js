@@ -421,6 +421,17 @@ async function createBooking(env, req) {
     upiId: env.UPI_ID || "", upiName: env.UPI_NAME || "Dr. Sarwan Diagnostic Labs", upiQr: env.UPI_QR_STRING || "" }, 201);
 }
 
+// The payment page behind the WhatsApp payment link (?pay=ID&t=TOKEN): what to pay and how.
+async function payInfo(env, url, id) {
+  const row = await env.DB.prepare("SELECT * FROM bookings WHERE id=?1").bind(id).first();
+  if (!row || !safeEqual(row.token, url.searchParams.get("t") || "")) return bad("This payment link isn't valid. Please call 8368143677.", 404);
+  if (!["pending", "expired", "payment_submitted"].includes(row.status)) return bad(row.status === "cancelled" ? "This booking was cancelled. Please call 8368143677." : "This booking is already paid ✅", 409);
+  const t = await env.DB.prepare("SELECT name FROM booking_tests WHERE booking_id=?1 ORDER BY id").bind(id).all();
+  return json({ id, token: row.token, date: row.date, dateLabel: prettyDate(row.date), slot: row.slot, slotLabel: slotLabel(row.slot), amount: row.amount,
+    testName: t.results.map((x) => x.name).join(", "), status: row.status, name: row.name, phone: row.phone, address: row.address, city: row.city, state: row.state, pincode: row.pincode,
+    upiId: env.UPI_ID || "", upiName: env.UPI_NAME || "Dr. Sarwan Diagnostic Labs", upiQr: env.UPI_QR_STRING || "" });
+}
+
 const MAX_SHOT_CHARS = 1_400_000; // ~1 MB image after base64; the browser compresses before upload
 
 async function submitPayment(env, req, id, ctx) {
@@ -515,7 +526,7 @@ async function adminList(env, url, staff) {
   const to = url.searchParams.get("to") || addDays(today, BOOK_DAYS_AHEAD);
   const includeInactive = url.searchParams.get("all") === "1";
   const { results } = await env.DB.prepare(
-    `SELECT id, date, slot, name, phone, address, pincode, city, state, cycle, notes, amount, status, utr, source, created_at, paid_at, updated_at,
+    `SELECT id, date, slot, name, phone, address, pincode, city, state, cycle, notes, amount, status, utr, token, source, created_at, paid_at, updated_at,
        package_id, package_name, vial_no, collected_at, report_name, report_size, report_token, report_at, completed_at, fee_due, fee_paid_at, missed_slot,
        centre_id, patient_id, consent_at, centre_status, centre_status_at, collector_info, resched_req, resched_at, resched_date, resched_slot, vial_reported, vial_reported_at, (SELECT dob FROM users u WHERE u.id = bookings.patient_id) AS dob,
        EXISTS(SELECT 1 FROM payment_proofs p WHERE p.booking_id = bookings.id) AS has_proof,
@@ -543,8 +554,10 @@ async function adminCreate(env, req) {
   const city = clean(b.city, 60), state = clean(b.state, 40), date = clean(b.date, 10), slot = clean(b.slot, 5);
   const phone = normPhone(b.phone);
   const staff = STAFF.get(req), op = staff && staff.role !== "admin";
-  // operators only take bookings that are already paid, and choose the collection centre right away
-  const status = op ? "confirmed" : ["confirmed", "payment_submitted", "pending"].includes(b.status) ? b.status : "confirmed";
+  // paid & confirmed, paid but to verify, or not paid yet (then the patient gets the payment link / a reminder on WhatsApp)
+  const status = ["confirmed", "payment_submitted", "pending"].includes(b.status) ? b.status : "confirmed";
+  const utr = String(b.utr || "").replace(/\s/g, "");
+  if (utr && !/^[A-Za-z0-9]{6,22}$/.test(utr)) return bad("That transaction ID doesn't look right (6–22 letters or digits). You can leave it empty.");
   const centreId = b.centre_id ? parseInt(b.centre_id, 10) : null;
   if (centreId) {
     const c = await env.DB.prepare("SELECT id, active FROM centres WHERE id=?1").bind(centreId).first();
@@ -579,11 +592,18 @@ async function adminCreate(env, req) {
     throw e;
   }
   await linkPatient(env, id, name, phone, dob, null);
+  if (utr) await env.DB.prepare("UPDATE bookings SET utr=?1 WHERE id=?2").bind(utr, id).run();
+  let msg = null;
   if (status === "confirmed") {
     if (centreId) await assignCentre(env, id, centreId); else await autoAssign(env, id);
     later(req, centreJob(env, req, id, "confirmed"));
-  } else if (centreId) await assignCentre(env, id, centreId);
-  return json({ ok: true, id }, 201);
+  } else {
+    if (centreId) await assignCentre(env, id, centreId);
+    // not paid yet → payment link; paid but not verified → payment reminder (sent now, so the form can say what happened)
+    const kind = status === "pending" ? "paylink" : "pay";
+    msg = { kind, ...(await sendKind(env, req, id, kind)) };
+  }
+  return json({ ok: true, id, msg }, 201);
 }
 
 // Tests chosen in the admin form: package_ids [..] (or a single package_id); default test if none given.
@@ -792,7 +812,7 @@ async function adminVial(env, req, id) {
 }
 
 // Admin opened WhatsApp with a message. Sending the report completes the job.
-const MSG_KINDS = ["pay", "confirm", "center", "collector", "reminder", "slots", "missed", "collected", "report", "prep", "moved", "centre_cancel", "chat"];
+const MSG_KINDS = ["paylink", "pay", "confirm", "center", "collector", "reminder", "slots", "missed", "collected", "report", "prep", "moved", "centre_cancel", "chat"];
 const DONE_KINDS = ["confirm", "center", "centre_ok", "collector", "reminder", "collected"]; // message steps that can be ticked as done by hand
 // A message sent by hand from someone's own WhatsApp (manual mode / "Send by hand") – also shown in Admin → Inbox.
 async function logHand(env, bookingId, kind, toPhone) {
@@ -2440,18 +2460,22 @@ async function adminWaOutbox(env, req, id) {
 async function adminSend(env, req, id) {
   const b = await req.json().catch(() => ({}));
   if (!MSG_KINDS.includes(b.kind) || b.kind === "chat") return bad("Invalid message type");
+  const sug = Array.isArray(b.sug) ? b.sug.filter((s) => s && /^\d{4}-\d{2}-\d{2}$/.test(s.date) && SLOTS.includes(s.slot)).slice(0, 5) : undefined;
+  return json(await sendKind(env, req, id, b.kind, { sug, reportIds: b.reportIds }));
+}
+// Send one message now. → { sent } | { queued } (operator: passed to the admin's Send by hand list) | { manual } (admin sends it by hand)
+async function sendKind(env, req, id, kind, opts = {}) {
   const S = await getSettings(env);
   const staff = STAFF.get(req), op = staff && staff.role !== "admin";
   if (!waReady(env, S) || waDown(S) || S.wa_mode !== "auto") {
-    if (!op) return json({ manual: true });
-    await queueForAdmin(env, id, b.kind, !waReady(env, S) ? "The WhatsApp API isn't set up yet." : waDown(S) ? `WhatsApp API paused: ${S.wa_down_reason}` : "Sending is set to Manual.");
-    return json({ queued: true });
+    if (!op) return { manual: true };
+    await queueForAdmin(env, id, kind, !waReady(env, S) ? "The WhatsApp API isn't set up yet." : waDown(S) ? `WhatsApp API paused: ${S.wa_down_reason}` : "Sending is set to Manual.");
+    return { queued: true };
   }
-  const sug = Array.isArray(b.sug) ? b.sug.filter((s) => s && /^\d{4}-\d{2}-\d{2}$/.test(s.date) && SLOTS.includes(s.slot)).slice(0, 5) : undefined;
-  const r = await deliver(env, id, b.kind, { S, sug, reportIds: b.reportIds });
-  if (r.manual && op) return json({ queued: true, error: r.error });
-  if (r.manual) await env.DB.prepare("UPDATE wa_outbox SET status='dismissed' WHERE booking_id=?1 AND kind=?2 AND status='failed'").bind(id, b.kind).run(); // the page sends it by hand now
-  return json(r);
+  const r = await deliver(env, id, kind, { S, ...opts });
+  if (r.manual && op) return { queued: true, error: r.error };
+  if (r.manual) await env.DB.prepare("UPDATE wa_outbox SET status='dismissed' WHERE booking_id=?1 AND kind=?2 AND status='failed'").bind(id, kind).run(); // the page sends it by hand now
+  return r;
 }
 
 // A message the API couldn't send, put in the admin's "Send by hand" list.
@@ -2580,6 +2604,8 @@ export default {
         if (rt && req.method === "GET") return publicReport(env, rt[1]);
         let m = p.match(/^\/api\/bookings\/(DSL-[A-Z0-9]{6})\/paid$/);
         if (m && req.method === "POST") return submitPayment(env, req, m[1], ctx);
+        m = p.match(/^\/api\/bookings\/(DSL-[A-Z0-9]{6})\/pay$/);
+        if (m && req.method === "GET") return payInfo(env, url, m[1]);
         m = p.match(/^\/api\/bookings\/(DSL-[A-Z0-9]{6})\/reslot$/);
         if (m && req.method === "POST") return reslot(env, req, m[1]);
 

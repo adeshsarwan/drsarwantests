@@ -1149,12 +1149,13 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   function openForm(mode, ctx) {
     form = { mode, id: ctx.id || null, fee: mode === 'move' && ctx.status === 'no_show', city: ctx.city || '' };
     $('#bkForm').reset(); $('#formErr').textContent = '';
+    $$('input, select, textarea, button', $('#bkForm')).forEach((el) => (el.disabled = false)); $('#fPayHint').classList.remove('ok', 'warn');
     $$('.add-only', $('#bkForm')).forEach((el) => (el.hidden = mode !== 'add'));
     $$('.tests-f', $('#bkForm')).forEach((el) => (el.hidden = !(mode === 'add' || mode === 'tests')));
     $$('.slot-f', $('#bkForm')).forEach((el) => (el.hidden = mode === 'tests'));
     $$('.fee-only', $('#bkForm')).forEach((el) => (el.hidden = !form.fee));
     $('#fFeeLbl').textContent = `${money(ctx.fee_due || CFG.visitFee)} visit fee received`;
-    if (mode === 'add') { $('#formTitle').textContent = 'Add booking'; $('#formSub').textContent = isOp() ? 'Paid booking – the job goes to the collection centre on WhatsApp' : 'For phone or walk-in bookings'; $('#formSave').textContent = 'Save booking'; }
+    if (mode === 'add') { $('#formTitle').textContent = 'Add booking'; $('#formSub').textContent = 'Phone or walk-in booking'; $('#formSave').textContent = 'Save booking'; }
     else if (mode === 'tests') { $('#formTitle').textContent = `Tests for ${ctx.name}`; $('#formSub').textContent = `${fmtD(ctx.date)} · ${slotLabel(ctx.slot)} · currently ${money(ctx.amount)}`; $('#formSave').textContent = 'Save tests'; }
     else { $('#formTitle').textContent = `${form.fee ? 'Rebook' : 'Reschedule'} ${ctx.name}`; $('#formSub').textContent = `Currently ${fmtD(ctx.date)} · ${slotLabel(ctx.slot)}`; $('#formSave').textContent = form.fee ? 'Rebook' : 'Move booking'; }
     $('#tSearch').value = '';
@@ -1163,8 +1164,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
       const live = CENTRES.filter((c) => c.active), defC = live.find((c) => c.is_default);
       $('#fCentre').innerHTML = (isOp() ? '<option value="">Choose the centre</option>' : '<option value="">Default centre / choose later</option>') + live.map((c) => `<option value="${c.id}">${esc(c.name)}${c.is_default ? ' (default)' : ''}</option>`).join('');
       $('#fCentre').value = defC ? String(defC.id) : live.length === 1 ? String(live[0].id) : '';
-      $('#fStatusNew').value = 'confirmed';
-      $$('.pay-f', $('#bkForm')).forEach((el) => (el.hidden = isOp()));
+      $('#fStatusNew').value = 'confirmed'; payUI();
       const def = PKGS.find((p) => p.active && p.is_default) || PKGS.find((p) => p.active);
       pick = new Set(def ? [def.id] : []); amtTouched = false; renderPick();
       if (!PKGS.length) loadPkgs().then(() => { const d = PKGS.find((p) => p.active && p.is_default); if (d && !pick.size) pick.add(d.id); renderPick(); }).catch(() => {});
@@ -1184,6 +1184,19 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     $('#fFound').hidden = true; $('#fFound').innerHTML = ''; found = null;
     setTimeout(() => (mode === 'add' ? $('#fPhone') : mode === 'tests' ? $('#tSearch') : $('#fDate')).focus(), 50);
   }
+  // payment: paid → optional transaction ID; not paid / to verify → WhatsApp button (payment link / reminder), also sent on save
+  const PAY_MSG = { pending: ['paylink', 'Send payment link', 'Payment link'], payment_submitted: ['pay', 'Send payment reminder', 'Payment reminder'] };
+  function payUI() {
+    const v = $('#fStatusNew').value, m = PAY_MSG[v];
+    $('#fUtr').hidden = !!m; $('#fPaySend').hidden = !m;
+    if (m) $('#fPaySend span').textContent = m[1];
+    if (form.created) return;
+    $('#fPayHint').textContent = !m ? 'The job goes to the collection centre on WhatsApp when you save.'
+      : v === 'pending' ? 'The patient gets a WhatsApp link to pay by scanning our QR code. If you don\'t send it now, it goes when you save.'
+      : 'The patient gets a WhatsApp reminder to complete the payment. If you don\'t send it now, it goes when you save.';
+  }
+  $('#fStatusNew').onchange = payUI;
+  $('#fPaySend').onclick = () => saveForm(true);
   // pick one or more tests
   let pick = new Set(), amtTouched = false;
   function renderPick() {
@@ -1255,21 +1268,46 @@ ${r.addresses.length ? `<div class="found-k">Address</div><div class="found-l">$
       else toast('Pincode not found – enter city and state');
     } catch (e) {}
   };
-  $('#bkForm').onsubmit = async (e) => {
-    e.preventDefault(); $('#formErr').textContent = '';
+  $('#bkForm').onsubmit = (e) => { e.preventDefault(); saveForm(false); };
+  async function saveForm(keepOpen) {
+    $('#formErr').textContent = '';
+    if (form.created) { $('#formDlg').close(); return; } // the booking was already saved by the Send button
     const fd = Object.fromEntries(new FormData($('#bkForm')).entries());
     if (form.fee && !$('#fFee').checked) { $('#formErr').textContent = 'Tick "visit fee received" once the patient has paid it.'; return; }
-    const btn = $('#formSave'); btn.disabled = true;
+    const btn = keepOpen ? $('#fPaySend') : $('#formSave'); btn.disabled = true;
     try {
       if (form.mode === 'add') {
         delete fd.feePaid;
         if (!pick.size) throw new Error('Pick at least one test.');
         if (!fd.state) throw new Error('Pick the state.');
         fd.package_ids = [...pick];
-        if (isOp()) { fd.status = 'confirmed'; if (!fd.centre_id) throw new Error('Choose the collection centre.'); }
-        await post('/api/admin/bookings', fd);
+        if (isOp() && !fd.centre_id) throw new Error('Choose the collection centre.');
+        if (fd.status !== 'confirmed') delete fd.utr;
+        const r = await post('/api/admin/bookings', fd);
         const c = CENTRES.find((x) => String(x.id) === String(fd.centre_id));
-        toast(fd.status === 'confirmed' && c ? `Booking added ✓ – the job goes to ${c.name} on WhatsApp` : 'Booking added');
+        if (!r.msg) { toast(c ? `Booking added ✓ – the job goes to ${c.name} on WhatsApp` : 'Booking added'); }
+        else {
+          const what = PAY_MSG[fd.status][2];
+          const line = r.msg.sent ? `✓ ${what} sent on WhatsApp · booking ${r.id} saved`
+            : r.msg.queued ? `Booking ${r.id} saved. The ${what.toLowerCase()} couldn't go out automatically – it's passed to the admin to send.`
+            : `Booking ${r.id} saved.`;
+          if (r.msg.manual) { // admin without automatic sending: send it by hand now
+            $('#formDlg').close(); await refreshAll();
+            const b = findB(r.id);
+            if (b) openMsg({ b, kind: r.msg.kind, title: 'Booking added ✓', sub: `Send the ${what.toLowerCase()} to ${b.name} · +91 ${b.phone}`, text: msgText(b, r.msg.kind) });
+            return;
+          }
+          if (keepOpen) {
+            form.created = r.id;
+            $$('input, select, textarea, button', $('#bkForm')).forEach((el) => { if (el.id !== 'formSave' && !el.dataset.close) el.disabled = true; });
+            $('#fPayHint').textContent = line; $('#fPayHint').classList.add(r.msg.sent ? 'ok' : 'warn');
+            $('#fPaySend span').textContent = r.msg.sent ? 'Sent' : 'Saved';
+            $('#formSave').textContent = 'Close';
+            refreshAll().catch(() => {});
+            return;
+          }
+          toast(line);
+        }
       }
       else if (form.mode === 'tests') {
         if (!pick.size) throw new Error('Pick at least one test.');
@@ -1287,8 +1325,8 @@ ${r.addresses.length ? `<div class="found-k">Address</div><div class="found-l">$
         else if (b) openMsg({ b, kind: 'moved', title: form.fee ? 'Rebooked ✓' : 'Booking moved ✓', sub: `Send the new time to ${b.name} · +91 ${b.phone}`, text: msgText(b, 'moved') });
       }
     } catch (err) { $('#formErr').textContent = err.message; }
-    finally { btn.disabled = false; }
-  };
+    finally { if (!form.created) btn.disabled = false; }
+  }
 
   // ================= COLLECTION CENTRES =================
   async function loadCentres() {

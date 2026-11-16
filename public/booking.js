@@ -42,6 +42,26 @@
       box.appendChild(b);
     });
     pickDate(state.cfg.dates[0]);
+    openPayLink();
+  }
+
+  // Payment link sent on WhatsApp by our team (?pay=ID&t=TOKEN): go straight to the payment step for that booking.
+  async function openPayLink() {
+    const id = params.get('pay'), t = params.get('t');
+    if (!id || !t) return;
+    try {
+      const r = await api(`/api/bookings/${encodeURIComponent(id)}/pay?t=${encodeURIComponent(t)}`);
+      state.booking = r;
+      state.form = { name: r.name, phone: r.phone, address: r.address, city: r.city, state: r.state, pincode: r.pincode };
+      root.querySelectorAll('.bk-amt').forEach((el) => (el.textContent = r.amount));
+      startPayment();
+      root.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (e) {
+      const n = document.createElement('p');
+      n.className = 'bk-err'; n.style.cssText = 'margin:0 0 12px;font-weight:700';
+      n.textContent = e.message;
+      root.prepend(n); root.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   }
 
   async function pickDate(d) {
