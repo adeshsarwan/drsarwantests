@@ -1155,7 +1155,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     $$('.slot-f', $('#bkForm')).forEach((el) => (el.hidden = mode === 'tests'));
     $$('.fee-only', $('#bkForm')).forEach((el) => (el.hidden = !form.fee));
     $('#fFeeLbl').textContent = `${money(ctx.fee_due || CFG.visitFee)} visit fee received`;
-    if (mode === 'add') { $('#formTitle').textContent = 'Add booking'; $('#formSub').textContent = 'Phone or walk-in booking'; $('#formSave').textContent = 'Save booking'; }
+    if (mode === 'add') { $('#formTitle').textContent = 'Add booking'; $('#formSub').textContent = isOp() ? 'Paid booking – the job goes to the collection centre on WhatsApp' : 'Phone or walk-in booking'; $('#formSave').textContent = 'Save booking'; }
     else if (mode === 'tests') { $('#formTitle').textContent = `Tests for ${ctx.name}`; $('#formSub').textContent = `${fmtD(ctx.date)} · ${slotLabel(ctx.slot)} · currently ${money(ctx.amount)}`; $('#formSave').textContent = 'Save tests'; }
     else { $('#formTitle').textContent = `${form.fee ? 'Rebook' : 'Reschedule'} ${ctx.name}`; $('#formSub').textContent = `Currently ${fmtD(ctx.date)} · ${slotLabel(ctx.slot)}`; $('#formSave').textContent = form.fee ? 'Rebook' : 'Move booking'; }
     $('#tSearch').value = '';
@@ -1165,6 +1165,10 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
       $('#fCentre').innerHTML = (isOp() ? '<option value="">Choose the centre</option>' : '<option value="">Default centre / choose later</option>') + live.map((c) => `<option value="${c.id}">${esc(c.name)}${c.is_default ? ' (default)' : ''}</option>`).join('');
       $('#fCentre').value = defC ? String(defC.id) : live.length === 1 ? String(live[0].id) : '';
       $('#fStatusNew').value = 'confirmed'; payUI();
+      // operators only add paid bookings: no payment choice, just the optional transaction ID
+      $('#fPayLbl').textContent = isOp() ? 'Transaction ID / UTR (optional)' : 'Payment';
+      $('#fPayLbl').htmlFor = isOp() ? 'fUtr' : 'fStatusNew';
+      $('#fStatusNew').hidden = isOp(); $('#fPayHint').hidden = isOp();
       const def = PKGS.find((p) => p.active && p.is_default) || PKGS.find((p) => p.active);
       pick = new Set(def ? [def.id] : []); amtTouched = false; renderPick();
       if (!PKGS.length) loadPkgs().then(() => { const d = PKGS.find((p) => p.active && p.is_default); if (d && !pick.size) pick.add(d.id); renderPick(); }).catch(() => {});
@@ -1281,7 +1285,7 @@ ${r.addresses.length ? `<div class="found-k">Address</div><div class="found-l">$
         if (!pick.size) throw new Error('Pick at least one test.');
         if (!fd.state) throw new Error('Pick the state.');
         fd.package_ids = [...pick];
-        if (isOp() && !fd.centre_id) throw new Error('Choose the collection centre.');
+        if (isOp()) { fd.status = 'confirmed'; if (!fd.centre_id) throw new Error('Choose the collection centre.'); }
         if (fd.status !== 'confirmed') delete fd.utr;
         const r = await post('/api/admin/bookings', fd);
         const c = CENTRES.find((x) => String(x.id) === String(fd.centre_id));
