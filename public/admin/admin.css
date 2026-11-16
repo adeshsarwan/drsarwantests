@@ -601,3 +601,14 @@ button.stat:hover{border-color:var(--teal);box-shadow:0 0 0 2px #d8ecef}
 .dt-addr[hidden]{display:none}
 .dt-addr{flex-direction:column;gap:6px;background:var(--bg);border-radius:12px;padding:10px 12px}
 .dt-addr a{align-self:flex-start;border:0;padding:0}
+/* add booking: payment row */
+.pay-row{display:flex;gap:8px;align-items:stretch;flex-wrap:wrap}
+.pay-row select{flex:1 1 200px;min-width:0}
+.pay-row #fUtr{flex:1 1 200px;min-width:0}
+.pay-row #fUtr[hidden],.pay-row .wa-send[hidden]{display:none}
+.btn.wa-send{background:#1f9d55;border-color:#1f9d55;color:#fff;display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
+.btn.wa-send:hover{background:#178a49}
+.btn.wa-send:disabled{opacity:.6}
+.pay-hint{font-size:13px;color:var(--muted,#5a6880);margin-top:6px}
+.pay-hint.ok{color:#17694a;font-weight:700}
+.pay-hint.warn{color:#8a5a00;font-weight:700}
