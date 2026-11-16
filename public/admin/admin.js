@@ -1255,14 +1255,14 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
       const same = (found || []).find((m) => m.phone === q);
       $('#fPhone').value = q; $('#fName').value = ''; $('#fDob').value = '';
       if (same && !$('#fAddr').value) fillAddr(same);
-      $('#fName').focus(); return;
+      return; // stay at the top: tests come next
     }
     const m = found[Number(i)]; if (!m) return;
     $('#fPhone').value = m.phone; $('#fName').value = m.name || ''; $('#fDob').value = m.dob || '';
     fillAddr(m);
     if (m.last_package) { const pk = PKGS.find((x) => x.active && x.name === m.last_package); if (pk) { pick = new Set([pk.id]); amtTouched = false; renderPick(); } }
-    toast(`${m.name}'s details filled in – check them and pick the date`);
-    $('#fDate').focus();
+    toast(`${m.name}'s details filled in – pick the tests, then the date`);
+    $('#tSearch').focus({ preventScroll: true }); // keep the form where it is: tests are right below
   }
   function fillAddr(m) {
     $('#fAddr').value = m.address || ''; $('#fPin').value = m.pincode || ''; $('#fCity').value = m.city || ''; setState(m.state || '');
