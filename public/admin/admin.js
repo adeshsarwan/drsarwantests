@@ -101,7 +101,7 @@
   }
   $('#logout').onclick = logout;
   // admin sees everything; an operator gets Operations, Bookings, Calendar and Inbox (no money, settings or sending by hand)
-  const ADMIN_TABS = ['bookings', 'tests', 'centres', 'users', 'wa']; // not shown to operators
+  const ADMIN_TABS = ['bookings', 'tests', 'centres', 'users', 'inbox', 'wa']; // not shown to operators
   function applyRole() {
     document.body.classList.toggle('is-op', isOp());
     $$('.tab').forEach((t) => (t.hidden = isOp() && ADMIN_TABS.includes(t.dataset.tab)));
@@ -147,7 +147,7 @@
   $$('.tab').forEach((t) => (t.onclick = () => showTab(t.getAttribute('data-tab'))));
 
   async function refreshAll() {
-    await Promise.all([load(), loadPkgs().catch(() => {}), loadCentres().catch(() => {}), isOp() ? null : loadWa(true).catch(() => {}), loadChats().catch(() => {})]);
+    await Promise.all([load(), loadPkgs().catch(() => {}), loadCentres().catch(() => {}), isOp() ? null : loadWa(true).catch(() => {}), isOp() ? null : loadChats().catch(() => {})]);
     renderOps();
     if (tab === 'calendar' || cal.data) await loadCal();
     if (detailId && $('#detailDlg').open) { const b = findB(detailId); if (b) $('#detailBody').innerHTML = detailHTML(b); }
@@ -284,7 +284,7 @@
     const can = MOVABLE.includes(b.status);
     return `<div class="rq"><div class="rq-h"><b>Reschedule request</b><span>${b.resched_at ? when(b.resched_at) : ''} · on WhatsApp</span></div>
 <p>${esc(b.resched_req)}</p>
-<div class="rq-a">${can ? `<button type="button" class="btn sm" data-act="move" data-id="${b.id}">Move to a new slot</button>` : ''}${b.centre_id && !AFTER_COLLECT.includes(b.status) ? `<button type="button" class="btn warn sm" data-act="cancel-centre" data-id="${b.id}">Cancel job at centre</button>` : ''}<button type="button" class="btn ghost sm" data-act="chat" data-id="${b.id}">Reply in Inbox</button><button type="button" class="lnk-b" data-act="resched-dismiss" data-id="${b.id}">Dismiss</button></div>
+<div class="rq-a">${can ? `<button type="button" class="btn sm" data-act="move" data-id="${b.id}">Move to a new slot</button>` : ''}${b.centre_id && !AFTER_COLLECT.includes(b.status) ? `<button type="button" class="btn warn sm" data-act="cancel-centre" data-id="${b.id}">Cancel job at centre</button>` : ''}${isOp() ? '' : `<button type="button" class="btn ghost sm" data-act="chat" data-id="${b.id}">Reply in Inbox</button>`}<button type="button" class="lnk-b" data-act="resched-dismiss" data-id="${b.id}">Dismiss</button></div>
 <small>Moving sends the new time to the patient and to the centre (the centre accepts it again). "Cancel job at centre" sends the centre a cancellation – then assign a centre again.</small></div>`;
   }
   // the pop-up: the 4 steps, what's been sent automatically under each, and the next action
@@ -411,7 +411,7 @@ ${histHTML(b.id)}</div>`;
   // one click: open WhatsApp with the message (slot suggestions are looked up first, in a preview)
   async function sendWa(id, kind) {
     const b = findB(id); if (!b) return;
-    if (kind === 'chat') { if (isOp()) { showTab('inbox'); openChat(b.phone).catch((e) => toast(e.message)); } else openWhatsApp(b.phone, ''); return; }
+    if (kind === 'chat') { if (!isOp()) openWhatsApp(b.phone, ''); return; }
     if (kind === 'report') { openReports(id); return; }
     if (isOp()) {
       // operators never send by hand: the message goes from 98180 28755, or it's passed to the admin
@@ -502,7 +502,7 @@ ${histHTML(b.id)}</div>`;
       : MOVABLE.includes(b.status) || locked ? `<button type="button" class="btn ghost sm" data-act="move" data-id="${b.id}"${locked ? ` disabled title="${lockTip}"` : ''}>Reschedule</button>` : '';
     return `<div class="dt-h">
 <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px"><div style="min-width:0"><div class="dt-name">${esc(b.name)}</div><div class="meta" style="margin-top:2px">Ref ${esc(b.id)} · +91 ${esc(b.phone)}</div></div>
-<div class="dt-hr"><span class="pill st-${b.status}" style="margin:0">${s.label}</span><span class="dt-ic"><button type="button" class="ic-loc${addrOpen.has(b.id) ? ' on' : ''}" data-addr="${esc(b.id)}" title="Address" aria-label="Show address"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 2a7 7 0 0 0-7 7c0 5.25 7 13 7 13s7-7.75 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg></button><a class="ic-call" href="tel:+91${esc(b.phone)}" title="Call +91 ${esc(b.phone)}" aria-label="Call"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1z"/></svg></a><a class="ic-wa" href="#" data-act="wa" data-kind="chat" data-id="${b.id}" title="${isOp() ? 'Chat in Inbox' : 'WhatsApp'}" aria-label="WhatsApp"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2zm4.5-6.1c-.25-.12-1.47-.72-1.7-.8s-.39-.12-.56.12-.64.8-.78.97-.29.19-.54.06a6.7 6.7 0 0 1-3.3-2.9c-.25-.43.25-.4.71-1.33a.45.45 0 0 0-.02-.42c-.06-.12-.56-1.34-.76-1.84s-.4-.42-.56-.43h-.48a.92.92 0 0 0-.66.31 2.8 2.8 0 0 0-.87 2.07 4.8 4.8 0 0 0 1 2.56 11 11 0 0 0 4.2 3.7c1.56.67 2.17.73 2.95.62a2.5 2.5 0 0 0 1.66-1.17 2 2 0 0 0 .14-1.17c-.06-.1-.23-.17-.48-.29z"/></svg></a></span></div></div>
+<div class="dt-hr"><span class="pill st-${b.status}" style="margin:0">${s.label}</span><span class="dt-ic"><button type="button" class="ic-loc${addrOpen.has(b.id) ? ' on' : ''}" data-addr="${esc(b.id)}" title="Address" aria-label="Show address"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 2a7 7 0 0 0-7 7c0 5.25 7 13 7 13s7-7.75 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg></button><a class="ic-call" href="tel:+91${esc(b.phone)}" title="Call +91 ${esc(b.phone)}" aria-label="Call"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1z"/></svg></a>${isOp() ? '' : `<a class="ic-wa" href="#" data-act="wa" data-kind="chat" data-id="${b.id}" title="WhatsApp" aria-label="WhatsApp"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2zm4.5-6.1c-.25-.12-1.47-.72-1.7-.8s-.39-.12-.56.12-.64.8-.78.97-.29.19-.54.06a6.7 6.7 0 0 1-3.3-2.9c-.25-.43.25-.4.71-1.33a.45.45 0 0 0-.02-.42c-.06-.12-.56-1.34-.76-1.84s-.4-.42-.56-.43h-.48a.92.92 0 0 0-.66.31 2.8 2.8 0 0 0-.87 2.07 4.8 4.8 0 0 0 1 2.56 11 11 0 0 0 4.2 3.7c1.56.67 2.17.73 2.95.62a2.5 2.5 0 0 0 1.66-1.17 2 2 0 0 0 .14-1.17c-.06-.1-.23-.17-.48-.29z"/></svg></a>`}</span></div></div>
 <div class="dt-tests"><ul class="tl">${t.map((x) => `<li><b>${esc(x.name)}</b><span>${money(x.price)}</span></li>`).join('') || '<li class="meta">No test recorded</li>'}</ul>${b.status !== 'cancelled' ? `<button type="button" class="btn ghost sm" data-act="tests-edit" data-id="${b.id}">Edit tests</button>` : ''}</div>
 <div class="dt-when"><span>${fmtD(b.date)} · ${esc(slotLabel(b.slot))}</span><span style="margin-left:auto">${resBtn}</span></div>
 <div class="dt-addr"${addrOpen.has(b.id) ? '' : ' hidden'}><span>${esc(b.address)}<br><b>${esc(b.city || '')}</b>${b.state ? ', ' + esc(b.state) : ''} – ${esc(b.pincode)}</span><a href="${mapUrl(b)}" target="_blank" rel="noopener">Open in Maps ↗</a></div>
@@ -611,7 +611,7 @@ ${f.length ? `<div class="dt-f">${f.join('')}</div>` : ''}`;
       return `<tr class="row" data-row="${b.id}">
 <td style="white-space:nowrap"><b>${fmt(b.date, { weekday: 'short', day: 'numeric', month: 'short' })}</b><small>${esc(slotLabel(b.slot))}</small><small>${esc(b.id)}</small></td>
 <td><button type="button" class="lnk" data-act="open" data-id="${b.id}">${esc(b.name)}</button>${testsOf(b).map((t) => `<span class="test-l">🧪 ${esc(t.name)}</span>`).join('')}${b.vial_no ? `<span class="vial">${esc(b.vial_no)}</span>` : vialWarn(b)}${repBtn}</td>
-<td style="white-space:nowrap"><a href="tel:+91${esc(b.phone)}">${esc(b.phone)}</a><small><a href="#" data-act="wa" data-kind="chat" data-id="${b.id}">WhatsApp</a></small></td>
+<td style="white-space:nowrap"><a href="tel:+91${esc(b.phone)}">${esc(b.phone)}</a>${isOp() ? '' : `<small><a href="#" data-act="wa" data-kind="chat" data-id="${b.id}">WhatsApp</a></small>`}</td>
 <td class="addr">${esc(b.address)}<small>PIN ${esc(b.pincode)} · <a href="${mapUrl(b)}" target="_blank" rel="noopener">Map</a></small></td>
 <td>${esc(b.city || '–')}</td>
 <td>${esc(b.state || '–')}</td>
@@ -1509,7 +1509,6 @@ ${r.addresses.length ? `<div class="found-k">Address</div><div class="found-l">$
       } else if (idx === 3) {
         if (!reps.length) {
           const m = minsSince(b.collected_at);
-          if (m <= LATE_MIN.report_wait) { atLab++; }
           items.push({ ...base, stage: 'send', since: m, late: m > LATE_MIN.report_wait, note: `At lab${b.vial_no ? ' · vial ' + b.vial_no : ''} · waiting for the report`, action: cur.act, quiet: m <= LATE_MIN.report_wait });
         } else {
           const m = minsSince(reps[reps.length - 1].created_at);
@@ -1527,15 +1526,15 @@ ${r.addresses.length ? `<div class="found-k">Address</div><div class="found-l">$
     if (tab !== 'ops' || !data) return;
     $('#opsDate').textContent = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'long', day: 'numeric', month: 'long', hour: 'numeric', minute: '2-digit' });
     const today = data.bookings.filter((b) => b.date === ist() && ['confirmed', ...AFTER_COLLECT].includes(b.status)).length;
-    $('#opsSum').innerHTML = `<span><b>${items.filter((x) => !x.quiet).length}</b> need you</span><span><b>${today}</b> visit${today === 1 ? '' : 's'} today</span>`;
+    $('#opsSum').innerHTML = `<span><b>${items.length}</b> need you</span><span><b>${today}</b> visit${today === 1 ? '' : 's'} today</span>`;
     $('#opsAttn').innerHTML = `<span class="ops-attn-n">${late.length}</span><span class="ops-attn-t"><b>${late.length ? 'Need your attention now' : 'Nothing is late'}</b><span>${late.length ? 'Bookings waiting longer than usual at any step – oldest first.' : 'Every booking is moving on time.'}</span></span><span class="ops-attn-c">${opsView === 'late' ? 'Showing below' : 'Show them'}</span>`;
     $('#opsAttn').classList.toggle('none', !late.length); $('#opsAttn').setAttribute('aria-pressed', String(opsView === 'late'));
     $('#opsTiles').innerHTML = OPS.map((o) => {
-      const mine = items.filter((x) => x.stage === o.key && !x.quiet), nl = mine.filter((x) => x.late).length, sel = opsView === o.key;
+      const mine = items.filter((x) => x.stage === o.key), nl = mine.filter((x) => x.late).length, sel = opsView === o.key;
       return `<button type="button" role="tab" aria-selected="${sel}" class="ops-tile${sel ? ' on' : ''}${o.key === 'resched' ? ' rq-t' : ''}${nl ? ' has-late' : ''}" data-act="ops-view" data-v="${o.key}">
 <span class="ops-n">${mine.length}${nl ? `<em>${nl} late</em>` : ''}</span><span class="ops-tag">${o.tag}</span><b>${o.title}</b><small>${o.who}</small></button>`;
     }).join('');
-    $('#opsAuto').textContent = `Running by itself: ${waitingVisit} visit${waitingVisit === 1 ? '' : 's'} booked for the coming days, ${atLab} sample${atLab === 1 ? '' : 's'} at the lab${unpaid ? `, ${unpaid} booking${unpaid === 1 ? '' : 's'} waiting for payment` : ''}. The job to the centre, the patient's confirmation, the visit reminder and "sample received" go out automatically from 98180 28755.`;
+    $('#opsAuto').textContent = `Running by itself: ${waitingVisit} visit${waitingVisit === 1 ? '' : 's'} booked for the coming days${unpaid ? `, ${unpaid} booking${unpaid === 1 ? '' : 's'} waiting for payment` : ''}. The job to the centre, the patient's confirmation, the visit reminder and "sample received" go out automatically from 98180 28755.`;
     let list, title, sub;
     if (opsView === 'all') { list = items.slice().sort((x, y) => OPS.findIndex((o) => o.key === x.stage) - OPS.findIndex((o) => o.key === y.stage)); title = 'All open bookings'; sub = 'Everything that needs you now or soon, in step order'; }
     else if (opsView === 'late') { list = late; title = 'Need your attention now'; sub = late.length ? `${late.length} booking${late.length === 1 ? '' : 's'} waiting longer than usual – oldest first` : 'Nothing is late right now.'; }
