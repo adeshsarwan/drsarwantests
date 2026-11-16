@@ -1223,46 +1223,66 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     sel.value = o.value;
   }
   $('#fDate').onchange = () => fillSlots($('#fDate').value, $('#fSlot').value, form.id);
-  // mobile number first: if we know it, the people on it and their addresses are one click away
-  let found = null, lookT;
+  // mobile number first: type a few digits → pick the patient from the list → the form fills in
+  let found = null, lookT, sugIdx = -1;
+  const digitsOf = () => $('#fPhone').value.replace(/\D/g, '').slice(-10);
+  const sugBox = () => $('#fFound');
+  function hideSug() { sugBox().hidden = true; $('#fPhone').setAttribute('aria-expanded', 'false'); sugIdx = -1; }
   $('#fPhone').addEventListener('input', () => {
     clearTimeout(lookT);
-    const ph = $('#fPhone').value.replace(/\D/g, '').slice(-10);
-    if (!/^[6-9]\d{9}$/.test(ph)) { $('#fFound').hidden = true; found = null; return; }
+    const q = digitsOf();
+    if (q.length < 3) { hideSug(); found = null; return; }
     lookT = setTimeout(async () => {
       try {
-        const r = await api('/api/admin/lookup?phone=' + ph);
-        if ($('#fPhone').value.replace(/\D/g, '').slice(-10) !== ph) return;
-        found = r; renderFound();
+        const r = await api('/api/admin/lookup?q=' + q);
+        if (digitsOf() !== q) return;
+        found = r.matches; sugIdx = -1; renderSug(q);
       } catch (e) {}
-    }, 250);
+    }, 200);
   });
-  function renderFound() {
-    const r = found, box = $('#fFound');
-    if (!r) { box.hidden = true; return; }
-    box.hidden = false;
-    if (!r.people.length && !r.addresses.length) { box.innerHTML = '<div class="found-h new"><b>New number.</b> Fill in the details below – they\'re saved for next time.</div>'; return; }
-    box.innerHTML = `<div class="found-h"><b>Returning number</b> · ${r.people.length} ${r.people.length === 1 ? 'person' : 'people'} · ${r.bookings} booking${r.bookings === 1 ? '' : 's'}</div>
-<div class="found-k">Who is the test for?</div><div class="found-l">${r.people.map((p, i) => `<button type="button" class="found-b" data-fp="${i}"><b>${esc(p.name)}</b><small>${p.dob ? 'Born ' + fmt(p.dob, { day: 'numeric', month: 'short', year: 'numeric' }) : 'No date of birth'}${p.last_package ? ' · last: ' + esc(p.last_package) : ''}</small></button>`).join('')}<button type="button" class="found-b" data-fp="new"><b>+ Someone else</b><small>New person on this number</small></button></div>
-${r.addresses.length ? `<div class="found-k">Address</div><div class="found-l">${r.addresses.map((a, i) => `<button type="button" class="found-b" data-fa="${i}"><b>${esc(a.city || a.pincode)}</b><small>${esc(a.address)} · ${esc(a.pincode)}</small></button>`).join('')}</div>` : ''}`;
+  function renderSug(q) {
+    const box = sugBox(), full = /^[6-9]\d{9}$/.test(q);
+    const rows = found.map((m, i) => `<button type="button" role="option" class="sug-i" id="sug${i}" data-si="${i}"><span class="sug-t"><b>${esc(m.name)}</b><span>+91 ${esc(m.phone)}</span></span><small>${esc([m.address, m.city].filter(Boolean).join(', '))}${m.pincode ? ' · ' + esc(m.pincode) : ''}</small><small>${m.dob ? 'Born ' + fmt(m.dob, { day: 'numeric', month: 'short', year: 'numeric' }) + ' · ' : ''}${m.last_package ? 'last: ' + esc(m.last_package) : ''}${m.last_date ? ' (' + fmtD(m.last_date) + ')' : ''}</small></button>`);
+    if (full) rows.push(`<button type="button" role="option" class="sug-i sug-new" id="sug${found.length}" data-si="new"><span class="sug-t"><b>+ ${found.some((m) => m.phone === q) ? 'Someone else on this number' : 'New patient'}</b><span>+91 ${q}</span></span><small>Fill in the details below – they're saved for next time</small></button>`);
+    if (!rows.length) { box.innerHTML = '<p class="sug-none">No patient found yet – keep typing the number</p>'; }
+    else box.innerHTML = rows.join('');
+    box.hidden = false; $('#fPhone').setAttribute('aria-expanded', 'true');
   }
-  $('#fFound').addEventListener('click', (e) => {
-    const p = e.target.closest('[data-fp]'), a = e.target.closest('[data-fa]');
-    if (p) {
-      $$('[data-fp]', $('#fFound')).forEach((x) => x.classList.toggle('on', x === p));
-      const person = p.dataset.fp === 'new' ? null : found.people[Number(p.dataset.fp)];
-      $('#fName').value = person ? person.name : ''; $('#fDob').value = person && person.dob ? person.dob : '';
-      if (person && person.last_package) { const pk = PKGS.find((x) => x.active && x.name === person.last_package); if (pk) { pick = new Set([pk.id]); amtTouched = false; renderPick(); } }
-      if (!person) $('#fName').focus();
-      if (found.addresses.length === 1 && !$('#fAddr').value) $('[data-fa="0"]', $('#fFound')).click();
+  function pickSug(i) {
+    const q = digitsOf();
+    hideSug();
+    if (i === 'new') {
+      const same = (found || []).find((m) => m.phone === q);
+      $('#fPhone').value = q; $('#fName').value = ''; $('#fDob').value = '';
+      if (same && !$('#fAddr').value) fillAddr(same);
+      $('#fName').focus(); return;
     }
-    if (a) {
-      $$('[data-fa]', $('#fFound')).forEach((x) => x.classList.toggle('on', x === a));
-      const ad = found.addresses[Number(a.dataset.fa)];
-      $('#fAddr').value = ad.address; $('#fPin').value = ad.pincode || ''; $('#fCity').value = ad.city || ''; setState(ad.state || '');
-      fillSlots($('#fDate').value, $('#fSlot').value, form.id);
-    }
+    const m = found[Number(i)]; if (!m) return;
+    $('#fPhone').value = m.phone; $('#fName').value = m.name || ''; $('#fDob').value = m.dob || '';
+    fillAddr(m);
+    if (m.last_package) { const pk = PKGS.find((x) => x.active && x.name === m.last_package); if (pk) { pick = new Set([pk.id]); amtTouched = false; renderPick(); } }
+    toast(`${m.name}'s details filled in – check them and pick the date`);
+    $('#fDate').focus();
+  }
+  function fillAddr(m) {
+    $('#fAddr').value = m.address || ''; $('#fPin').value = m.pincode || ''; $('#fCity').value = m.city || ''; setState(m.state || '');
+    fillSlots($('#fDate').value, $('#fSlot').value, form.id);
+  }
+  $('#fFound').addEventListener('mousedown', (e) => e.preventDefault()); // keep focus in the number box while clicking
+  $('#fFound').addEventListener('click', (e) => { const o = e.target.closest('[data-si]'); if (o) pickSug(o.dataset.si); });
+  $('#fPhone').addEventListener('keydown', (e) => {
+    const opts = $$('[data-si]', sugBox());
+    if (sugBox().hidden || !opts.length) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      sugIdx = (sugIdx + (e.key === 'ArrowDown' ? 1 : -1) + opts.length) % opts.length;
+      opts.forEach((o, k) => o.classList.toggle('on', k === sugIdx));
+      opts[sugIdx].scrollIntoView({ block: 'nearest' });
+      $('#fPhone').setAttribute('aria-activedescendant', opts[sugIdx].id);
+    } else if (e.key === 'Enter' && sugIdx >= 0) { e.preventDefault(); pickSug(opts[sugIdx].dataset.si); }
+    else if (e.key === 'Escape') { e.preventDefault(); hideSug(); }
   });
+  $('#fPhone').addEventListener('blur', () => setTimeout(hideSug, 150));
   $('#fPin').oninput = async () => {
     const v = $('#fPin').value.replace(/\D/g, '').slice(0, 6); $('#fPin').value = v;
     if (v.length !== 6) return;
