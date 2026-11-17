@@ -43,8 +43,8 @@ Unpaid bookings never block a slot and are marked expired after 2 hours.
 - **Admin → WhatsApp** switches between *Manual* (open WhatsApp and send, as before) and *Automatic*
   (the WhatsApp Cloud API sends each message by itself). Both use the **same texts** (`public/shared/msgs.js`, editable in the tab)
   and the **same steps**, so the progress bar looks the same either way.
-- If the API can't send something (template not approved yet, payment or token problem, number not on WhatsApp), it lands in
-  **Send by hand** (also shown as a banner on Bookings): one click opens WhatsApp with the same text and ticks the step.
+- If the API can't send something (template not approved yet, payment or token problem, number not on WhatsApp), it shows as
+  **Not sent** in that person's chat in Inbox (banner on Bookings → Inbox → *Not sent*): *Send by hand* opens WhatsApp with the same text and ticks the step.
   Token / payment / account errors pause the API for 30 minutes so nothing is lost.
 - Automatic messages: booking confirmation (+ team alert to choose a centre) when you confirm the payment → booking details to the
   centre when you choose it → collector details to the patient when the centre accepts → reminder at 7 PM the evening before
@@ -68,9 +68,9 @@ Unpaid bookings never block a slot and are marked expired after 2 hours.
   Vial numbers have no fixed format – the AI looks for what the centre typed anywhere in the report. The centre confirms or fixes each row.
 - **Operations → Reports to approve**: nothing reaches a patient until an operator approves it. Only clean ✅ rows can be approved together;
   anything else needs a short reason. Reassign / Reject (the centre is told why) / interim: *Send interim now* or *Wait for final*.
-- Setup: Cloudflare secret `OPENAI_API_KEY` (without it reports are checked by hand); model in Admin → WhatsApp (default gpt-5-mini).
+- Setup: Cloudflare secret `ANTHROPIC_API_KEY` – a Claude API key (without it reports are checked by hand); model in Admin → WhatsApp (default claude-sonnet-5-5).
   A cron runs every minute for the checks.
-- Messages the API couldn't send also show in that person's chat in **Inbox** ("Not sent" + reason + Send by hand).
+- Messages the API couldn't send show in that person's chat in **Inbox** ("Not sent" + reason + Send by hand / Not needed); the **Not sent** filter lists those chats.
   Pending WhatsApp template approvals are re-checked with Meta every 10 minutes.
 
 ## One-time Cloudflare setup

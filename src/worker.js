@@ -1539,9 +1539,10 @@ async function patientReportFile(env, s, rid) {
 // =====================================================================
 // The AI only READS the report (names, ages, IDs, dates, tests on every page). Matching to a patient is done here in code,
 // so the rules are the same every time and the reasons can be shown to the centre and the operator.
-// Secret: OPENAI_API_KEY (Cloudflare → Worker → Settings → Variables and Secrets). Model: Admin → WhatsApp → "AI model".
-// Without the key, reports still flow; they are marked "AI check off" and matched by hand.
-const AI_MODEL_DEFAULT = "gpt-5-mini";
+// Claude (Anthropic API) reads the PDF. Secret: ANTHROPIC_API_KEY (or CLAUDE_API_KEY) in Cloudflare → Worker → Settings → Variables and Secrets.
+// Model: Admin → WhatsApp → "AI model". Without a key, reports still flow; they are marked "AI check off" and matched by hand.
+const AI_MODEL_DEFAULT = "claude-sonnet-5-5";
+const aiKey = (env) => env.ANTHROPIC_API_KEY || env.CLAUDE_API_KEY || "";
 const REPORT_PENDING_STATES = ["confirmed", "collected", "report_ready", "completed"]; // bookings a report can belong to
 const REPORT_LOOKBACK_DAYS = 60;
 const AI_STALE_MIN = 4; // a check still "checking" after this long was cut off → try again
@@ -1577,7 +1578,7 @@ Extract exactly what is printed – never guess or correct spellings.
 - identifiers: every barcode, sample number, lab number, accession, visit or patient ID and its label as printed (e.g. "BarcodeNO", "Sample Type | Barcode").
 - report_status: "interim" if the report says interim/partial/provisional or some tests are still pending/processing, "final" if it says final, else "unknown".
 - tests: names of the tests or panels reported.
-Return only the JSON.`;
+Report what you found with the lab_report tool.`;
 
 async function reportB64(env, rid) {
   const { results } = await env.DB.prepare("SELECT data FROM report_parts WHERE report_id=?1 ORDER BY idx").bind(rid).all();
@@ -1585,23 +1586,25 @@ async function reportB64(env, rid) {
 }
 async function aiReadReport(env, S, rid, filename) {
   const b64 = await reportB64(env, rid);
-  const r = await fetch(`${env.OPENAI_URL || "https://api.openai.com"}/v1/responses`, {
+  const r = await fetch(`${env.ANTHROPIC_URL || "https://api.anthropic.com"}/v1/messages`, {
     method: "POST",
-    headers: { authorization: `Bearer ${env.OPENAI_API_KEY}`, "content-type": "application/json" },
+    headers: { "x-api-key": aiKey(env), "anthropic-version": "2023-06-01", "content-type": "application/json" },
     body: JSON.stringify({
       model: S.ai_model || AI_MODEL_DEFAULT,
-      input: [{ role: "user", content: [
-        { type: "input_file", filename: String(filename || "report.pdf").replace(/[^\w.\- ]+/g, "_").slice(0, 100) || "report.pdf", file_data: `data:application/pdf;base64,${b64}` },
-        { type: "input_text", text: AI_PROMPT },
+      max_tokens: 4000,
+      tools: [{ name: "lab_report", description: "What is printed in the lab report: patients per page, IDs, dates, status and tests.", input_schema: AI_SCHEMA }],
+      tool_choice: { type: "tool", name: "lab_report" },
+      messages: [{ role: "user", content: [
+        { type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 }, title: String(filename || "report.pdf").slice(0, 200) },
+        { type: "text", text: AI_PROMPT },
       ] }],
-      text: { format: { type: "json_schema", name: "lab_report", strict: true, schema: AI_SCHEMA } },
     }),
   });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok || j.error) throw new Error((j.error && j.error.message) || `AI check failed (${r.status})`);
-  const out = j.output_text || (j.output || []).flatMap((o) => o.content || []).filter((c) => c.type === "output_text").map((c) => c.text).join("");
-  const data = JSON.parse(out);
-  return data;
+  if (!r.ok || j.type === "error") throw new Error((j.error && j.error.message) || `AI check failed (${r.status})`);
+  const use = (j.content || []).find((c) => c.type === "tool_use" && c.name === "lab_report");
+  if (!use || !use.input) throw new Error("The AI didn't return the report details");
+  return use.input;
 }
 
 // ---- matching helpers ----
@@ -1758,14 +1761,14 @@ async function checkReport(env, S, rid) {
   if (!claim.meta.changes) return;
   const f = await env.DB.prepare("SELECT * FROM report_files WHERE id=?1").bind(rid).first();
   let ai = null, err = null;
-  if (env.OPENAI_API_KEY) {
+  if (aiKey(env)) {
     try { ai = await aiReadReport(env, S, rid, f.name); } catch (e) { err = e && e.message ? e.message : String(e); console.log("AI report check failed", rid, err); }
   }
   const m = await matchReport(env, f, ai, err);
   // a report from the centre portal stays on the booking the centre chose; the operator sees the AI's opinion
   const bookingId = f.src === "portal" ? f.booking_id : f.booking_id || "";
   await env.DB.prepare("UPDATE report_files SET ai_status=?1, ai_at=?2, ai_json=?3, match_status=?4, match_json=?5, booking_id=?6 WHERE id=?7")
-    .bind(ai ? "done" : env.OPENAI_API_KEY ? "error" : "off", isoNow(), ai ? JSON.stringify(ai).slice(0, 60000) : err, m.status, JSON.stringify(m), bookingId, rid).run();
+    .bind(ai ? "done" : aiKey(env) ? "error" : "off", isoNow(), ai ? JSON.stringify(ai).slice(0, 60000) : err, m.status, JSON.stringify(m), bookingId, rid).run();
 }
 
 // Every minute: check new reports, then show each finished batch to its centre (1 minute after the last PDF, or after DONE).
@@ -3157,7 +3160,7 @@ async function adminWa(env, url) {
   }
   return json({
     settings: Object.fromEntries(Object.entries(S).filter(([k]) => k in WA_DEFAULTS)),
-    secrets: { WA_TOKEN: !!env.WA_TOKEN, WA_APP_SECRET: !!env.WA_APP_SECRET, WA_VERIFY_TOKEN: !!env.WA_VERIFY_TOKEN, OPENAI_API_KEY: !!env.OPENAI_API_KEY },
+    secrets: { WA_TOKEN: !!env.WA_TOKEN, WA_APP_SECRET: !!env.WA_APP_SECRET, WA_VERIFY_TOKEN: !!env.WA_VERIFY_TOKEN, AI_KEY: env.ANTHROPIC_API_KEY ? "ANTHROPIC_API_KEY" : env.CLAUDE_API_KEY ? "CLAUDE_API_KEY" : "" },
     ai_model_default: AI_MODEL_DEFAULT,
     ready: waReady(env, S), auto: waAuto(env, S), down: waDown(S),
     webhook: `${url.origin}/api/wa/webhook`, templates: T, vars: M.VARS, menus, actions: MENU_ACTIONS, failed, recent,
@@ -3189,7 +3192,8 @@ async function chatPeople(env, S, phones) {
 async function adminChats(env) {
   const S = await getSettings(env);
   const { results } = await env.DB.prepare(`SELECT i.phone, MAX(i.id) AS last_id,
-      SUM(CASE WHEN COALESCE(i.dir, 'in') = 'in' AND i.at > COALESCE(c.read_at, '') THEN 1 ELSE 0 END) AS unread
+      SUM(CASE WHEN COALESCE(i.dir, 'in') = 'in' AND i.at > COALESCE(c.read_at, '') THEN 1 ELSE 0 END) AS unread,
+      SUM(CASE WHEN i.status = 'failed' AND i.wa_id LIKE 'fail-%' THEN 1 ELSE 0 END) AS notsent
     FROM wa_inbox i LEFT JOIN wa_contacts c ON c.phone = i.phone GROUP BY i.phone ORDER BY last_id DESC LIMIT 300`).all();
   const last = {};
   for (let i = 0; i < results.length; i += 90) {
@@ -3199,7 +3203,7 @@ async function adminChats(env) {
   }
   const people = {};
   for (let i = 0; i < results.length; i += 90) Object.assign(people, await chatPeople(env, S, results.slice(i, i + 90).map((r) => r.phone)));
-  return json({ chats: results.map((r) => ({ ...people[r.phone], unread: r.unread || 0, last: last[r.phone] || null })), ready: waReady(env, S) });
+  return json({ chats: results.map((r) => ({ ...people[r.phone], unread: r.unread || 0, notsent: r.notsent || 0, last: last[r.phone] || null })), ready: waReady(env, S) });
 }
 async function adminChat(env, phone) {
   const S = await getSettings(env);
@@ -3271,7 +3275,7 @@ async function adminWaSettings(env, req) {
     set.team_numbers = raw.map((x) => normPhone(x)).join(", ");
   }
   if ("auto_reports" in set) set.auto_reports = b.auto_reports === true || b.auto_reports === "1" ? "1" : "0";
-  if ("ai_model" in set && set.ai_model && !/^[a-z0-9][a-z0-9.\-_:]{1,60}$/i.test(set.ai_model)) return bad("The AI model name looks like gpt-5-mini.");
+  if ("ai_model" in set && set.ai_model && !/^[a-z0-9][a-z0-9.\-_:]{1,60}$/i.test(set.ai_model)) return bad("The AI model name looks like claude-sonnet-5-5.");
   if (b.resume) Object.assign(set, { wa_down_until: "", wa_down_reason: "" });
   await setSettings(env, set);
   return json({ ok: true });
