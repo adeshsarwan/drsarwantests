@@ -1551,7 +1551,7 @@ const AI_SCHEMA = {
   type: "object", additionalProperties: false,
   required: ["readable", "lab_name", "report_status", "pending_tests", "pages_total", "people", "identifiers", "collected_on", "reported_on", "tests"],
   properties: {
-    readable: { type: "boolean", description: "false if this is not a lab report or the pages can't be read" },
+    readable: { type: "boolean", description: "false only if this is not a medical report (lab, pathology, radiology/imaging such as X-ray, ultrasound, CT, MRI, ECG) or the pages can't be read" },
     lab_name: { type: "string" },
     report_status: { type: "string", enum: ["final", "interim", "unknown"] },
     pending_tests: { type: "integer", description: "tests marked pending / processing / not ready; 0 if none" },
@@ -1571,7 +1571,7 @@ const AI_SCHEMA = {
     tests: { type: "array", items: { type: "string" }, description: "test and panel names in the report (max 60)" },
   },
 };
-const AI_PROMPT = `You are checking a medical lab report PDF before it is sent to a patient. Read EVERY page, including headers and footers.
+const AI_PROMPT = `You are checking a medical report PDF (lab / pathology, or radiology / imaging such as X-ray, ultrasound, CT, MRI, ECG) before it is sent to a patient. Read EVERY page, including headers and footers.
 Extract exactly what is printed – never guess or correct spellings.
 - people: each different patient name printed on the pages, with age, gender and the page numbers (1-based) it appears on.
   Treat the same name written with or without spaces, titles (Mr/Mrs/Ms) or dots as ONE person. If a page shows a different patient, list that person separately.
@@ -1737,7 +1737,8 @@ async function matchReport(env, f, ai, aiError) {
   const top = scored[0], two = scored[1];
   base.cands = scored.slice(0, 3).map((x) => ({ id: x.c.id, score: x.score }));
   if (!top || top.score < 30) {
-    const any = ids.length ? ` IDs printed: ${ids.slice(0, 3).map((x) => x.value).join(", ")}.` : "";
+    const uniq = [...new Map(ids.map((x) => [normId(x.value), String(x.value).replace(/[*_]/g, "").trim()])).values()].filter(Boolean);
+    const any = uniq.length ? ` IDs printed: ${uniq.slice(0, 3).join(", ")}.` : "";
     return { ...base, status: "nomatch", best: hint, reasons: [`No patient waiting at this centre matches ${p.name}${p.age_years != null ? ` (${p.age_years}y)` : ""}.${any}`] };
   }
   const reasons = [...top.why, ...top.warn];
