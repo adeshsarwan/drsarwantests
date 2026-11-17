@@ -147,7 +147,7 @@
   $$('.tab').forEach((t) => (t.onclick = () => showTab(t.getAttribute('data-tab'))));
 
   async function refreshAll() {
-    await Promise.all([load(), loadPkgs().catch(() => {}), loadCentres().catch(() => {}), isOp() ? null : loadWa(true).catch(() => {}), isOp() ? null : loadChats().catch(() => {})]);
+    await Promise.all([load(), loadPkgs().catch(() => {}), loadCentres().catch(() => {}), loadReview().catch(() => {}), isOp() ? null : loadWa(true).catch(() => {}), isOp() ? null : loadChats().catch(() => {})]);
     renderOps();
     if (tab === 'calendar' || cal.data) await loadCal();
     if (detailId && $('#detailDlg').open) { const b = findB(detailId); if (b) $('#detailBody').innerHTML = detailHTML(b); }
@@ -1017,6 +1017,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     $('#repSend').disabled = !n;
     $('#repSend').textContent = n ? `Send ${n} report${n === 1 ? '' : 's'} on WhatsApp` : 'Tick the reports to send';
     $('#repDone').hidden = b.status !== 'report_ready';
+    if (b.rev_n) $('#repList').insertAdjacentHTML('afterbegin', `<p class="note" style="margin:0 0 10px">⏳ ${b.rev_n} report${b.rev_n === 1 ? '' : 's'} from the centre ${b.rev_n === 1 ? 'is' : 'are'} waiting for approval in <b>Operations → Reports to approve</b>. ${b.rev_n === 1 ? 'It shows' : 'They show'} here once approved.</p>`);
   }
   $('#repList').addEventListener('change', (e) => { const id = Number(e.target.dataset.rp); if (!id) return; e.target.checked ? repPicked.add(id) : repPicked.delete(id); renderRepDlg(); });
   async function addRepFiles(files) {
@@ -1571,7 +1572,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
       } else if (idx === 3) {
         if (!reps.length) {
           const m = minsSince(b.collected_at);
-          items.push({ ...base, stage: 'send', since: m, late: m > LATE_MIN.report_wait, note: `At lab${b.vial_no ? ' · vial ' + b.vial_no : ''} · waiting for the report`, action: cur.act, quiet: m <= LATE_MIN.report_wait });
+          items.push({ ...base, stage: 'send', since: m, late: !b.rev_n && m > LATE_MIN.report_wait, note: b.rev_n ? `${b.rev_n} report${b.rev_n === 1 ? '' : 's'} from the centre waiting for your approval (top of this page)` : `At lab${b.vial_no ? ' · vial ' + b.vial_no : ''} · waiting for the report`, action: cur.act, quiet: m <= LATE_MIN.report_wait });
         } else {
           const m = minsSince(reps[reps.length - 1].created_at);
           items.push({ ...base, stage: 'send', since: m, late: m > LATE_MIN.report_send, note: `${reps.length} report${reps.length === 1 ? '' : 's'} uploaded · check and send`, action: cur.act });
@@ -1588,7 +1589,9 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     if (tab !== 'ops' || !data) return;
     $('#opsDate').textContent = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'long', day: 'numeric', month: 'long', hour: 'numeric', minute: '2-digit' });
     const today = data.bookings.filter((b) => b.date === ist() && ['confirmed', ...AFTER_COLLECT].includes(b.status)).length;
-    $('#opsSum').innerHTML = `<span><b>${items.length}</b> need you</span><span><b>${today}</b> visit${today === 1 ? '' : 's'} today</span>`;
+    const nRev = REVQ.files.filter((f) => f.review === 'pending').length;
+    $('#opsSum').innerHTML = `<span><b>${items.length}</b> need you</span>${nRev ? `<span><b>${nRev}</b> report${nRev === 1 ? '' : 's'} to approve</span>` : ''}<span><b>${today}</b> visit${today === 1 ? '' : 's'} today</span>`;
+    renderReview();
     $('#opsAttn').innerHTML = `<span class="ops-attn-n">${late.length}</span><span class="ops-attn-t"><b>${late.length ? 'Need your attention now' : 'Nothing is late'}</b><span>${late.length ? 'Bookings waiting longer than usual at any step – oldest first.' : 'Every booking is moving on time.'}</span></span><span class="ops-attn-c">${opsView === 'late' ? 'Showing below' : 'Show them'}</span>`;
     $('#opsAttn').classList.toggle('none', !late.length); $('#opsAttn').setAttribute('aria-pressed', String(opsView === 'late'));
     $('#opsTiles').innerHTML = OPS.map((o) => {
@@ -1615,6 +1618,111 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   }
   setInterval(() => { if (tab === 'ops' && !document.hidden) renderOps(); }, 60000);
 
+  // ================= REPORTS TO APPROVE (from collection centres, checked by the AI) =================
+  let REVQ = { files: [], targets: [] };
+  const revPicked = new Set(), revSeen = new Set();
+  // a clean match: AI says ✅, the patient is chosen and is the one the AI found – only these can be approved together
+  const revClean = (f) => f.review === 'pending' && f.match && f.match.status === 'ok' && f.booking_id && f.centre_ok !== 'unknown' && !(f.match.best && f.match.best !== f.booking_id) && !f.match.interim && f.status !== 'confirmed';
+  async function loadReview() {
+    REVQ = await api('/api/admin/review');
+    for (const f of REVQ.files) if (!revSeen.has(f.id)) { revSeen.add(f.id); if (revClean(f)) revPicked.add(f.id); }
+    for (const id of [...revPicked]) if (!REVQ.files.some((f) => f.id === id && revClean(f))) revPicked.delete(id);
+    renderReview();
+  }
+  const REV_IC = { ok: ['✅', 'ok'], check: ['⚠️', 'check'], nomatch: ['❌', 'bad'], mixed: ['❌', 'bad'], unreadable: ['❌', 'bad'], off: ['❔', 'check'] };
+  const REV_T = { ok: 'Matches', check: 'Check this', nomatch: 'No matching patient', mixed: 'Mixed report – more than one patient', unreadable: "Couldn't be read", off: 'AI check off – check by hand' };
+  function revRow(f) {
+    const m = f.match || { status: 'off', reasons: [] }, [ic, cls] = REV_IC[m.status] || REV_IC.off;
+    const tgt = (id) => REVQ.targets.find((t) => t.id === id);
+    const best = m.best && m.best !== f.booking_id ? tgt(m.best) : null;
+    const says = m.says ? `${m.says.name}${m.says.age != null ? ` · ${m.says.age}y` : ''}${m.says.gender && m.says.gender !== 'unknown' ? ` · ${m.says.gender}` : ''}` : '';
+    const who = f.booking_id ? `${esc(f.patient || f.booking_id)}${f.age != null ? ` · ${f.age}y` : ''} · ${esc(f.booking_id)}` : '<i>No patient chosen</i>';
+    const centreSaid = { yes: 'Centre confirmed this patient', picked: 'Centre picked this patient', unknown: 'Centre: not in their list' }[f.centre_ok] || '';
+    const vialNotOk = f.booking_id && f.status === 'confirmed';
+    const held = f.review === 'held';
+    const opts = [...REVQ.targets].sort((x, y) => (y.centre_id === Number(f.centre_id)) - (x.centre_id === Number(f.centre_id)))
+      .map((t) => `<option value="${esc(t.id)}"${t.id === f.booking_id ? ' selected' : ''}>${esc(t.name)} · ${fmtD(t.date)} · ${esc(t.id)}${t.vial_no ? ' · vial ' + esc(t.vial_no) : ''}</option>`).join('');
+    return `<li class="rv rv-${cls}${held ? ' rv-held' : ''}">
+<label class="rv-ck">${!held ? `<input type="checkbox" data-rv="${f.id}" ${revPicked.has(f.id) ? 'checked' : ''} ${revClean(f) ? '' : 'disabled title="Check this one on its own"'} aria-label="Tick to approve">` : ''}</label>
+<div class="rv-m">
+<div class="rv-h"><span class="rv-ic" aria-hidden="true">${ic}</span><b>${who}</b>${m.interim ? `<span class="pill st-pending">Interim${m.pending_tests ? ` · ${m.pending_tests} test${m.pending_tests === 1 ? '' : 's'} still processing` : ''}</span>` : ''}${held ? '<span class="pill st-cancelled">Waiting for the final report</span>' : ''}<span class="rv-st">${esc(REV_T[m.status] || '')}</span></div>
+${says ? `<div class="rv-l">Report says: <b>${esc(says)}</b>${m.lab ? ` · ${esc(m.lab)}` : ''}${m.pages ? ` · ${m.pages} page${m.pages === 1 ? '' : 's'}` : ''}</div>` : ''}
+${(m.reasons || []).length ? `<div class="rv-l">${(m.reasons || []).map(esc).join(' · ')}</div>` : ''}
+${best ? `<div class="rv-l rv-warn">The AI thinks it fits <b>${esc(best.name)} (${esc(best.id)})</b> better. <button type="button" class="lnk-b" data-act="rv-move" data-rid="${f.id}" data-to="${esc(best.id)}">Move it there</button></div>` : ''}
+${vialNotOk ? `<div class="rv-l rv-warn">⚠ The vial isn't confirmed at the lab yet – do Step 3 first. <button type="button" class="lnk-b" data-act="collect" data-id="${esc(f.booking_id)}">Confirm vial</button></div>` : ''}
+<small class="meta">📄 ${esc(f.name)} · ${kb(f.size)} · from ${esc(f.centre || 'centre')}${f.sender ? ' (' + esc(f.sender) + ')' : ''} · ${f.src === 'portal' ? 'centre portal' : 'WhatsApp'} · ${when(f.created_at)}${centreSaid ? ' · ' + centreSaid : ''}${held && f.review_note ? ' · ' + esc(f.review_note) : ''}</small>
+<div class="rv-a">
+<button type="button" class="btn ghost sm" data-act="rp-view" data-rid="${f.id}">View PDF</button>
+${f.booking_id ? `<button type="button" class="btn purple sm" data-act="rv-ok" data-rid="${f.id}">${m.interim ? 'Send interim now' : 'Approve &amp; send'}</button>` : ''}
+${m.interim && !held ? `<button type="button" class="btn ghost sm" data-act="rv-hold" data-rid="${f.id}">Wait for final</button>` : ''}
+<select class="inp rv-sel" data-rv-move="${f.id}" aria-label="Move to another patient"><option value="">${f.booking_id ? 'Reassign…' : 'Choose the patient…'}</option>${opts}</select>
+<button type="button" class="btn warn sm" data-act="rv-no" data-rid="${f.id}">Reject</button>
+</div></div></li>`;
+  }
+  function renderReview() {
+    const card = $('#revCard'); if (!card) return;
+    const files = REVQ.files || [];
+    card.hidden = !files.length;
+    if (!files.length) return;
+    const pend = files.filter((f) => f.review === 'pending'), held = files.filter((f) => f.review === 'held');
+    $('#revH').textContent = `Reports to approve (${pend.length})`;
+    $('#rvAll').textContent = revPicked.size ? `Approve ticked ✅ (${revPicked.size})` : 'Tick ✅ rows to approve together';
+    $('#rvAll').disabled = !revPicked.size;
+    $('#revList').innerHTML = `<ul class="rv-l0">${pend.map(revRow).join('')}</ul>${held.length ? `<h3 class="rv-sub">Interim – waiting for the final report (${held.length})</h3><ul class="rv-l0">${held.map(revRow).join('')}</ul>` : ''}`;
+  }
+  $('#revList').addEventListener('change', async (e) => {
+    const ck = e.target.closest('[data-rv]');
+    if (ck) { const id = Number(ck.dataset.rv); ck.checked ? revPicked.add(id) : revPicked.delete(id); renderReview(); return; }
+    const sel = e.target.closest('[data-rv-move]');
+    if (sel && sel.value) revAct(Number(sel.dataset.rvMove), 'reassign', { booking_id: sel.value });
+  });
+  async function revAct(rid, action, extra = {}) {
+    try { await post(`/api/admin/review/${rid}`, { action, ...extra }); await refreshAll(); toast({ reassign: 'Moved – check it again before approving', hold: 'Kept back – waiting for the final report', reject: 'Rejected – the centre was told' }[action] || 'Done'); }
+    catch (e) { toast(e.message); await loadReview().catch(() => {}); }
+  }
+  // approve one report: anything that isn't a clean match needs a short reason (kept in History)
+  async function revApprove(rid, bulk) {
+    const f = REVQ.files.find((x) => x.id === rid); if (!f) return null;
+    let note = '';
+    if (!bulk && !revClean(f)) {
+      const m = f.match || {};
+      if (m.interim && m.status === 'ok' && f.centre_ok !== 'unknown' && !(m.best && m.best !== f.booking_id)) {
+        if (!confirm(`Send this INTERIM report to ${f.patient} now?${m.pending_tests ? `\n${m.pending_tests} test(s) are still processing.` : ''}`)) return null;
+      } else {
+        note = prompt(`This report isn't a clean match:\n• ${(m.reasons || ['AI check not available']).join('\n• ')}\n\nYou've opened the PDF and it's ${f.patient}'s report? Write why (kept in History):`, '');
+        if (note == null) return null;
+        if (note.trim().length < 3) { toast('Please write a short reason'); return null; }
+      }
+    }
+    const canSend = isOp() || (WA && WA.auto);
+    const r = await post(`/api/admin/review/${rid}`, { action: 'approve', note, send: bulk && !canSend ? false : undefined });
+    if (r.send && r.send.manual && !bulk) { // manual sending: WhatsApp opens with the text, attach the PDF there
+      const b = findB(r.booking_id);
+      openWhatsApp(r.phone, r.text);
+      if (b) await post(`/api/admin/bookings/${r.booking_id}/sent`, { kind: 'report', reportIds: [rid] });
+    }
+    return r;
+  }
+  async function revApproveOne(rid) {
+    try {
+      const r = await revApprove(rid, false); if (!r) return;
+      revPicked.delete(rid); await refreshAll();
+      toast(r.send && r.send.sent ? 'Approved ✓ The patient was told on WhatsApp' : r.send && r.send.queued ? "Approved ✓ Couldn't send on WhatsApp – passed to the admin" : r.send && r.send.manual ? 'Approved ✓ Attach the PDF in WhatsApp and send' : 'Approved ✓');
+    } catch (e) { toast(e.message); await loadReview().catch(() => {}); }
+  }
+  async function revApproveAll() {
+    const ids = [...revPicked].filter((id) => REVQ.files.some((f) => f.id === id && revClean(f)));
+    if (!ids.length) return;
+    if (!confirm(`Approve ${ids.length} report${ids.length === 1 ? '' : 's'} and send ${ids.length === 1 ? 'it' : 'them'} to the patient${ids.length === 1 ? '' : 's'}?`)) return;
+    let ok = 0, held = 0; const errs = [];
+    for (const id of ids) {
+      try { const r = await revApprove(id, true); if (r) { ok++; if (r.send && r.send.held) held++; revPicked.delete(id); } }
+      catch (e) { const f = REVQ.files.find((x) => x.id === id); errs.push(`${f ? f.patient : id}: ${e.message}`); }
+    }
+    await refreshAll();
+    toast(`${ok} approved ✓${held ? ` · WhatsApp is on manual – send ${held === 1 ? 'it' : 'them'} from each booking's Reports` : ''}${errs.length ? ` · ${errs.length} not approved: ${errs[0]}` : ''}`);
+  }
+
   // ================= INBOX =================
   const IB = { chats: [], filter: 'all', q: '', phone: null, chat: null, lastId: 0, file: null, imgs: {} };
   const ROLE_N = { patient: 'Patient', centre: 'Centre', team: 'Team' };
@@ -1640,7 +1748,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
       const pre = l.dir === 'out' ? (l.by_who === 'team' ? 'You: ' : '↪ ') : '';
       return `<button type="button" class="ib-it${c.unread ? ' unread' : ''}" data-ph="${c.phone}" ${c.phone === IB.phone ? 'aria-current="true"' : ''}>
 <span class="ib-av ${c.role}">${esc(initials(c))}</span>
-<span style="min-width:0"><b>${esc(c.name || '+91 ' + c.phone)}</b><small>${esc(pre + String(l.body || '').split('\n')[0])}</small></span>
+<span style="min-width:0"><b>${esc(c.name || '+91 ' + c.phone)}</b><small>${l.status === 'failed' ? '⚠ Not sent · ' : ''}${esc(pre + String(l.body || '').split('\n')[0])}</small></span>
 <span class="ib-r">${l.at ? ibTime(l.at) : ''}${c.unread ? `<span class="ib-badge">${c.unread}</span>` : c.role !== 'patient' ? `<span>${ROLE_N[c.role]}</span>` : ''}</span></button>`;
     }).join('') : `<p class="meta" style="padding:16px">${IB.chats.length ? 'No chats match.' : 'No WhatsApp messages yet. They appear here as soon as someone writes to +91 98180 28755 or we send them a message.'}</p>`;
   }
@@ -1692,6 +1800,13 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
       IB.file = f; showFileChip();
     };
     $('#ibComp').onsubmit = sendChat;
+    $('#ibMsgs').onclick = async (e) => {
+      const hb = e.target.closest('[data-ib-hand]'); if (!hb) return;
+      const m = IB.chat.messages.find((x) => x.wa_id === 'fail-' + hb.dataset.ibHand); if (!m) return;
+      openWhatsApp(IB.chat.who.phone, String(m.body || '').split('\n⚠ Not sent: ')[0]);
+      try { await post(`/api/admin/wa/outbox/${hb.dataset.ibHand}`, { action: 'done' }); await openChat(IB.chat.who.phone, true); refreshAll().catch(() => {}); toast('Opened in WhatsApp – marked as sent'); }
+      catch (err) { toast(err.message); }
+    };
     if (window.matchMedia('(min-width: 821px)').matches) ta.focus();
   }
   function showFileChip() {
@@ -1708,6 +1823,14 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
       const sep = d !== day ? `<div class="ib-day">${d}</div>` : ''; day = d;
       const t = new Date(m.at).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit' });
       const tick = m.dir === 'out' ? (m.status === 'hand' ? ' ✋' : m.status === 'read' ? '<span class="tick read">✓✓</span>' : m.status === 'delivered' ? '<span class="tick">✓✓</span>' : m.status === 'failed' ? ' ⚠' : '<span class="tick">✓</span>') : '';
+      // an automatic message that couldn't be sent: "Not sent" + why, and (admin) Send by hand
+      const notSent = /^fail-\d+$/.test(m.wa_id || '');
+      if (notSent) {
+        const [text, why] = String(m.body || '').split('\n⚠ Not sent: ');
+        const st = m.status === 'resent' ? '<b class="m-ok">Sent by hand later ✓</b>' : m.status === 'dismissed' ? '<b>Marked not needed</b>' : `<b>⚠ Not sent</b>${why ? ` – ${esc(why)}` : ''}`;
+        const btn = m.status === 'failed' && !isOp() ? `<button type="button" class="btn ghost sm ib-hand" data-ib-hand="${esc(m.wa_id.slice(5))}">Send by hand</button>` : '';
+        return `${sep}<div class="ib-m out auto${m.status === 'failed' ? ' failed' : ' notsent'}"><span class="ib-by">Automatic message · not delivered by the API</span>${esc(text)}<span class="ib-ns">${st}${btn}</span><span class="ib-t">${t}</span></div>`;
+      }
       const isImg = m.media_id && (m.media_type === 'image' || /^image\//.test(m.media_type || '') || m.type === 'image' || m.type === 'sticker');
       const media = m.media_id ? (isImg ? `<img data-img="${m.id}" alt="Photo">` : `<button type="button" class="ib-file" data-file="${m.id}">${m.type === 'audio' ? '🎤' : m.type === 'video' ? '🎬' : '📄'} Open ${esc(m.media_name || m.type)}</button>`) : '';
       const hideBody = m.media_id && /^(📷 Photo|📄 Document|🎤 Voice message|🎬 Video|Sticker)$/.test(m.body || '') || (m.media_name && m.body === `📄 ${m.media_name}`);
@@ -1791,7 +1914,9 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     if (!live && !waDirty) {
       $('#waMode').value = S.wa_mode; $('#waPhoneId').value = S.wa_phone_id || ''; $('#waWaba').value = S.wa_waba_id || '';
       $('#waTeam').value = S.team_numbers || ''; $('#waAutoRep').checked = S.auto_reports === '1';
+      $('#waAiModel').value = S.ai_model || ''; $('#waAiModel').placeholder = WA.ai_model_default || 'gpt-5-mini';
     }
+    $('#waAiKey').innerHTML = WA.secrets.OPENAI_API_KEY ? '<b style="color:#17694a">✓ OPENAI_API_KEY</b>' : '<b style="color:#a33a1f">✗ OPENAI_API_KEY – reports are checked by hand</b>';
     const st = WA.down ? ['API paused', 'st-no_show'] : WA.auto ? ['Automatic – on', 'st-confirmed'] : WA.ready ? ['Ready · manual mode', 'st-pending'] : ['Manual (API not set up)', 'st-cancelled'];
     $('#waState').className = 'pill ' + st[1]; $('#waState').textContent = st[0];
     $('#waResume').hidden = !WA.down;
@@ -1906,6 +2031,11 @@ ${t.meta !== false ? `<button type="button" class="btn ghost sm" data-act="wa-su
     else if (a === 'step-mark') markStep(id, el.dataset.kind, false);
     else if (a === 'step-unmark') markStep(id, el.dataset.kind, true);
     else if (a === 'rp-view') viewReportFile(Number(el.dataset.rid));
+    else if (a === 'rv-ok') revApproveOne(Number(el.dataset.rid));
+    else if (a === 'rv-all') revApproveAll();
+    else if (a === 'rv-hold') revAct(Number(el.dataset.rid), 'hold');
+    else if (a === 'rv-move') revAct(Number(el.dataset.rid), 'reassign', { booking_id: el.dataset.to });
+    else if (a === 'rv-no') { const note = prompt('Why is this report rejected? The centre gets this message on WhatsApp, e.g. "Wrong patient – this is Sunita Devi\'s report".', ''); if (note != null) { if (note.trim().length < 3) toast('Please write a short reason'); else revAct(Number(el.dataset.rid), 'reject', { note }); } }
     else if (a === 'rp-del') deleteReportFile(Number(el.dataset.rid));
     else if (a === 'tests-edit') { const b = findB(id); if (b) openForm('tests', b); }
     else if (a.startsWith('wa-')) waAct(a, el);

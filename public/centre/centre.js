@@ -60,17 +60,20 @@
     $('#count').textContent = filter === 'todo' ? `${list.length} job${list.length === 1 ? '' : 's'} waiting: samples to collect today or earlier, and reports to upload` : `${list.length} booking${list.length === 1 ? '' : 's'}`;
     $('#jobs').innerHTML = list.length ? list.map(card).join('') : `<div class="empty">Nothing here right now.</div>`;
   }
+  // reports from the centre are checked and approved by our team before they go to the patient
+  const REV = { pending: '⏳ waiting for our approval', held: '⏳ interim – waiting for the final report', approved: '✅ approved', rejected: '❌ not accepted – please send the right report' };
   function card(b) {
     const [label, cls] = STATUS[b.status] || [b.status, ''];
     const after = ['collected', 'report_ready', 'completed'].includes(b.status);
+    const canUpload = after || (b.status === 'confirmed' && !!b.vial_reported);
     const acts = [];
     if (b.status === 'confirmed') {
       if (b.centre_status !== 'accepted') acts.push(`<button type="button" class="btn sm" data-a="acc" data-id="${b.id}">Accept</button>`, `<button type="button" class="btn ghost sm" data-a="dec" data-id="${b.id}">Can't do</button>`);
       else acts.push(`<button type="button" class="btn ghost sm" data-a="acc" data-id="${b.id}">Edit collector</button>`);
       acts.push(`<button type="button" class="btn blue sm" data-a="vial" data-id="${b.id}">${b.vial_reported ? 'Change vial no.' : 'Sample collected – send vial no.'}</button>`);
     }
+    if (canUpload) acts.push(`<label class="btn sm" style="cursor:pointer">Upload report PDF<input type="file" accept="application/pdf,.pdf" multiple hidden data-a="upload" data-id="${b.id}"></label>`);
     if (after) {
-      acts.push(`<label class="btn sm" style="cursor:pointer">Upload report PDF<input type="file" accept="application/pdf,.pdf" multiple hidden data-a="upload" data-id="${b.id}"></label>`);
       acts.push(`<button type="button" class="btn ghost sm" data-a="vial" data-id="${b.id}">${b.vial_no ? 'Edit vial no.' : 'Add vial no.'}</button>`);
     }
     return `<article class="job" id="job-${esc(b.id)}">
@@ -85,7 +88,7 @@ ${accOpen === b.id ? `<form class="vial-f" data-a="acc-save" data-id="${b.id}"><
 ${b.vial_no ? `<div class="job-l"><b>Vial no.: ${esc(b.vial_no)}</b></div>` : after ? '<div class="job-l" style="color:#a33a1f"><b>⚠ Vial no. missing</b></div>' : ''}
 ${b.vial_reported ? `<div class="job-l" style="color:#8a5a00"><b>Vial no. sent: ${esc(b.vial_reported)}</b> – waiting for our team to confirm</div>` : ''}
 ${vialOpen === b.id ? `<form class="vial-f" data-a="vial-save" data-id="${b.id}"><input class="inp" id="vialIn" placeholder="Vial no. on the tube" value="${esc(b.vial_reported || b.vial_no || '')}" autocomplete="off" aria-label="Vial number"><button class="btn blue sm">Send vial no.</button><button type="button" class="btn ghost sm" data-a="vial-cancel">Cancel</button></form>` : ''}
-${b.reports.length ? `<ul class="job-reps">${b.reports.map((r) => `<li>📄 <button type="button" class="lnk-b" style="width:auto;text-align:left;color:var(--teal)" data-a="view" data-rid="${r.id}">${esc(r.name)}</button><span class="meta">${kb(r.size)}</span></li>`).join('')}</ul>` : ''}
+${b.reports.length ? `<ul class="job-reps">${b.reports.map((r) => `<li>📄 <button type="button" class="lnk-b" style="width:auto;text-align:left;color:var(--teal)" data-a="view" data-rid="${r.id}">${esc(r.name)}</button><span class="meta">${kb(r.size)}${REV[r.review] ? ' · ' + REV[r.review] : ''}</span>${r.review === 'rejected' && r.review_note ? `<span class="meta" style="color:#9b1c31;display:block">${esc(r.review_note)}</span>` : ''}</li>`).join('')}</ul>` : ''}
 <div class="job-acts">${acts.join('')}</div>
 </article>`;
   }
@@ -142,7 +145,7 @@ ${b.reports.length ? `<ul class="job-reps">${b.reports.map((r) => `<li>📄 <but
         ok++;
       } catch (err) { toast(err.message); }
     }
-    if (ok) toast(`${ok} report${ok === 1 ? '' : 's'} uploaded ✓ Dr. Sarwan Diagnostic Labs will send ${ok === 1 ? 'it' : 'them'} to the patient.`);
+    if (ok) toast(`${ok} report${ok === 1 ? '' : 's'} uploaded ✓ Our team checks ${ok === 1 ? 'it' : 'them'} and sends ${ok === 1 ? 'it' : 'them'} to the patient.`);
     await load().catch(() => {});
   });
 

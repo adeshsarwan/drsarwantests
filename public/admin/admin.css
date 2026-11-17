@@ -624,3 +624,27 @@ button.stat:hover{border-color:var(--teal);box-shadow:0 0 0 2px #d8ecef}
 .sug-i small{color:var(--muted,#5a6880);font-size:12.5px;line-height:1.35}
 .sug-new b{color:var(--teal,#1f6977)}
 .sug-none{margin:0;padding:10px 12px;color:var(--muted,#5a6880);font-size:13.5px}
+
+/* reports to approve (Operations) */
+.rv-card{border-color:#cdb8e8}
+.rv-l0{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:10px}
+.rv{display:flex;gap:10px;border:1px solid var(--line);border-left:5px solid #b8c1cc;border-radius:12px;padding:12px 14px;background:#fff}
+.rv-ok{border-left-color:#1f8a6a}.rv-check{border-left-color:#e9a23b;background:#fffbf2}.rv-bad{border-left-color:#c2334d;background:#fff6f7}
+.rv-held{opacity:.85}
+.rv-ck{padding-top:2px}.rv-ck input{width:18px;height:18px}
+.rv-m{flex:1;min-width:0}
+.rv-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.rv-h .pill{margin:0}
+.rv-ic{font-size:18px}.rv-st{margin-left:auto;font-size:12.5px;font-weight:700;color:var(--muted)}
+.rv-l{font-size:14px;margin-top:4px;line-height:1.45}
+.rv-warn{color:#8a5a00}
+.rv-a{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px}
+.rv-sel{max-width:260px;min-height:34px;padding:4px 8px;font-size:13.5px}
+.rv-sub{font-size:14px;margin:16px 0 0;color:var(--muted)}
+
+/* automatic messages that couldn't be sent (Inbox) */
+.ib-m.notsent{background:#f1f3f5;opacity:.85}
+.ib-ns{display:block;margin-top:6px;padding-top:6px;border-top:1px solid rgba(0,0,0,.08);font-size:12.5px;color:#9b1c31;white-space:normal}
+.ib-m.notsent .ib-ns{color:var(--muted)}
+.ib-ns .ib-hand{margin-left:8px;min-height:28px;padding:2px 10px}
+.ib-m.out.failed{background:#fde2dd}
+.rv-l .lnk-b{display:inline;padding:0 4px}

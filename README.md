@@ -58,6 +58,21 @@ Unpaid bookings never block a slot and are marked expired after 2 hours.
 - Setup: Cloudflare secrets `WA_TOKEN`, `WA_APP_SECRET`, `WA_VERIFY_TOKEN`; in Meta set the webhook to
   `https://drsarwantests.com/api/wa/webhook` (subscribe to *messages*); in Admin → WhatsApp enter the phone number ID and team numbers.
 
+## Collection centres on WhatsApp: picking patients, bulk actions, AI report check
+- Every centre action (accept visits, vial no., reports) starts with a **numbered list of only the patients waiting for that step**
+  (tap one, or type `1,3` / `ALL`). Numbers belong to that list only; lists expire after 15 minutes. A swipe-reply to a job message picks that patient.
+- Then a **confirm screen** repeats name · age · booking ID and the value: Confirm / change the value / change a patient / remove a row / cancel.
+  After saving, **UNDO** works for 10 minutes; older mistakes: menu → *Fix a mistake*. Patients someone else already handled are left out ("already done by …").
+- **Reports**: the centre sends one or many PDFs (or uploads them in the centre portal). About a minute after the last one (or after DONE)
+  the **AI check** reads every page (name, age, IDs, dates, tests) and matches each report to a waiting patient: ✅ match, ⚠️ check, ❌ no match / mixed report.
+  Vial numbers have no fixed format – the AI looks for what the centre typed anywhere in the report. The centre confirms or fixes each row.
+- **Operations → Reports to approve**: nothing reaches a patient until an operator approves it. Only clean ✅ rows can be approved together;
+  anything else needs a short reason. Reassign / Reject (the centre is told why) / interim: *Send interim now* or *Wait for final*.
+- Setup: Cloudflare secret `OPENAI_API_KEY` (without it reports are checked by hand); model in Admin → WhatsApp (default gpt-5-mini).
+  A cron runs every minute for the checks.
+- Messages the API couldn't send also show in that person's chat in **Inbox** ("Not sent" + reason + Send by hand).
+  Pending WhatsApp template approvals are re-checked with Meta every 10 minutes.
+
 ## One-time Cloudflare setup
 1. **Create the database**: Cloudflare dashboard → Storage & Databases → D1 → Create →
    name `drsarwantests-bookings`. Copy its **Database ID** into `wrangler.jsonc`

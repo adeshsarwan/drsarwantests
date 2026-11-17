@@ -95,6 +95,11 @@
 <main id="view-ops" class="wrap ops" hidden>
 <div class="ops-top"><div><p class="ops-k" id="opsDate"></p><h1 class="ops-h">Operations</h1></div><div class="ops-sum" id="opsSum"></div></div>
 <button type="button" class="ops-attn" id="opsAttn" data-act="ops-view" data-v="late"></button>
+<section class="card ops-card rv-card" id="revCard" aria-labelledby="revH" hidden>
+<div class="ops-hd"><div><h2 id="revH" class="h2" style="margin:0">Reports to approve</h2><p class="meta" style="margin:2px 0 0">Reports from collection centres, checked by the AI against the patient. Nothing goes to a patient until you approve it. Only clean ✅ matches can be approved together.</p></div>
+<button type="button" class="btn sm" data-act="rv-all" id="rvAll">Approve ticked</button></div>
+<div id="revList"></div>
+</section>
 <section class="card ops-card" aria-labelledby="opsStepsH">
 <div class="ops-hd"><h2 id="opsStepsH" class="h2" style="margin:0">Your steps</h2><span class="meta">Only the steps you act on. Messages in between go out automatically. Click a step to see its bookings.</span></div>
 <div class="ops-tiles" id="opsTiles" role="tablist" aria-label="Steps"></div>
@@ -137,7 +142,8 @@
 <div class="fld"><label for="waPhoneId">Phone number ID</label><input id="waPhoneId" name="wa_phone_id" class="inp" inputmode="numeric" autocomplete="off" placeholder="from Meta → WhatsApp → API Setup"></div>
 <div class="fld"><label for="waWaba">WhatsApp account ID</label><input id="waWaba" name="wa_waba_id" class="inp" inputmode="numeric" autocomplete="off"></div>
 <div class="fld"><label for="waTeam">Team numbers <span class="meta">(get alerts + team menu)</span></label><input id="waTeam" name="team_numbers" class="inp" autocomplete="off" placeholder="e.g. 8368143677, 8800611322"></div>
-<label class="fld wide chk"><span><input type="checkbox" id="waAutoRep" name="auto_reports"> Send reports to patients as soon as the centre uploads them <span class="meta">(off: you check each report first and press Send)</span></span></label>
+<div class="fld"><label for="waAiModel">AI model for report checks <span class="meta" id="waAiKey"></span></label><input id="waAiModel" name="ai_model" class="inp" autocomplete="off" placeholder="gpt-5-mini"></div>
+<label class="fld wide chk"><span><input type="checkbox" id="waAutoRep" name="auto_reports"> Send reports uploaded by our team straight to the patient <span class="meta">(reports from centres always wait for approval in Operations)</span></span></label>
 <p class="err" id="waErr" style="margin:0"></p>
 <div class="fld wide" style="flex-direction:row;gap:8px;flex-wrap:wrap"><button class="btn sm" id="waSave">Save</button><button type="button" class="btn ghost sm" data-act="wa-test">Test connection</button><button type="button" class="btn ghost sm" data-act="wa-resume" id="waResume" hidden>Resume API</button></div>
 </form>
