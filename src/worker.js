@@ -1578,7 +1578,7 @@ Extract exactly what is printed – never guess or correct spellings.
 - identifiers: every barcode, sample number, lab number, accession, visit or patient ID and its label as printed (e.g. "BarcodeNO", "Sample Type | Barcode").
 - report_status: "interim" if the report says interim/partial/provisional or some tests are still pending/processing, "final" if it says final, else "unknown".
 - tests: names of the tests or panels reported.
-Report what you found with the lab_report tool.`;
+Always answer by calling the lab_report tool exactly once (no other text).`;
 
 async function reportB64(env, rid) {
   const { results } = await env.DB.prepare("SELECT data FROM report_parts WHERE report_id=?1 ORDER BY idx").bind(rid).all();
@@ -1593,7 +1593,7 @@ async function aiReadReport(env, S, rid, filename) {
       model: S.ai_model || AI_MODEL_DEFAULT,
       max_tokens: 4000,
       tools: [{ name: "lab_report", description: "What is printed in the lab report: patients per page, IDs, dates, status and tests.", input_schema: AI_SCHEMA }],
-      tool_choice: { type: "tool", name: "lab_report" },
+      tool_choice: { type: "auto" }, // some models don't allow forcing a tool; the prompt asks for it and plain JSON is accepted too
       messages: [{ role: "user", content: [
         { type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 }, title: String(filename || "report.pdf").slice(0, 200) },
         { type: "text", text: AI_PROMPT },
@@ -1603,8 +1603,11 @@ async function aiReadReport(env, S, rid, filename) {
   const j = await r.json().catch(() => ({}));
   if (!r.ok || j.type === "error") throw new Error((j.error && j.error.message) || `AI check failed (${r.status})`);
   const use = (j.content || []).find((c) => c.type === "tool_use" && c.name === "lab_report");
-  if (!use || !use.input) throw new Error("The AI didn't return the report details");
-  return use.input;
+  if (use && use.input) return use.input;
+  const txt = (j.content || []).filter((c) => c.type === "text").map((c) => c.text).join("");
+  const m = /\{[\s\S]*\}/.exec(txt);
+  if (m) { try { const o = JSON.parse(m[0]); if (o && Array.isArray(o.people)) return o; } catch {} }
+  throw new Error("The AI didn't return the report details");
 }
 
 // ---- matching helpers ----
