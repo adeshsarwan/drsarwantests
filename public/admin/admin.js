@@ -1974,6 +1974,13 @@ ${t.meta !== false ? `<button type="button" class="btn ghost sm" data-act="wa-su
     try {
       if (a === 'wa-test') { const r = await post('/api/admin/wa/test', {}); toast(`Connected ✓ ${r.phone.display_phone_number || ''} · ${r.phone.verified_name || ''} · quality ${r.phone.quality_rating || '—'}`); await loadWa(); }
       else if (a === 'wa-resume') { await post('/api/admin/wa/settings', { resume: true }); await loadWa(); toast('API resumed'); }
+      else if (a === 'wa-aitest') {
+        toast('Claude is reading the newest report… (up to a minute)');
+        const r = await post('/api/admin/wa/ai-test', {});
+        if (!r.ok) { alert(`AI check failed (${r.model}):\n${r.error}`); return; }
+        const p = r.read.people[0];
+        alert(`AI check works ✓ (${r.model}, ${r.seconds}s)\n\nReport: ${r.file}\nPatient on the report: ${p ? `${p.name}${p.age != null ? ', ' + p.age + 'y' : ''}${p.gender && p.gender !== 'unknown' ? ', ' + p.gender : ''} (on ${p.pages} of ${r.read.pages} pages)` : 'not found'}${r.read.people.length > 1 ? `\n⚠ ${r.read.people.length} different patients in this PDF` : ''}\nBooking: ${r.booking_name || '-'}${r.read.name_fit ? ` → name ${r.read.name_fit}` : ''}\nIDs: ${r.read.ids.map((x) => `${x.label} ${x.value}`).join(' · ') || 'none'}${r.read.vial_found != null ? `\nVial ${r.booking_vial} ${r.read.vial_found ? 'found ✓' : 'not found'}` : ''}\nStatus: ${r.read.status}${r.read.pending_tests ? ` (${r.read.pending_tests} pending)` : ''} · ${r.read.tests} tests · lab: ${r.read.lab || '-'}`);
+      }
       else if (a === 'wa-sync') { const r = await post('/api/admin/wa/sync', {}); await loadWa(); toast(`Approvals checked (${r.found} found on WhatsApp)`); }
       else if (a === 'wa-tsave') { await post(`/api/admin/wa/templates/${key}`, { body: $(`[data-body="${key}"]`).value }); await loadWa(); toast('Text saved'); }
       else if (a === 'wa-treset') { if (!confirm('Go back to the default text?')) return; await api(`/api/admin/wa/templates/${key}`, { method: 'DELETE' }); await loadWa(); toast('Default text restored'); }

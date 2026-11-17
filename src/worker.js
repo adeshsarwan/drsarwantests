@@ -1798,6 +1798,22 @@ async function reportJobs(env) {
   }
 }
 
+// Admin → WhatsApp → "Test AI check": Claude reads the newest report on the site. Nothing is saved or changed.
+async function adminAiTest(env) {
+  if (!aiKey(env)) return bad("Add the ANTHROPIC_API_KEY secret in Cloudflare first.");
+  const f = await env.DB.prepare("SELECT f.id, f.name, b.name AS patient, b.vial_no FROM report_files f LEFT JOIN bookings b ON b.id = f.booking_id ORDER BY f.id DESC LIMIT 1").first();
+  if (!f) return bad("There's no report on the site yet to test with.");
+  const S = await getSettings(env), t0 = Date.now();
+  try {
+    const ai = await aiReadReport(env, S, f.id, f.name);
+    const people = reportPeople(ai);
+    return json({ ok: true, model: S.ai_model || AI_MODEL_DEFAULT, seconds: Math.round((Date.now() - t0) / 100) / 10, file: f.name, booking_name: f.patient, booking_vial: f.vial_no,
+      read: { people: people.map((p) => ({ name: p.name, age: p.age_years, gender: p.gender, pages: p.pages.length })), ids: (ai.identifiers || []).slice(0, 6), status: ai.report_status,
+        pending_tests: ai.pending_tests, pages: ai.pages_total, lab: ai.lab_name, collected_on: ai.collected_on, tests: (ai.tests || []).length,
+        name_fit: people[0] && f.patient ? nameFit(people[0].name, f.patient) : null, vial_found: f.vial_no ? !!vialFound(f.vial_no, ai.identifiers || []) : null } });
+  } catch (e) { return json({ ok: false, model: S.ai_model || AI_MODEL_DEFAULT, error: String(e && e.message || e) }); }
+}
+
 // ---- operator approval queue (Operations → Reports to approve) ----
 async function adminReview(env) {
   const { results: files } = await env.DB.prepare(`SELECT f.id, f.booking_id, f.name, f.size, f.created_at, f.review, f.src, f.src_phone, f.centre_ok, f.ai_status,
@@ -3638,6 +3654,7 @@ export default {
           if (m && req.method === "GET") return adminChatMedia(env, Number(m[1]));
           if (p === "/api/admin/wa/settings" && req.method === "POST") return adminWaSettings(env, req);
           if (p === "/api/admin/wa/test" && req.method === "POST") return adminWaTest(env);
+          if (p === "/api/admin/wa/ai-test" && req.method === "POST") return adminAiTest(env);
           if (p === "/api/admin/wa/sync" && req.method === "POST") return adminWaSync(env);
           if (p === "/api/admin/wa/menu" && req.method === "POST") return adminWaMenu(env, req);
           m = p.match(/^\/api\/admin\/wa\/templates\/([a-z_]{2,30})$/);
