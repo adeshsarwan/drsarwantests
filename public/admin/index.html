@@ -118,7 +118,7 @@
 <div class="ib-lhead">
 <input class="inp" id="ibSearch" type="search" placeholder="Search name, number or booking" aria-label="Search chats">
 <div class="ib-filt" id="ibFilt" role="group" aria-label="Show">
-<button type="button" data-f="all" aria-pressed="true">All</button><button type="button" data-f="unread">Unread</button><button type="button" data-f="patient">Patients</button><button type="button" data-f="centre">Centres</button><button type="button" data-f="team">Team</button>
+<button type="button" data-f="all" aria-pressed="true">All</button><button type="button" data-f="unread">Unread</button><button type="button" data-f="patient">Patients</button><button type="button" data-f="centre">Centres</button><button type="button" data-f="team">Team</button><button type="button" data-f="notsent">Not sent</button>
 </div>
 <form id="ibNew" class="ib-new"><input class="inp" id="ibNewPh" inputmode="numeric" placeholder="New chat: 10-digit number" aria-label="Mobile number for a new chat"><button class="btn sm" type="submit">Open</button></form>
 </div>
@@ -134,7 +134,7 @@
 <main id="view-wa" class="wrap" style="padding-bottom:40px" hidden>
 <div class="card">
 <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px">
-<div><h2 class="h2" style="margin:0">WhatsApp</h2><p class="meta" style="margin:4px 0 0">One workflow, two ways to send. <b>Automatic</b>: messages go out through the WhatsApp API by themselves, and patients and centres can use the WhatsApp menus. <b>Manual</b>: you send each message from here with WhatsApp, exactly as before. If the API fails, the message waits under <b>Send by hand</b> below with the same text.</p></div>
+<div><h2 class="h2" style="margin:0">WhatsApp</h2><p class="meta" style="margin:4px 0 0">One workflow, two ways to send. <b>Automatic</b>: messages go out through the WhatsApp API by themselves, and patients and centres can use the WhatsApp menus. <b>Manual</b>: you send each message from here with WhatsApp, exactly as before. If the API fails, the message shows as <b>Not sent</b> in that person's chat in <b>Inbox</b>, with <b>Send by hand</b>.</p></div>
 <span id="waState" class="pill" style="margin:0"></span>
 </div>
 <form id="waForm" class="fgrid" style="margin-top:14px" novalidate>
@@ -142,18 +142,12 @@
 <div class="fld"><label for="waPhoneId">Phone number ID</label><input id="waPhoneId" name="wa_phone_id" class="inp" inputmode="numeric" autocomplete="off" placeholder="from Meta → WhatsApp → API Setup"></div>
 <div class="fld"><label for="waWaba">WhatsApp account ID</label><input id="waWaba" name="wa_waba_id" class="inp" inputmode="numeric" autocomplete="off"></div>
 <div class="fld"><label for="waTeam">Team numbers <span class="meta">(get alerts + team menu)</span></label><input id="waTeam" name="team_numbers" class="inp" autocomplete="off" placeholder="e.g. 8368143677, 8800611322"></div>
-<div class="fld"><label for="waAiModel">AI model for report checks <span class="meta" id="waAiKey"></span></label><input id="waAiModel" name="ai_model" class="inp" autocomplete="off" placeholder="gpt-5-mini"></div>
+<div class="fld"><label for="waAiModel">AI model for report checks <span class="meta" id="waAiKey"></span></label><input id="waAiModel" name="ai_model" class="inp" autocomplete="off" placeholder="claude-sonnet-5-5"></div>
 <label class="fld wide chk"><span><input type="checkbox" id="waAutoRep" name="auto_reports"> Send reports uploaded by our team straight to the patient <span class="meta">(reports from centres always wait for approval in Operations)</span></span></label>
 <p class="err" id="waErr" style="margin:0"></p>
 <div class="fld wide" style="flex-direction:row;gap:8px;flex-wrap:wrap"><button class="btn sm" id="waSave">Save</button><button type="button" class="btn ghost sm" data-act="wa-test">Test connection</button><button type="button" class="btn ghost sm" data-act="wa-resume" id="waResume" hidden>Resume API</button></div>
 </form>
 <div id="waSetup" class="meta" style="margin-top:12px;line-height:1.7"></div>
-</div>
-
-<div class="card" id="waFailCard">
-<h2 class="h2" style="margin:0">Send by hand</h2>
-<p class="meta" style="margin:4px 0 0">Messages the API couldn't send (no approved template yet, API down, number not on WhatsApp…). Press <b>Send</b> to open WhatsApp with the same text – it then counts as done.</p>
-<div id="waFail" style="margin-top:10px"></div>
 </div>
 
 <div class="card">

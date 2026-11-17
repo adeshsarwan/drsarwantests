@@ -1741,7 +1741,7 @@ ${m.interim && !held ? `<button type="button" class="btn ghost sm" data-act="rv-
   }
   function renderChatList() {
     const q = IB.q.toLowerCase().replace(/\s+/g, '');
-    const list = IB.chats.filter((c) => (IB.filter === 'all' || (IB.filter === 'unread' ? c.unread > 0 : c.role === IB.filter))
+    const list = IB.chats.filter((c) => (IB.filter === 'all' || (IB.filter === 'unread' ? c.unread > 0 : IB.filter === 'notsent' ? c.notsent > 0 : c.role === IB.filter))
       && (!q || (c.name + c.wa_name + c.phone + c.bookings.map((b) => b.id).join('')).toLowerCase().replace(/\s+/g, '').includes(q)));
     $('#ibItems').innerHTML = list.length ? list.map((c) => {
       const l = c.last || {};
@@ -1801,10 +1801,16 @@ ${m.interim && !held ? `<button type="button" class="btn ghost sm" data-act="rv-
     };
     $('#ibComp').onsubmit = sendChat;
     $('#ibMsgs').onclick = async (e) => {
+      const sk = e.target.closest('[data-ib-skip]');
+      if (sk) {
+        try { await post(`/api/admin/wa/outbox/${sk.dataset.ibSkip}`, { action: 'dismiss' }); await openChat(IB.chat.who.phone, true); loadChats().catch(() => {}); refreshAll().catch(() => {}); toast('Marked not needed'); }
+        catch (err) { toast(err.message); }
+        return;
+      }
       const hb = e.target.closest('[data-ib-hand]'); if (!hb) return;
       const m = IB.chat.messages.find((x) => x.wa_id === 'fail-' + hb.dataset.ibHand); if (!m) return;
       openWhatsApp(IB.chat.who.phone, String(m.body || '').split('\n⚠ Not sent: ')[0]);
-      try { await post(`/api/admin/wa/outbox/${hb.dataset.ibHand}`, { action: 'done' }); await openChat(IB.chat.who.phone, true); refreshAll().catch(() => {}); toast('Opened in WhatsApp – marked as sent'); }
+      try { await post(`/api/admin/wa/outbox/${hb.dataset.ibHand}`, { action: 'done' }); await openChat(IB.chat.who.phone, true); loadChats().catch(() => {}); refreshAll().catch(() => {}); toast('Opened in WhatsApp – marked as sent'); }
       catch (err) { toast(err.message); }
     };
     if (window.matchMedia('(min-width: 821px)').matches) ta.focus();
@@ -1828,7 +1834,7 @@ ${m.interim && !held ? `<button type="button" class="btn ghost sm" data-act="rv-
       if (notSent) {
         const [text, why] = String(m.body || '').split('\n⚠ Not sent: ');
         const st = m.status === 'resent' ? '<b class="m-ok">Sent by hand later ✓</b>' : m.status === 'dismissed' ? '<b>Marked not needed</b>' : `<b>⚠ Not sent</b>${why ? ` – ${esc(why)}` : ''}`;
-        const btn = m.status === 'failed' && !isOp() ? `<button type="button" class="btn ghost sm ib-hand" data-ib-hand="${esc(m.wa_id.slice(5))}">Send by hand</button>` : '';
+        const btn = m.status === 'failed' && !isOp() ? `<button type="button" class="btn ghost sm ib-hand" data-ib-hand="${esc(m.wa_id.slice(5))}">Send by hand</button><button type="button" class="lnk-b ib-hand" data-ib-skip="${esc(m.wa_id.slice(5))}">Not needed</button>` : '';
         return `${sep}<div class="ib-m out auto${m.status === 'failed' ? ' failed' : ' notsent'}"><span class="ib-by">Automatic message · not delivered by the API</span>${esc(text)}<span class="ib-ns">${st}${btn}</span><span class="ib-t">${t}</span></div>`;
       }
       const isImg = m.media_id && (m.media_type === 'image' || /^image\//.test(m.media_type || '') || m.type === 'image' || m.type === 'sticker');
@@ -1903,7 +1909,7 @@ ${m.interim && !held ? `<button type="button" class="btn ghost sm" data-act="rv-
     const n = WA.failed.length;
     el.classList.toggle('down', WA.down);
     el.hidden = !n && !WA.down;
-    el.innerHTML = `<span>${WA.down ? `⚠ <b>WhatsApp API paused</b> – ${esc(WA.settings.wa_down_reason || '')}. Messages are waiting to be sent by hand. ` : ''}${n ? `✋ <b>${n} WhatsApp message${n === 1 ? '' : 's'}</b> couldn't be sent automatically.` : ''}</span><button type="button" class="btn sm" data-act="wa-open">Send by hand</button>`;
+    el.innerHTML = `<span>${WA.down ? `⚠ <b>WhatsApp API paused</b> – ${esc(WA.settings.wa_down_reason || '')}. Messages are waiting to be sent by hand. ` : ''}${n ? `✋ <b>${n} WhatsApp message${n === 1 ? '' : 's'}</b> couldn't be sent automatically.` : ''}</span><button type="button" class="btn sm" data-act="wa-open">Open in Inbox</button>`;
   }
   const META_ST = { APPROVED: ['Approved ✓', 'st-confirmed'], PENDING: ['Waiting for WhatsApp', 'st-pending'], IN_APPEAL: ['In appeal', 'st-pending'], REJECTED: ['Rejected', 'st-no_show'], PAUSED: ['Paused', 'st-no_show'], DISABLED: ['Disabled', 'st-no_show'] };
   const ROLE_T = { patient: 'Patient', centre: 'Collection centre', team: 'Our team' };
@@ -1914,19 +1920,15 @@ ${m.interim && !held ? `<button type="button" class="btn ghost sm" data-act="rv-
     if (!live && !waDirty) {
       $('#waMode').value = S.wa_mode; $('#waPhoneId').value = S.wa_phone_id || ''; $('#waWaba').value = S.wa_waba_id || '';
       $('#waTeam').value = S.team_numbers || ''; $('#waAutoRep').checked = S.auto_reports === '1';
-      $('#waAiModel').value = S.ai_model || ''; $('#waAiModel').placeholder = WA.ai_model_default || 'gpt-5-mini';
+      $('#waAiModel').value = S.ai_model || ''; $('#waAiModel').placeholder = WA.ai_model_default || 'claude-sonnet-5-5';
     }
-    $('#waAiKey').innerHTML = WA.secrets.OPENAI_API_KEY ? '<b style="color:#17694a">✓ OPENAI_API_KEY</b>' : '<b style="color:#a33a1f">✗ OPENAI_API_KEY – reports are checked by hand</b>';
+    $('#waAiKey').innerHTML = WA.secrets.AI_KEY ? `<b style="color:#17694a">✓ ${esc(WA.secrets.AI_KEY)} (Claude)</b>` : '<b style="color:#a33a1f">✗ ANTHROPIC_API_KEY – reports are checked by hand</b>';
     const st = WA.down ? ['API paused', 'st-no_show'] : WA.auto ? ['Automatic – on', 'st-confirmed'] : WA.ready ? ['Ready · manual mode', 'st-pending'] : ['Manual (API not set up)', 'st-cancelled'];
     $('#waState').className = 'pill ' + st[1]; $('#waState').textContent = st[0];
     $('#waResume').hidden = !WA.down;
     const sec = (k) => (WA.secrets[k] ? `<b style="color:#17694a">✓ ${k}</b>` : `<b style="color:#a33a1f">✗ ${k}</b>`);
     $('#waSetup').innerHTML = `Cloudflare secrets: ${sec('WA_TOKEN')} · ${sec('WA_APP_SECRET')} · ${sec('WA_VERIFY_TOKEN')}<br>
 Webhook URL for Meta → WhatsApp → Configuration: <code>${esc(WA.webhook)}</code> (verify token = your WA_VERIFY_TOKEN; subscribe to <b>messages</b>)${WA.down ? `<br><b style="color:#a33a1f">Paused: ${esc(S.wa_down_reason)}</b>` : ''}`;
-    // send by hand
-    $('#waFail').innerHTML = WA.failed.length ? WA.failed.map((f) => `<div class="wa-f"><div><b>${esc(MSG[f.kind] || (WA.templates.find((t) => t.key === f.kind) || {}).label || f.kind)}</b> → ${esc(ROLE_T[f.to_role] || '')} ${f.to_phone ? '+91 ' + esc(f.to_phone) : ''}${f.patient ? ` · ${esc(f.patient)}` : ''} <span class="meta">${f.booking_id ? esc(f.booking_id) + ' · ' : ''}${when(f.created_at)}</span><br><small class="meta">${esc(f.error || '')}</small></div>
-<div style="display:flex;gap:6px"><button type="button" class="btn wa sm" data-act="wa-hand" data-oid="${f.id}">Send</button><button type="button" class="btn ghost sm" data-act="wa-dismiss" data-oid="${f.id}">Not needed</button></div></div>`).join('')
-      : '<p class="meta" style="margin:0">Nothing waiting ✓</p>';
     if (!live) renderWaEdit();
     $('#waRecent').innerHTML = WA.recent.length ? WA.recent.map((o) => `<tr><td>${when(o.created_at)}</td><td>${o.booking_id ? esc(o.booking_id) : ''}${o.patient ? `<small>${esc(o.patient)}</small>` : ''}</td><td>${esc(MSG[o.kind] || o.kind)}</td>
 <td>${esc(ROLE_T[o.to_role] || '')}<small>${o.to_phone ? '+91 ' + esc(o.to_phone) : ''}</small></td><td><span class="pill ${(OUT_ST[o.status] || ['', ''])[1]}" style="margin:0">${(OUT_ST[o.status] || [o.status])[0]}</span>${o.error && o.status === 'failed' ? `<small>${esc(o.error)}</small>` : ''}</td></tr>`).join('')
@@ -1992,7 +1994,7 @@ ${t.meta !== false ? `<button type="button" class="btn ghost sm" data-act="wa-su
         if (a === 'wa-hand') openWhatsApp(f.to_phone, f.text);
         await post(`/api/admin/wa/outbox/${f.id}`, { action: a === 'wa-hand' ? 'done' : 'dismiss' });
         await Promise.all([loadWa(true), load()]); toast(a === 'wa-hand' ? 'Opened in WhatsApp – marked as sent' : 'Removed');
-      } else if (a === 'wa-open') showTab('wa');
+      } else if (a === 'wa-open') { IB.filter = 'notsent'; $$('#ibFilt [data-f]').forEach((x) => x.setAttribute('aria-pressed', x.dataset.f === 'notsent')); showTab('inbox'); }
     } catch (err) { if (msgEl) msgEl.textContent = ''; toast(err.message); }
   }
 
