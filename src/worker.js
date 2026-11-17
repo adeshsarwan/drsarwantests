@@ -2181,13 +2181,20 @@ async function waWebhookVerify(env, url) {
     return new Response(url.searchParams.get("hub.challenge") || "", { status: 200, headers: { "content-type": "text/plain" } });
   return new Response("Forbidden", { status: 403 });
 }
+// the last call from Meta (shown by Admin → WhatsApp → Diagnose), so a webhook that never arrives or is refused can be spotted
+async function hookSeen(env, result, raw) {
+  let what = "";
+  try { const b = JSON.parse(raw); const c = (((b.entry || [])[0] || {}).changes || [])[0] || {}; what = `${c.field || ""}${c.value && c.value.messages ? " · message" : c.value && c.value.statuses ? " · status" : ""}`; } catch {}
+  await env.DB.prepare("INSERT INTO settings (k, v) VALUES ('wa_hook_last', ?1) ON CONFLICT(k) DO UPDATE SET v=excluded.v").bind(JSON.stringify({ at: isoNow(), result, what })).run().catch(() => {});
+}
 async function waWebhook(env, req) {
   if (!env.WA_APP_SECRET) return new Response("WhatsApp is not set up", { status: 503 });
   const raw = await req.text();
   const sig = String(req.headers.get("x-hub-signature-256") || "").replace(/^sha256=/, "");
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.WA_APP_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const want = hex(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(raw)));
-  if (!sig || !safeEqual(sig, want)) return new Response("Bad signature", { status: 401 });
+  if (!sig || !safeEqual(sig, want)) { await hookSeen(env, sig ? "refused – signature doesn't match WA_APP_SECRET" : "refused – no signature", raw); return new Response("Bad signature", { status: 401 }); }
+  await hookSeen(env, "ok", raw);
   let body;
   try { body = JSON.parse(raw); } catch { return new Response("ok"); }
   later(req, waProcess(env, body)); // answer Meta at once; do the work after
@@ -3309,6 +3316,42 @@ async function adminWaTest(env) {
     return json({ ok: true, phone: p });
   } catch (e) { return bad(`WhatsApp said: ${e.message}`, 502); }
 }
+// Admin → WhatsApp → Diagnose: why don't incoming messages arrive? Asks Meta which app is subscribed to the WhatsApp account,
+// where that app sends its webhook and for which fields, and shows the last call we got from Meta.
+async function adminWaDiagnose(env, fix) {
+  const S = await getSettings(env), out = { problems: [] };
+  if (!env.WA_TOKEN) return bad("The WA_TOKEN secret isn't set in Cloudflare yet.");
+  if (!S.wa_waba_id) return bad("Enter the WhatsApp account ID first.");
+  try {
+    if (fix) out.subscribe = await graph(env, S, `${S.wa_waba_id}/subscribed_apps`, { method: "POST" });
+    const sub = await graph(env, S, `${S.wa_waba_id}/subscribed_apps`);
+    out.apps = (sub.data || []).map((x) => x.whatsapp_business_api_data || x);
+    if (!out.apps.length) out.problems.push("No app is subscribed to your WhatsApp account, so Meta sends incoming messages nowhere. Press “Connect app to WhatsApp account”.");
+  } catch (e) { out.problems.push(`Couldn't read the subscribed apps: ${e.message}`); }
+  const app = (out.apps || [])[0];
+  if (app && app.id && env.WA_APP_SECRET) {
+    try {
+      const r = await fetch(`${env.WA_GRAPH_URL || "https://graph.facebook.com"}/${S.wa_version || "v25.0"}/${app.id}/subscriptions?access_token=${encodeURIComponent(app.id + "|" + env.WA_APP_SECRET)}`);
+      const j = await r.json().catch(() => ({}));
+      if (j.error) out.problems.push(`Meta refused the app secret check (${j.error.message}). WA_APP_SECRET may not belong to app ${app.name || app.id} – then every incoming message is refused.`);
+      else {
+        out.webhooks = (j.data || []).map((x) => ({ object: x.object, callback_url: x.callback_url, active: x.active, fields: (x.fields || []).map((f) => f.name || f) }));
+        const wa = out.webhooks.find((x) => x.object === "whatsapp_business_account");
+        const want = `${SITE}/api/wa/webhook`;
+        if (!wa) out.problems.push(`The app has no WhatsApp webhook. In Meta → your app → WhatsApp → Configuration set Callback URL ${want} and the verify token, then subscribe “messages”.`);
+        else {
+          if (wa.callback_url !== want) out.problems.push(`The webhook goes to ${wa.callback_url}, not ${want}.`);
+          if (!wa.fields.includes("messages")) out.problems.push("The webhook isn't subscribed to the “messages” field (Meta → WhatsApp → Configuration → Webhook fields → messages → Subscribe).");
+          if (!wa.fields.includes("message_template_status_update")) out.problems.push("Optional: subscribe “message_template_status_update” too, so template approvals arrive instantly.");
+          if (wa.active === false) out.problems.push("The webhook is switched off (not active).");
+        }
+      }
+    } catch (e) { out.problems.push(`Couldn't check the webhook: ${e.message}`); }
+  }
+  try { out.last_call = JSON.parse((await env.DB.prepare("SELECT v FROM settings WHERE k='wa_hook_last'").first() || {}).v || "null"); } catch { out.last_call = null; }
+  if (!out.problems.length) out.problems.push("Meta's side looks right. If messages still don't arrive: the Meta app must be Live (App Dashboard → top bar: App Mode → Live) – apps in Development mode don't get real messages.");
+  return json(out);
+}
 async function adminWaSaveTemplate(env, req, key, reset) {
   if (!M.TEMPLATES.some((t) => t.key === key)) return bad("Unknown message", 404);
   const body = reset ? null : String((await req.json().catch(() => ({}))).body || "").replace(/\r/g, "").trim();
@@ -3658,6 +3701,8 @@ export default {
           if (p === "/api/admin/wa/settings" && req.method === "POST") return adminWaSettings(env, req);
           if (p === "/api/admin/wa/test" && req.method === "POST") return adminWaTest(env);
           if (p === "/api/admin/wa/ai-test" && req.method === "POST") return adminAiTest(env);
+          if (p === "/api/admin/wa/diagnose" && req.method === "POST") return adminWaDiagnose(env, false);
+          if (p === "/api/admin/wa/connect" && req.method === "POST") return adminWaDiagnose(env, true);
           if (p === "/api/admin/wa/sync" && req.method === "POST") return adminWaSync(env);
           if (p === "/api/admin/wa/menu" && req.method === "POST") return adminWaMenu(env, req);
           m = p.match(/^\/api\/admin\/wa\/templates\/([a-z_]{2,30})$/);
