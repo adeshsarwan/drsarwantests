@@ -9,8 +9,8 @@ Landing page + home-collection booking system for Dr. Sarwan Diagnostic Labs
 - `wrangler.jsonc` – Cloudflare config (price, UPI details, database)
 
 ## How booking works
-1. Customer picks a date (next 14 days) and a 30-minute slot between 6:00 and 11:00 AM.
-   Only one booking per slot. Slots must start at least 3 hours from now.
+1. Customer picks a date (next 14 days) and a 30-minute slot between 7:00 AM and 6:00 PM.
+   No limit on bookings per slot (set a `SLOT_CAPACITY` variable to bring a per-city limit back). Slots must start at least 3 hours from now.
 2. Customer enters name, mobile and address. The slot is **not** reserved yet.
 3. Customer pays Rs. 1899 to the Paytm QR / UPI ID and uploads the payment screenshot. That is when the slot is taken.
    If someone else paid for the same slot first, the payment is kept and the customer picks another free slot.
@@ -19,6 +19,24 @@ Landing page + home-collection booking system for Dr. Sarwan Diagnostic Labs
    A ready-made WhatsApp confirmation message pops up with **Copy message** and **Open WhatsApp**.
 
 Unpaid bookings never block a slot and are marked expired after 2 hours.
+
+## Online payment (Instamojo)
+- When the Instamojo secrets are set, the booking form takes the patient to Instamojo's payment page (UPI, cards, net banking, wallets)
+  right after their details. Without them the old UPI QR + screenshot flow is used.
+- The booking only becomes **Paid** (`payment_submitted`, shown as *Paid online ✓*) after we check the payment with Instamojo's API –
+  on the patient's return, through the webhook (`/api/pay/instamojo`) or by a cron sweep for people who closed the tab. Then it follows the normal steps (Confirm → centre → …).
+- Unpaid online checkouts never hold a slot and don't show in Bookings / Calendar. **Admin → Payments** lists every attempt:
+  *Failed*, *Not completed* (opened the payment page, never paid, after 30 min), *Paid online*, with **Check again** and a WhatsApp follow-up link.
+- Setup (Cloudflare → Worker → Settings → Variables and Secrets): `INSTAMOJO_CLIENT_ID`, `INSTAMOJO_CLIENT_SECRET` (Instamojo → API & Plugins),
+  `INSTAMOJO_SALT` (Private salt). Optional plain variable `INSTAMOJO_ENV=test` for the sandbox (test.instamojo.com) – remove it to go live.
+
+## Package pages
+- Every package has a web page at `drsarwantests.com/test/<slug>` with the same layout as the home page. **Admin → Packages → Edit page**
+  opens a separate editor: hero (main question, button, price from the package), *Which question brought you here*, stories (current conversations,
+  with sources), can / can't, the tests, precautions, FAQ, and Google title/description.
+- **✨ Write with AI** (per section) or **Write whole page** uses Claude (`ANTHROPIC_API_KEY`, model from Admin → WhatsApp). Stories use web search
+  and list their sources. Nothing is saved until you press *Save draft* / *Publish*; *Preview* shows the page before it goes live.
+- The booking form on a package page is preselected for that package (its price, tests and payment). The **website test**'s page is also the home page (`/`).
 
 ## Collection centres, users and portals
 - **Centres tab** (`/admin`): add / edit collection centres – name, address, contact person and the **WhatsApp numbers**
