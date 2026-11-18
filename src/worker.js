@@ -332,6 +332,25 @@ function ensureSchema(env) {
   // "This promise was created by a request that has since ended" and the isolate stays broken.
   if (schemaDone) return Promise.resolve();
   return (async () => {
+    // Fast path: the full setup below is ~50 database round trips (≈8 s on a cold start). It only needs to run
+    // once per code version, so a stamp of the setup code is kept in settings; when it matches, skip it all.
+    const stamp = await setupStamp();
+    const r = await env.DB.prepare("SELECT v FROM settings WHERE k='setup_v'").first().catch(() => null);
+    if (r && r.v === stamp) { schemaDone = true; return; }
+    await runSetup(env);
+    await env.DB.prepare("INSERT OR REPLACE INTO settings (k, v) VALUES ('setup_v', ?1)").bind(stamp).run();
+    schemaDone = true;
+  })();
+}
+// Changes whenever the tables, columns or any seeding / one-time migration code changes, so new setup still runs after a deploy.
+let stampCache = "";
+async function setupStamp() {
+  if (!stampCache) stampCache = (await sha256([SCHEMA.join("\n"), JSON.stringify(NEW_COLS), JSON.stringify(REPORT_REVIEW_COLS), JSON.stringify(MENU_DEFAULTS), JSON.stringify(MENU_ADDED_V2),
+    ...[runSetup, seedPackages, seedPages, migrateTestsAndReports, seedAccounts, closeOldBookings, reopenVialCheck, seedWa, backfillFailed].map((f) => f.toString())].join("\n"))).slice(0, 20);
+  return stampCache;
+}
+async function runSetup(env) {
+  {
       // add any missing columns first (older databases), then tables / indexes
       const info = await env.DB.prepare("PRAGMA table_info(bookings)").all().catch(() => ({ results: [] }));
       const have = new Set((info.results || []).map((c) => c.name));
@@ -356,8 +375,7 @@ function ensureSchema(env) {
       await seedAccounts(env);
       await seedWa(env);
       await backfillFailed(env).catch((e) => console.log("backfill", String(e)));
-      schemaDone = true;
-  })();
+  }
 }
 
 async function expireHolds(env) {
