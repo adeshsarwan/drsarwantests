@@ -2,6 +2,8 @@
   "name": "drsarwantests",
   "main": "src/worker.js",
   "compatibility_date": "2026-10-01",
+  // run the Worker near the D1 database: each request makes several queries, and the database is far from India
+  "placement": { "mode": "smart" },
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
