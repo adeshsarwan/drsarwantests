@@ -119,8 +119,13 @@
       try { sessionStorage.setItem('dsl_staff', KEY); sessionStorage.setItem('dsl_me', JSON.stringify(ME)); } catch (e2) {}
       if (isOp()) tab = 'ops';
       applyRole(); $('#pw').value = '';
-      await refreshAll(); $('#login').hidden = true; $('#app').hidden = false; showTab(/^#(page\/\d+|home)$/.test(location.hash) ? 'page' : tab);
-    } catch (err) { $('#loginErr').textContent = err.message; }
+    } catch (err) { $('#loginErr').textContent = err.message; return; }
+    // signed in – a failing data load must not look like a failed sign-in
+    let loadErr = null;
+    try { await refreshAll(); } catch (err) { loadErr = err; }
+    $('#login').hidden = true; $('#app').hidden = false;
+    try { showTab(/^#(page\/\d+|home)$/.test(location.hash) ? 'page' : tab); } catch (err) { loadErr = loadErr || err; }
+    if (loadErr) toast('Signed in, but bookings could not load: ' + loadErr.message);
   };
   fetch('/api/config').then((r) => r.json()).then((c) => (CFG = { ...CFG, ...c })).catch(() => {});
 
