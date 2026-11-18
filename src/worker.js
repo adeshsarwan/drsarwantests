@@ -1,10 +1,12 @@
 // Dr. Sarwan Diagnostic Labs – booking backend
 // Cloudflare Worker + D1. Static site is served from ./public via the ASSETS binding.
 import "../public/shared/msgs.js"; // WhatsApp message texts, shared with the admin page
+import { imConfigured, imIsTest, imCreateRequest, imGetRequest, imGetPayment, imPaymentOk, imMacOk } from "./instamojo.js";
+import { renderPackagePage, pageFromBody, defaultPageFor, slugify, aiGeneratePage, PAGE_SECTIONS, HORMONE_PAGE } from "./pages.js";
 const M = globalThis.DSLMsg;
 
-const SLOT_START_MIN = 6 * 60;    // 06:00
-const SLOT_END_MIN = 11 * 60;     // last slot ends at 11:00
+const SLOT_START_MIN = 7 * 60;    // 07:00 – home collection runs 7 AM to 6 PM
+const SLOT_END_MIN = 18 * 60;     // last slot ends at 18:00
 const SLOT_LEN_MIN = 30;
 const BOOK_DAYS_AHEAD = 14;       // how far ahead people can book
 const MIN_LEAD_MIN = 180;         // a slot must start at least 3 hours from now
@@ -101,7 +103,8 @@ async function packageById(env, id, activeOnly = true) {
   if (!id) return null;
   return await env.DB.prepare(`SELECT * FROM packages WHERE id=?1 ${activeOnly ? "AND active=1" : ""}`).bind(parseInt(id, 10) || 0).first();
 }
-function slotCapacity(env) { return Math.max(1, parseInt(env.SLOT_CAPACITY || "20", 10) || 20); }
+// No limit on bookings per slot (0 = unlimited). Set the SLOT_CAPACITY variable to bring a per-city limit back.
+function slotCapacity(env) { const n = parseInt(env.SLOT_CAPACITY || "0", 10); return n > 0 ? n : 0; }
 const cityKey = (c) => String(c || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 // Is there room in this slot for one more booking in this city?
 async function slotRoom(env, date, slot, city, excludeId = "") {
@@ -110,6 +113,7 @@ async function slotRoom(env, date, slot, city, excludeId = "") {
   ).bind(date, slot, ...ACTIVE).all();
   if (results.some((r) => r.status === "blocked")) return { ok: false, blocked: true, msg: `${slotLabel(slot)} on ${prettyDate(date)} is closed for bookings.` };
   const cap = slotCapacity(env), key = cityKey(city);
+  if (!cap) return { ok: true, n: 0, cap: 0 };
   const n = results.filter((r) => r.status !== "blocked" && r.id !== excludeId && cityKey(r.city) === key).length;
   return n < cap ? { ok: true, n, cap } : { ok: false, n, cap, msg: `${slotLabel(slot)} on ${prettyDate(date)} is full${city ? " for " + city : ""} (${cap} bookings). Please pick another time.` };
 }
@@ -177,6 +181,11 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS report_batches_status ON report_batches(status, last_file_at)`,
   // what the AI check has learned from approved reports: where each centre's vial no. is printed (label → times found)
   `CREATE TABLE IF NOT EXISTS report_hints (centre_id INTEGER NOT NULL, label TEXT NOT NULL, hits INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (centre_id, label))`,
+  // online payments (Instamojo): one row per payment attempt. status: created → success | failed | abandoned (never finished)
+  `CREATE TABLE IF NOT EXISTS payments (id INTEGER PRIMARY KEY AUTOINCREMENT, booking_id TEXT NOT NULL, gateway TEXT NOT NULL, request_id TEXT UNIQUE,
+    payment_id TEXT, amount INTEGER NOT NULL, status TEXT NOT NULL, reason TEXT, method TEXT, back TEXT, checked_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS payments_by_booking ON payments(booking_id)`,
+  `CREATE INDEX IF NOT EXISTS payments_by_status ON payments(status, created_at)`,
 ];
 
 // Tests / packages from DRSARWAN_TESTS_PACKAGES.xlsx — loaded once into an empty database.
@@ -270,6 +279,12 @@ async function migrateTestsAndReports(env) {
 async function seedPackages(env) {
   const cols = await env.DB.prepare("PRAGMA table_info(packages)").all();
   if (!(cols.results || []).some((c) => c.name === "prep")) await env.DB.prepare("ALTER TABLE packages ADD COLUMN prep TEXT").run();
+  // website page per package: slug (/test/<slug>), page = JSON of the sections, page_live = 1 when published
+  for (const [c, t] of [["slug", "TEXT"], ["page", "TEXT"], ["page_live", "INTEGER NOT NULL DEFAULT 0"], ["page_at", "TEXT"]])
+    if (!(cols.results || []).some((x) => x.name === c)) {
+      try { await env.DB.prepare(`ALTER TABLE packages ADD COLUMN ${c} ${t}`).run(); } catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
+    }
+  await env.DB.prepare("CREATE UNIQUE INDEX IF NOT EXISTS packages_slug ON packages(slug) WHERE slug IS NOT NULL").run();
   // fill researched instructions where nobody has written their own yet
   const { results: blank } = await env.DB.prepare("SELECT id, name FROM packages WHERE prep IS NULL OR prep = ?1").bind(DEFAULT_PREP_V1).all();
   if (blank.length) await env.DB.batch(blank.map((r) => env.DB.prepare("UPDATE packages SET prep=?1 WHERE id=?2").bind(prepFor(r.name), r.id)));
@@ -283,6 +298,20 @@ async function seedPackages(env) {
   const d = await env.DB.prepare("SELECT id, name FROM packages WHERE is_default=1").first();
   if (d) await env.DB.prepare("UPDATE bookings SET package_id=?1, package_name=?2 WHERE package_id IS NULL AND status!='blocked'").bind(d.id, d.name).run();
 }
+// Every package gets a web address (/test/<slug>); the website test starts with the current home-page content, published.
+async function seedPages(env) {
+  const { results } = await env.DB.prepare("SELECT id, name, slug, page, is_default FROM packages WHERE slug IS NULL OR (is_default=1 AND page IS NULL)").all();
+  for (const r of results) {
+    let slug = r.slug;
+    if (!slug) {
+      slug = slugify(r.name) || "test-" + r.id;
+      if (await env.DB.prepare("SELECT 1 FROM packages WHERE slug=?1 AND id!=?2").bind(slug, r.id).first()) slug += "-" + r.id;
+    }
+    if (r.is_default && !r.page) {
+      await env.DB.prepare("UPDATE packages SET slug=?1, page=?2, page_live=1, page_at=?3 WHERE id=?4").bind(slug, JSON.stringify(HORMONE_PAGE), isoNow(), r.id).run();
+    } else await env.DB.prepare("UPDATE packages SET slug=?1 WHERE id=?2").bind(slug, r.id).run();
+  }
+}
 let schemaReady = null;
 // report_files columns for the centre → AI check → operator approval flow.
 // review: NULL (uploaded by our team – no approval needed) | draft (centre still confirming on WhatsApp) | pending (waiting for an operator)
@@ -295,7 +324,7 @@ const NEW_COLS = { city: "TEXT", state: "TEXT", vial_no: "TEXT", collected_at: "
   report_token: "TEXT", report_at: "TEXT", completed_at: "TEXT", fee_due: "INTEGER", fee_paid_at: "TEXT", missed_slot: "TEXT", package_id: "INTEGER", package_name: "TEXT",
   centre_id: "INTEGER", patient_id: "INTEGER", consent_at: "TEXT", centre_status: "TEXT", centre_status_at: "TEXT", collector_info: "TEXT",
   resched_req: "TEXT", resched_at: "TEXT", resched_date: "TEXT", resched_slot: "TEXT",
-  vial_reported: "TEXT", vial_reported_at: "TEXT" };
+  vial_reported: "TEXT", vial_reported_at: "TEXT", pay_method: "TEXT" };
 function ensureSchema(env) {
   if (!schemaReady) {
     schemaReady = (async () => {
@@ -318,6 +347,7 @@ function ensureSchema(env) {
         try { await env.DB.prepare(`ALTER TABLE bookings ADD COLUMN ${c} ${t}`).run(); } catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
       }
       await seedPackages(env);
+      await seedPages(env);
       await migrateTestsAndReports(env);
       await seedAccounts(env);
       await seedWa(env);
@@ -368,12 +398,13 @@ async function getSlots(env, url) {
   if (city) results.filter((r) => r.status !== "blocked" && cityKey(r.city) === city).forEach((r) => (used[r.slot] = (used[r.slot] || 0) + 1));
   return json({
     date,
-    slots: SLOTS.map((s) => ({ time: s, label: slotLabel(s), available: !closed.has(s) && (used[s] || 0) < cap && isBookable(date, s) })),
+    slots: SLOTS.map((s) => ({ time: s, label: slotLabel(s), available: !closed.has(s) && (!cap || (used[s] || 0) < cap) && isBookable(date, s) })),
   });
 }
 
-async function getConfig(env) {
-  const pkg = await defaultPackage(env);
+async function getConfig(env, url) {
+  const want = url && url.searchParams.get("package");
+  const pkg = (want && (await packageById(env, want))) || (await defaultPackage(env));
   const today = istParts().date;
   const dates = [];
   for (let i = 0; i <= BOOK_DAYS_AHEAD; i++) {
@@ -382,7 +413,8 @@ async function getConfig(env) {
   }
   return json({
     amount: pkg ? pkg.price : amount(env),
-    test: pkg ? { id: pkg.id, name: pkg.name, tests: pkg.tests || "" } : null,
+    test: pkg ? { id: pkg.id, name: pkg.name, tests: pkg.tests || "", prep: pkg.prep || "" } : null,
+    gateway: imConfigured(env) ? "instamojo" : "upi",
     upiId: env.UPI_ID || "",
     upiName: env.UPI_NAME || "Dr. Sarwan Diagnostic Labs",
     upiQr: env.UPI_QR_STRING || "",
@@ -529,6 +561,142 @@ async function reslot(env, req, id) {
   return json({ ok: true, status: "payment_submitted", id, date, dateLabel: prettyDate(date), slot, slotLabel: slotLabel(slot) });
 }
 
+// ---- online payment (Instamojo) ----
+// 1. The booking form creates the booking (status "pending" – it doesn't hold anything yet).
+// 2. /checkout opens an Instamojo payment page for it; the patient pays there.
+// 3. Instamojo sends the patient back (?pay_return=…&payment_id=…) and calls our webhook. Either way we ask Instamojo's API
+//    whether the payment really succeeded, and only then does the booking become "payment_submitted" (Paid) – the same
+//    state a verified UPI screenshot used to give, so it shows up in Bookings and follows the normal steps.
+// Payments that fail or are never finished stay in the payments table → Admin → Payments.
+const PAY_ABANDON_MIN = 30; // an Instamojo page not paid after this long counts as "not completed"
+const okBack = (b) => (/^\/(test\/[a-z0-9-]{1,80}\/?)?$/.test(String(b || "")) ? String(b) : "/");
+
+async function checkout(env, req, url, id) {
+  if (!imConfigured(env)) return bad("Online payment isn't set up yet. Please call 8368143677.", 503);
+  const b = await req.json().catch(() => ({}));
+  const row = await env.DB.prepare("SELECT * FROM bookings WHERE id=?1").bind(id).first();
+  if (!row || !safeEqual(row.token, b.token)) return bad("Booking not found.", 404);
+  if (!["pending", "expired"].includes(row.status)) return bad(row.status === "cancelled" ? "This booking was cancelled. Please make a new booking." : "This booking is already paid ✅", 409);
+  const back = okBack(b.back);
+  // a payment for this booking may have gone through a moment ago (e.g. paid in another tab): settle that first
+  const open = await env.DB.prepare("SELECT * FROM payments WHERE booking_id=?1 AND status='created' ORDER BY id DESC").bind(id).all();
+  for (const o of open.results) { const r = await settleRequest(env, o, "checkout"); if (r.ok) return json({ ok: true, paid: true }); }
+  const t = await env.DB.prepare("SELECT name FROM booking_tests WHERE booking_id=?1 ORDER BY id").bind(id).all();
+  const now = isoNow();
+  let pr;
+  try {
+    pr = await imCreateRequest(env, {
+      amount: row.amount, purpose: `${row.id} ${t.results.map((x) => x.name).join(", ") || "Home test"}`, name: row.name, phone: row.phone,
+      redirectUrl: `${url.origin}${back}?pay_return=${encodeURIComponent(id)}&t=${encodeURIComponent(row.token)}`,
+      webhookUrl: `${url.origin}/api/pay/instamojo`,
+    });
+  } catch (e) {
+    console.log("instamojo create", String(e));
+    await env.DB.prepare("INSERT INTO payments (booking_id, gateway, amount, status, reason, back, created_at, updated_at) VALUES (?1, 'instamojo', ?2, 'failed', ?3, ?4, ?5, ?5)")
+      .bind(id, row.amount, ("Couldn't open the payment page: " + String(e.message || e)).slice(0, 300), back, now).run();
+    return bad("We couldn't open the payment page. Please try again, or call 8368143677.", 502);
+  }
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO payments (booking_id, gateway, request_id, amount, status, back, created_at, updated_at) VALUES (?1, 'instamojo', ?2, ?3, 'created', ?4, ?5, ?5)").bind(id, pr.id, row.amount, back, now),
+    // a fresh 2-hour window while the patient pays; still not holding anything until the payment is confirmed
+    env.DB.prepare("UPDATE bookings SET status='pending', pay_method='instamojo', expires_at=?1, updated_at=?2 WHERE id=?3").bind(new Date(Date.now() + HOLD_MIN * 60000).toISOString(), now, id),
+  ]);
+  return json({ ok: true, url: pr.url });
+}
+
+// Patient is back from Instamojo: check with Instamojo and tell the page how it went.
+async function verifyPay(env, req, id) {
+  const b = await req.json().catch(() => ({}));
+  const row = await env.DB.prepare("SELECT * FROM bookings WHERE id=?1").bind(id).first();
+  if (!row || !safeEqual(row.token, b.token)) return bad("Booking not found.", 404);
+  const reqId = clean(b.payment_request_id, 60), payId = clean(b.payment_id, 60);
+  let pay = reqId ? await env.DB.prepare("SELECT * FROM payments WHERE request_id=?1 AND booking_id=?2").bind(reqId, id).first() : null;
+  if (!pay) pay = await env.DB.prepare("SELECT * FROM payments WHERE booking_id=?1 AND gateway='instamojo' ORDER BY id DESC LIMIT 1").bind(id).first();
+  let r = { ok: false, reason: "We couldn't find your payment." };
+  if (pay && pay.status === "success") r = { ok: true };
+  else if (pay) r = await settleRequest(env, pay, "return", payId);
+  const cur = await env.DB.prepare("SELECT * FROM bookings WHERE id=?1").bind(id).first();
+  const paid = r.ok || HOLDING.includes(cur.status);
+  const t = await env.DB.prepare("SELECT name FROM booking_tests WHERE booking_id=?1 ORDER BY id").bind(id).all();
+  return json({ ok: true, paid, pending: !paid && !!r.pending, reason: paid ? "" : r.reason || "", id, token: cur.token, amount: cur.amount, status: cur.status,
+    date: cur.date, dateLabel: prettyDate(cur.date), slot: cur.slot, slotLabel: slotLabel(cur.slot), testName: t.results.map((x) => x.name).join(", "),
+    name: cur.name, phone: cur.phone, paymentId: paid ? cur.utr || payId : "" });
+}
+
+// Instamojo webhook (form post). We never trust its fields – they only tell us which payment to look up.
+async function imWebhook(env, req) {
+  const fields = Object.fromEntries((await req.formData().catch(() => new FormData())).entries());
+  const mac = await imMacOk(env, fields);
+  if (mac === false) { console.log("instamojo webhook: bad mac"); return new Response("bad mac", { status: 400 }); }
+  const reqId = clean(fields.payment_request_id, 60), payId = clean(fields.payment_id, 60);
+  const pay = reqId && (await env.DB.prepare("SELECT * FROM payments WHERE request_id=?1").bind(reqId).first());
+  if (pay && pay.status !== "success") await settleRequest(env, pay, "webhook", payId).catch((e) => console.log("webhook settle", String(e)));
+  return new Response("ok");
+}
+
+// Find out from Instamojo what happened to a payment request and record it. Safe to call many times.
+async function settleRequest(env, pay, via, payId = "") {
+  if (!imConfigured(env) || !pay.request_id) return { ok: false, reason: "Online payment isn't set up" };
+  const now = isoNow();
+  try {
+    if (!payId) {
+      const rq = await imGetRequest(env, pay.request_id);
+      const list = (rq.payments || []).map((u) => (/([A-Za-z0-9]{8,})\/?$/.exec(String(u)) || [])[1]).filter(Boolean);
+      payId = list[list.length - 1] || "";
+      if (!payId) {
+        const old = Date.now() - Date.parse(pay.created_at) > PAY_ABANDON_MIN * 60000;
+        if (old && pay.status === "created") await env.DB.prepare("UPDATE payments SET status='abandoned', reason=?1, checked_at=?2, updated_at=?2 WHERE id=?3 AND status='created'")
+          .bind("Payment page opened but not paid", now, pay.id).run();
+        else await env.DB.prepare("UPDATE payments SET checked_at=?1 WHERE id=?2").bind(now, pay.id).run();
+        return { ok: false, pending: !old, reason: old ? "The payment wasn't completed." : "Payment not received yet." };
+      }
+    }
+    const p = await imGetPayment(env, payId);
+    const v = imPaymentOk(p, pay.request_id, pay.amount);
+    if (!v.ok) {
+      await env.DB.prepare("UPDATE payments SET status='failed', payment_id=?1, reason=?2, method=?3, checked_at=?4, updated_at=?4 WHERE id=?5 AND status!='success'")
+        .bind(payId, String(v.reason).slice(0, 300), clean(p && p.instrument_type, 40) || null, now, pay.id).run();
+      return { ok: false, reason: v.reason };
+    }
+    await env.DB.prepare("UPDATE payments SET status='success', payment_id=?1, reason=NULL, method=?2, checked_at=?3, updated_at=?3 WHERE id=?4").bind(payId, clean(v.method, 40) || null, now, pay.id).run();
+    const r = await env.DB.prepare("UPDATE bookings SET status='payment_submitted', paid_at=?1, utr=?2, pay_method='instamojo', updated_at=?1 WHERE id=?3 AND status IN ('pending','expired')")
+      .bind(now, payId, pay.booking_id).run();
+    if (r.meta.changes) await logAct(env, pay.booking_id, "Instamojo", "system", `Paid online ₹${v.amount} (payment ${payId}${v.method ? ", " + v.method : ""}) – via ${via}`);
+    return { ok: true };
+  } catch (e) {
+    console.log("instamojo settle", pay.id, String(e));
+    await env.DB.prepare("UPDATE payments SET checked_at=?1 WHERE id=?2").bind(now, pay.id).run();
+    return { ok: false, pending: true, reason: "We couldn't check your payment just now." };
+  }
+}
+
+// cron: look up payment pages nobody came back from (closed the tab, network dropped)
+async function paymentSweep(env) {
+  if (!imConfigured(env)) return;
+  const cut = new Date(Date.now() - 10 * 60000).toISOString(), recheck = new Date(Date.now() - 10 * 60000).toISOString();
+  const { results } = await env.DB.prepare(`SELECT * FROM payments WHERE status='created' AND created_at < ?1 AND (checked_at IS NULL OR checked_at < ?2) ORDER BY id LIMIT 5`).bind(cut, recheck).all();
+  for (const p of results) await settleRequest(env, p, "sweep");
+}
+
+// Admin → Payments: failed / not completed / paid online
+async function adminPayments(env, url) {
+  const days = Math.min(365, Math.max(1, parseInt(url.searchParams.get("days") || "30", 10) || 30));
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const { results } = await env.DB.prepare(`SELECT p.*, b.name, b.phone, b.date, b.slot, b.city, b.status AS booking_status, b.package_name, b.created_at AS booked_at
+    FROM payments p LEFT JOIN bookings b ON b.id = p.booking_id WHERE p.created_at >= ?1 ORDER BY p.id DESC LIMIT 500`).bind(since).all();
+  return json({ payments: results.map((r) => ({ ...r, slotLabel: r.slot ? slotLabel(r.slot) : "", paid_later: r.status !== "success" && HOLDING.includes(r.booking_status) })),
+    gateway: { on: imConfigured(env), test: imIsTest(env), salt: !!env.INSTAMOJO_SALT, webhook: `${url.origin}/api/pay/instamojo` } });
+}
+async function adminPaymentCheck(env, id) {
+  const pay = await env.DB.prepare("SELECT * FROM payments WHERE id=?1").bind(id).first();
+  if (!pay) return bad("Payment not found", 404);
+  if (pay.status === "success") return json({ ok: true, status: "success" });
+  if (!pay.request_id) return bad("This attempt never reached Instamojo – nothing to check.");
+  const r = await settleRequest(env, { ...pay, status: pay.status === "abandoned" ? "created" : pay.status }, "admin check", pay.payment_id || "");
+  const now = await env.DB.prepare("SELECT status, reason FROM payments WHERE id=?1").bind(id).first();
+  return json({ ok: true, paid: r.ok, status: now.status, reason: r.reason || now.reason || "" });
+}
+
 // ---- admin API ----
 function isAdmin(env, req) {
   const want = String(env.ADMIN_PASSWORD || "").trim();
@@ -542,7 +710,7 @@ async function adminList(env, url, staff) {
   const to = url.searchParams.get("to") || addDays(today, BOOK_DAYS_AHEAD);
   const includeInactive = url.searchParams.get("all") === "1";
   const { results } = await env.DB.prepare(
-    `SELECT id, date, slot, name, phone, address, pincode, city, state, cycle, notes, amount, status, utr, token, source, created_at, paid_at, updated_at,
+    `SELECT id, date, slot, name, phone, address, pincode, city, state, cycle, notes, amount, status, utr, token, source, created_at, paid_at, updated_at, pay_method,
        package_id, package_name, vial_no, collected_at, report_name, report_size, report_token, report_at, completed_at, fee_due, fee_paid_at, missed_slot,
        centre_id, patient_id, consent_at, centre_status, centre_status_at, collector_info, resched_req, resched_at, resched_date, resched_slot, vial_reported, vial_reported_at, (SELECT dob FROM users u WHERE u.id = bookings.patient_id) AS dob,
        EXISTS(SELECT 1 FROM payment_proofs p WHERE p.booking_id = bookings.id) AS has_proof,
@@ -550,6 +718,7 @@ async function adminList(env, url, staff) {
        (SELECT group_concat(kind || ':' || id, ',') FROM wa_outbox o WHERE o.booking_id = bookings.id AND o.status = 'failed') AS failed,
        (SELECT COUNT(*) FROM report_files f WHERE f.booking_id = bookings.id AND f.review IN ('pending','held')) AS rev_n
      FROM bookings WHERE date BETWEEN ?1 AND ?2 ${includeInactive ? "" : "AND status NOT IN ('expired')"}
+       AND NOT (status IN ('pending','expired') AND COALESCE(pay_method,'')='instamojo' AND COALESCE(source,'')!='admin')
      ORDER BY date, slot, created_at`
   ).bind(from, to).all();
   const [{ results: tests }, { results: files }] = await Promise.all([
@@ -909,8 +1078,64 @@ async function adminPackages(env, staff) {
   const { results } = await env.DB.prepare(
     `SELECT p.*, (SELECT COUNT(*) FROM bookings b WHERE b.package_id = p.id AND b.status NOT IN ('cancelled','expired','blocked')) AS bookings
      FROM packages p ORDER BY p.sort, p.id`).all();
-  if (staff && staff.role === "operator") for (const r of results) r.margin = null;
+  for (const r of results) { r.has_page = !!r.page; delete r.page; if (staff && staff.role === "operator") r.margin = null; }
   return json({ packages: results });
+}
+
+// ---- package web pages (/test/<slug>) – Admin → Packages → "Edit page" ----
+async function sitePage(env, req, url, slug) {
+  const pkg = slug === null
+    ? await env.DB.prepare("SELECT * FROM packages WHERE active=1 AND is_default=1 AND page_live=1 AND page IS NOT NULL LIMIT 1").first()
+    : await env.DB.prepare("SELECT * FROM packages WHERE slug=?1 AND active=1 AND page_live=1 AND page IS NOT NULL").bind(slug).first();
+  if (!pkg) return null;
+  let page; try { page = JSON.parse(pkg.page); } catch { return null; }
+  return renderPackagePage(env, req, pkg, page, { canonical: slug === null || pkg.is_default ? "https://drsarwantests.com/" : `https://drsarwantests.com/test/${pkg.slug}` });
+}
+async function adminPage(env, id) {
+  const pkg = await env.DB.prepare("SELECT * FROM packages WHERE id=?1").bind(id).first();
+  if (!pkg) return bad("Package not found", 404);
+  let page = null; try { page = pkg.page ? JSON.parse(pkg.page) : null; } catch {}
+  const { page: _, ...info } = pkg;
+  return json({ package: info, page: pageFromBody(page || defaultPageFor(pkg)), saved: !!page, slug: pkg.slug || slugify(pkg.name), live: !!pkg.page_live,
+    url: `/test/${pkg.slug || slugify(pkg.name)}`, ai: !!aiKey(env) });
+}
+async function adminSavePage(env, req, id) {
+  const b = await req.json().catch(() => ({}));
+  const pkg = await env.DB.prepare("SELECT * FROM packages WHERE id=?1").bind(id).first();
+  if (!pkg) return bad("Package not found", 404);
+  const slug = slugify(b.slug || pkg.slug || pkg.name);
+  if (slug.length < 3) return bad("The web address needs at least 3 letters or numbers.");
+  if (await env.DB.prepare("SELECT 1 FROM packages WHERE slug=?1 AND id!=?2").bind(slug, id).first()) return bad(`/test/${slug} is already used by another package.`);
+  const page = pageFromBody(b.page);
+  const live = b.live ? 1 : 0;
+  if (live && !pkg.active) return bad("This package is hidden – make it Active before publishing its page.");
+  if (live && !page.hero.headline) return bad("Write the main question (hero headline) before publishing.");
+  await env.DB.prepare("UPDATE packages SET slug=?1, page=?2, page_live=?3, page_at=?4 WHERE id=?5").bind(slug, JSON.stringify(page), live, isoNow(), id).run();
+  return json({ ok: true, slug, live: !!live, url: `/test/${slug}` });
+}
+async function adminPreviewPage(env, req, id) {
+  const b = await req.json().catch(() => ({}));
+  const pkg = await env.DB.prepare("SELECT * FROM packages WHERE id=?1").bind(id).first();
+  if (!pkg) return bad("Package not found", 404);
+  const res = await renderPackagePage(env, req, pkg, b.page || {}, { preview: true, canonical: `https://drsarwantests.com/test/${pkg.slug || slugify(pkg.name)}` });
+  return new Response(await res.text(), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+}
+async function adminAiPage(env, req, id) {
+  if (!aiKey(env)) return bad("Add the ANTHROPIC_API_KEY secret in Cloudflare first.");
+  const b = await req.json().catch(() => ({}));
+  const pkg = await env.DB.prepare("SELECT * FROM packages WHERE id=?1").bind(id).first();
+  if (!pkg) return bad("Package not found", 404);
+  const section = String(b.section || "");
+  if (section !== "all" && !PAGE_SECTIONS.includes(section)) return bad("Unknown section");
+  const S = await getSettings(env);
+  try {
+    const out = await aiGeneratePage({ url: env.ANTHROPIC_URL || "https://api.anthropic.com", key: aiKey(env), model: S.ai_model || AI_MODEL_DEFAULT },
+      pkg, section, clean(b.instructions, 1000), b.page && typeof b.page === "object" ? b.page : null);
+    return json({ ok: true, content: out });
+  } catch (e) {
+    console.log("ai page", String(e));
+    return bad("The AI couldn't write this section: " + String(e.message || e).slice(0, 200), 502);
+  }
 }
 function readPackage(b) {
   const name = clean(b.name, 120);
@@ -2412,7 +2637,7 @@ class Bot {
       await this.say(msgFor(env, await templates(env), full, "prep").text);
       return;
     }
-    if (a === "book") return this.say(`Book a home blood test here: ${SITE}/#book\nOur phlebotomist comes to your home between 6 and 11 AM.`);
+    if (a === "book") return this.say(`Book a home blood test here: ${SITE}/#book\nOur phlebotomist comes to your home between 7 AM and 6 PM.`);
     if (a === "talk") {
       const rows = await this.bookings(false);
       await deliver(env, rows[0] ? rows[0].id : "", "team_alert", { S: this.S, alert: `+91 ${this.phone} (${this.c.name || "patient"}) asked to talk to the team` })
@@ -3602,6 +3827,7 @@ export default {
       await ensureSchema(env);
       if (event.cron === "30 13 * * *") await waDaily(env); // 7 PM IST: visit reminders
       await reportJobs(env); // every minute: AI report checks + confirm screens for the centres
+      await paymentSweep(env).catch((e) => console.log("payment sweep", String(e))); // online payments nobody came back from
       // every 10 minutes while any message text is waiting for WhatsApp's approval: load its status from Meta
       // (Meta also tells us through the webhook, but only if "message_template_status_update" is subscribed)
       if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() % 10 === 0
@@ -3624,7 +3850,7 @@ export default {
       if (p.startsWith("/api/")) {
         if (!env.DB) return bad("Database not configured", 503);
         await ensureSchema(env);
-        if (p === "/api/config" && req.method === "GET") return getConfig(env);
+        if (p === "/api/config" && req.method === "GET") return getConfig(env, url);
         if (p === "/api/wa/webhook" && req.method === "GET") return waWebhookVerify(env, url);
         if (p === "/api/wa/webhook" && req.method === "POST") return waWebhook(env, req);
         if (p === "/api/packages" && req.method === "GET") return publicPackages(env);
@@ -3640,6 +3866,11 @@ export default {
         if (m && req.method === "GET") return payInfo(env, url, m[1]);
         m = p.match(/^\/api\/bookings\/(DSL-[A-Z0-9]{6})\/reslot$/);
         if (m && req.method === "POST") return reslot(env, req, m[1]);
+        m = p.match(/^\/api\/bookings\/(DSL-[A-Z0-9]{6})\/checkout$/);
+        if (m && req.method === "POST") return checkout(env, req, url, m[1]);
+        m = p.match(/^\/api\/bookings\/(DSL-[A-Z0-9]{6})\/verify$/);
+        if (m && req.method === "POST") return verifyPay(env, req, m[1]);
+        if (p === "/api/pay/instamojo" && req.method === "POST") return imWebhook(env, req);
 
         if (p === "/api/staff/login" && req.method === "POST") return staffLogin(env, req);
         if (p === "/api/staff/logout" && req.method === "POST") return logoutSession(env, req);
@@ -3656,6 +3887,12 @@ export default {
           if (p === "/api/admin/bookings" && req.method === "POST") return adminCreate(env, req);
           if (p === "/api/admin/packages" && req.method === "GET") return adminPackages(env, staff);
           if (p === "/api/admin/packages" && req.method === "POST") return adminSavePackage(env, req, null);
+          m = p.match(/^\/api\/admin\/packages\/(\d{1,9})\/page(?:\/(preview|ai))?$/);
+          if (m && staff.role !== "admin") return bad("Only an admin can do this.", 403);
+          if (m && !m[2] && req.method === "GET") return adminPage(env, Number(m[1]));
+          if (m && !m[2] && req.method === "POST") return adminSavePage(env, req, Number(m[1]));
+          if (m && m[2] === "preview" && req.method === "POST") return adminPreviewPage(env, req, Number(m[1]));
+          if (m && m[2] === "ai" && req.method === "POST") return adminAiPage(env, req, Number(m[1]));
           m = p.match(/^\/api\/admin\/packages\/(\d{1,9})$/);
           if (m && req.method === "POST") return adminSavePackage(env, req, Number(m[1]));
           if (m && req.method === "DELETE") return adminDeletePackage(env, Number(m[1]));
@@ -3687,6 +3924,9 @@ export default {
           if (m && req.method === "POST") return adminResched(env, req, m[1]);
           m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/cancel-centre$/);
           if (m && req.method === "POST") return adminCancelCentre(env, req, m[1]);
+          if (p === "/api/admin/payments" && req.method === "GET") return adminPayments(env, url);
+          m = p.match(/^\/api\/admin\/payments\/(\d{1,9})\/check$/);
+          if (m && req.method === "POST") return adminPaymentCheck(env, Number(m[1]));
           if (p === "/api/admin/review" && req.method === "GET") return adminReview(env);
           m = p.match(/^\/api\/admin\/review\/(\d{1,9})$/);
           if (m && req.method === "POST") return adminReviewAct(env, req, Number(m[1]));
@@ -3757,6 +3997,16 @@ export default {
           return bad("Not found", 404);
         }
         return bad("Not found", 404);
+      }
+      // package landing pages: "/" = the website test's page (if published), /test/<slug> = any published package page
+      const tm = p === "/" ? [p, null] : p.match(/^\/test\/([a-z0-9-]{1,80})\/?$/);
+      if (tm && req.method === "GET" && env.DB) {
+        try {
+          await ensureSchema(env);
+          const res = await sitePage(env, req, url, tm[1]);
+          if (res) return res;
+        } catch (e) { console.log("site page", p, String(e && e.stack || e)); }
+        if (tm[1] !== null) return Response.redirect(new URL("/", req.url).toString(), 302);
       }
       return env.ASSETS.fetch(req);
     } catch (e) {

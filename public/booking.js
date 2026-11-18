@@ -3,6 +3,10 @@
   const root = $('#booker');
   if (!root) return;
   const state = { date: null, slot: null, slotLabel: '', booking: null, cfg: null, timer: null };
+  // package pages (/test/<slug>) preselect their package; the home page uses the website test
+  const PKG = root.dataset.package || '';
+  const PREVIEW = root.dataset.preview === '1';
+  const online = () => state.cfg && state.cfg.gateway === 'instamojo';
   const params = new URLSearchParams(location.search);
   const source = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'gclid']
     .filter((k) => params.get(k)).map((k) => `${k}=${params.get(k)}`).join('&').slice(0, 300);
@@ -23,12 +27,13 @@
 
   async function init() {
     try {
-      state.cfg = await api('/api/config');
+      state.cfg = await api('/api/config' + (PKG ? '?package=' + encodeURIComponent(PKG) : ''));
     } catch (e) {
       $('#bk-dates').innerHTML = '<span class="bk-err">Online booking is unavailable right now. Please call <a href="tel:8368143677">8368143677</a>.</span>';
       return;
     }
     root.querySelectorAll('.bk-amt').forEach((el) => (el.textContent = state.cfg.amount));
+    if (online()) $('#bk-form-note').textContent = 'You pay online on the next step (UPI, cards, net banking). Your slot is booked as soon as the payment goes through.';
     if (state.cfg.mapsKey) initPlaces(state.cfg.mapsKey);
     const box = $('#bk-dates');
     box.innerHTML = '';
@@ -42,6 +47,7 @@
       box.appendChild(b);
     });
     pickDate(state.cfg.dates[0]);
+    if (params.get('pay_return')) return payReturn();
     openPayLink();
   }
 
@@ -54,7 +60,7 @@
       state.booking = r;
       state.form = { name: r.name, phone: r.phone, address: r.address, city: r.city, state: r.state, pincode: r.pincode };
       root.querySelectorAll('.bk-amt').forEach((el) => (el.textContent = r.amount));
-      startPayment();
+      if (online()) goPay(); else startPayment();
       root.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (e) {
       const n = document.createElement('p');
@@ -105,12 +111,14 @@
     if (!/^\d{4}-\d{2}-\d{2}$/.test(data.dob || '') || data.dob > new Date().toISOString().slice(0, 10)) { err.textContent = "Please enter the patient's date of birth."; $('#bk-dob').focus(); return; }
     if (!data.consent) { err.textContent = 'Please tick the box to get your booking updates and reports on WhatsApp.'; $('#bk-consent').focus(); return; }
     data.consent = true;
+    if (PREVIEW) { err.textContent = 'This is a preview – booking is switched off here.'; return; }
+    if (state.cfg.test) data.package_id = state.cfg.test.id;
     btn.disabled = true; btn.dataset.t = btn.textContent; btn.textContent = 'Reserving your slot…';
     try {
       state.form = data;
       state.booking = await api('/api/bookings', { method: 'POST', body: JSON.stringify({ ...data, date: state.date, slot: state.slot, source }) });
       if (window.gtag) gtag('event', 'begin_checkout', { value: state.booking.amount, currency: 'INR' });
-      startPayment();
+      if (online()) goPay(); else startPayment();
     } catch (e) {
       err.textContent = e.message;
       if (e.status === 409) { pickDate(state.date); setTimeout(() => show(1), 1800); }
@@ -194,23 +202,83 @@
     finally { btn.disabled = false; btn.textContent = btn.dataset.t; }
   });
 
-  function finishBooking(b, r, utr) {
+  function finishBooking(b, r, utr, paidOnline) {
       $('#bk-done-ref').textContent = b.id;
+      if (paidOnline) {
+        $('#bk-done-h').textContent = 'Payment received – you\'re booked!';
+        $('#bk-done-wa-h').textContent = 'Want updates on WhatsApp? Say hi to us';
+        $('#bk-done-wa-p').textContent = 'We\'ll send your confirmation and collector details on WhatsApp. You can also message us any time with your booking ref.';
+      }
       $('#bk-done-slot').textContent = `${r.dateLabel || b.dateLabel} · ${r.slotLabel || b.slotLabel}`;
       const f = state.form || {};
       const msg = [
-        'Hi Dr. Sarwan Diagnostic Labs, I have booked the Hormone & Fertility Panel home test and paid.',
+        `Hi Dr. Sarwan Diagnostic Labs, I have booked the ${b.testName || (state.cfg && state.cfg.test && state.cfg.test.name) || 'home test'} home test and paid${paidOnline ? ' online' : ''}.`,
         `Booking Ref: ${b.id}`,
         `Slot: ${b.dateLabel}, ${b.slotLabel}`,
         `Name: ${f.name || ''}`,
         `Mobile: ${f.phone || ''}`,
-        `Address: ${f.address || ''}, ${f.city || ''}, ${f.state || ''} - ${f.pincode || ''}`,
+        f.address ? `Address: ${f.address}, ${f.city || ''}, ${f.state || ''} - ${f.pincode || ''}` : null,
         `Amount paid: Rs. ${b.amount}`,
-        state.shot ? 'Payment screenshot uploaded on the website.' : `UPI UTR: ${utr}`,
-      ].join('\n');
+        paidOnline ? (utr ? `Payment ID: ${utr}` : null) : state.shot ? 'Payment screenshot uploaded on the website.' : `UPI UTR: ${utr}`,
+      ].filter((x) => x !== null).join('\n');
       $('#bk-done-wa').href = 'https://wa.me/918368143677?text=' + encodeURIComponent(msg);
       if (window.gtag) gtag('event', 'purchase', { transaction_id: b.id, value: b.amount, currency: 'INR' });
       show(4);
+  }
+
+  // ---- online payment (Instamojo): open the hosted payment page, then check the result when the patient comes back ----
+  async function goPay() {
+    const b = state.booking;
+    root.querySelectorAll('.bk-amt').forEach((el) => (el.textContent = b.amount));
+    $('#bk-pay-ref').innerHTML = `Ref <strong>${b.id}</strong> · ${b.dateLabel} · ${b.slotLabel}`;
+    $('#bk-err-pay').textContent = '';
+    $('#bk-pay-status').textContent = 'Taking you to our secure payment page (UPI, cards, net banking, wallets)…';
+    show('pay');
+    const btn = $('#bk-pay-btn'); btn.disabled = true;
+    try {
+      const r = await api(`/api/bookings/${b.id}/checkout`, { method: 'POST', body: JSON.stringify({ token: b.token, back: location.pathname }) });
+      if (r.paid) return checkPaid(b.id, b.token, {});
+      location.href = r.url;
+      setTimeout(() => { btn.disabled = false; $('#bk-pay-status').textContent = 'If the payment page didn\'t open, tap the button below.'; }, 4000);
+    } catch (e) {
+      $('#bk-err-pay').textContent = e.message; btn.disabled = false;
+      $('#bk-pay-status').textContent = '';
+    }
+  }
+  $('#bk-pay-btn').addEventListener('click', () => state.booking && goPay());
+
+  async function checkPaid(id, token, q, tries = 0) {
+    $('#bk-pay-status').textContent = 'Checking your payment…';
+    $('#bk-err-pay').textContent = '';
+    $('#bk-pay-btn').disabled = true;
+    show('pay');
+    try {
+      const r = await api(`/api/bookings/${encodeURIComponent(id)}/verify`, { method: 'POST', body: JSON.stringify({ token, payment_id: q.payment_id || '', payment_request_id: q.payment_request_id || '' }) });
+      state.booking = { ...(state.booking || {}), ...r };
+      root.querySelectorAll('.bk-amt').forEach((el) => (el.textContent = r.amount));
+      $('#bk-pay-ref').innerHTML = `Ref <strong>${r.id}</strong> · ${r.dateLabel} · ${r.slotLabel}`;
+      if (r.paid) {
+        state.form = state.form || { name: r.name, phone: r.phone };
+        return finishBooking(state.booking, r, r.paymentId, true);
+      }
+      if (r.pending && tries < 6) { $('#bk-pay-status').textContent = 'Waiting for your bank to confirm the payment…'; return setTimeout(() => checkPaid(id, token, q, tries + 1), 5000); }
+      $('#bk-pay-status').textContent = '';
+      const why = r.reason ? r.reason.replace(/[.\s]*$/, '. ') : 'The payment didn\'t go through. ';
+      $('#bk-err-pay').textContent = why + 'Your booking isn\'t paid yet – please try again. If money left your account, your bank usually returns it within a few days.';
+      $('#bk-pay-btn').disabled = false;
+    } catch (e) {
+      $('#bk-pay-status').textContent = '';
+      $('#bk-err-pay').textContent = e.message;
+      $('#bk-pay-btn').disabled = false;
+    }
+  }
+  function payReturn() {
+    const id = params.get('pay_return'), t = params.get('t');
+    const q = { payment_id: params.get('payment_id') || '', payment_request_id: params.get('payment_request_id') || '' };
+    state.booking = { id, token: t };
+    try { history.replaceState(null, '', location.pathname + '#book'); } catch (e) {}
+    setTimeout(() => root.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+    checkPaid(id, t, q);
   }
 
   // ---- slot taken after payment: let the patient pick a new slot without paying again ----

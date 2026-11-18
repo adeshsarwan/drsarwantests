@@ -33,6 +33,7 @@
 <button type="button" class="tab" data-tab="bookings" aria-current="page">Bookings</button>
 <button type="button" class="tab" data-tab="calendar">Calendar</button>
 <button type="button" class="tab adm" data-tab="tests">Packages</button>
+<button type="button" class="tab adm" data-tab="payments">Payments <span class="tab-n late" id="payN" hidden></span></button>
 <button type="button" class="tab adm" data-tab="centres">Centres</button>
 <button type="button" class="tab adm" data-tab="users">Users</button>
 <button type="button" class="tab" data-tab="inbox">Inbox <span class="tab-n" id="inboxN" hidden></span></button>
@@ -84,12 +85,38 @@
 <div style="display:flex;gap:8px;flex-wrap:wrap"><input id="pkgSearch" class="inp" type="search" placeholder="Search packages…" aria-label="Search packages"><button class="btn sm" data-act="pkg-add">+ Add test</button></div>
 </div>
 <div class="tbl-wrap"><table class="tbl pkg-t">
-<thead><tr><th>Test / package</th><th style="text-align:center">Before test</th><th class="num">MRP</th><th class="num">Price</th><th class="num">Margin</th><th>Target</th><th class="num">Active bookings</th><th>Status</th><th></th></tr></thead>
+<thead><tr><th>Test / package</th><th style="text-align:center">Before test</th><th class="num">MRP</th><th class="num">Price</th><th class="num">Margin</th><th>Target</th><th class="num">Active bookings</th><th>Status</th><th>Web page</th><th></th></tr></thead>
 <tbody id="pkgBody"></tbody>
 </table></div>
 <p class="meta" id="pkgCount" style="margin:10px 0 0"></p>
 </div>
 </main>
+
+<!-- ================= PAYMENTS TAB (online payments: failed / not completed / paid) ================= -->
+<main id="view-payments" class="wrap" style="padding-bottom:40px" hidden>
+<div class="card" id="payGw"></div>
+<div class="card">
+<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+<div><h2 class="h2" style="margin:0">Online payments</h2><p class="meta" style="margin:4px 0 0">A booking only opens for its slot after a successful payment. Payments that failed or were never finished stay here, so you can call the patient.</p></div>
+<div style="display:flex;gap:8px;flex-wrap:wrap">
+<select id="payFilter" class="inp" aria-label="Show"><option value="problem">Failed &amp; not completed</option><option value="failed">Failed</option><option value="abandoned">Not completed</option><option value="created">Waiting (on the payment page)</option><option value="success">Paid online</option><option value="all">All attempts</option></select>
+<select id="payDays" class="inp" aria-label="Period"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last 12 months</option></select>
+</div>
+</div>
+<div class="stats stats4" id="payStats" style="margin-top:14px"></div>
+<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>When</th><th>Patient</th><th>Package</th><th class="num">Amount</th><th>Slot</th><th>Result</th><th>Why</th><th></th></tr></thead>
+<tbody id="payBody"></tbody>
+</table></div>
+</div>
+</main>
+
+<!-- ================= PACKAGE PAGE EDITOR (opened from Packages → Edit page) ================= -->
+<main id="view-page" class="pe" hidden><div id="peRoot"></div></main>
+<dialog id="pePrev" class="dlg pe-prev" aria-label="Page preview">
+<div class="dlg-h" style="display:flex;justify-content:space-between;align-items:center;gap:10px"><b>Preview</b><span class="meta">Booking is switched off in the preview.</span><span style="display:flex;gap:6px"><button type="button" class="btn ghost sm" data-pv="390">Phone</button><button type="button" class="btn ghost sm" data-pv="100%">Desktop</button><button type="button" class="btn sm" data-close="pePrev">Close</button></span></div>
+<iframe id="pePrevF" title="Page preview" style="display:block;border:0;width:100%;height:calc(100vh - 120px);margin:0 auto;background:#fff"></iframe>
+</dialog>
 
 <!-- ================= OPERATIONS TAB (operator home) ================= -->
 <main id="view-ops" class="wrap ops" hidden>
@@ -412,5 +439,6 @@
 <div id="tip" class="tip" role="tooltip" hidden></div>
 <script src="/shared/msgs.js"></script>
 <script src="/admin/admin.js"></script>
+<script src="/admin/page-editor.js"></script>
 </body>
 </html>
