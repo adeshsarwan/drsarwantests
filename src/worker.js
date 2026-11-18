@@ -313,7 +313,7 @@ async function seedPages(env) {
     } else await env.DB.prepare("UPDATE packages SET slug=?1 WHERE id=?2").bind(slug, r.id).run();
   }
 }
-let schemaReady = null;
+let schemaDone = false; // per isolate; a promise can't be shared between requests in Workers
 // report_files columns for the centre → AI check → operator approval flow.
 // review: NULL (uploaded by our team – no approval needed) | draft (centre still confirming on WhatsApp) | pending (waiting for an operator)
 //         | held (interim – operator waits for the final report) | approved | rejected | withdrawn (the centre took it back)
@@ -327,8 +327,11 @@ const NEW_COLS = { city: "TEXT", state: "TEXT", vial_no: "TEXT", collected_at: "
   resched_req: "TEXT", resched_at: "TEXT", resched_date: "TEXT", resched_slot: "TEXT",
   vial_reported: "TEXT", vial_reported_at: "TEXT", pay_method: "TEXT" };
 function ensureSchema(env) {
-  if (!schemaReady) {
-    schemaReady = (async () => {
+  // Each request runs the (idempotent) setup itself until one finishes. Sharing one promise across requests
+  // breaks in Workers: if the request that started it ends first, everyone else waiting gets
+  // "This promise was created by a request that has since ended" and the isolate stays broken.
+  if (schemaDone) return Promise.resolve();
+  return (async () => {
       // add any missing columns first (older databases), then tables / indexes
       const info = await env.DB.prepare("PRAGMA table_info(bookings)").all().catch(() => ({ results: [] }));
       const have = new Set((info.results || []).map((c) => c.name));
@@ -353,9 +356,8 @@ function ensureSchema(env) {
       await seedAccounts(env);
       await seedWa(env);
       await backfillFailed(env).catch((e) => console.log("backfill", String(e)));
-    })().catch((e) => { schemaReady = null; throw e; });
-  }
-  return schemaReady;
+      schemaDone = true;
+  })();
 }
 
 async function expireHolds(env) {
