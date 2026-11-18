@@ -4041,6 +4041,8 @@ export default {
       return env.ASSETS.fetch(req);
     } catch (e) {
       console.log("error", p, String(e && e.stack || e));
+      // staff screens get the real reason (helps fixing); the public site keeps the friendly text
+      if (/^\/api\/(admin|staff|centre)\//.test(p)) return bad("Server error: " + String((e && e.message) || e).slice(0, 200), 500);
       return bad("Something went wrong. Please call 8368143677 to book.", 500);
     }
   },
