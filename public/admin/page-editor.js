@@ -1,5 +1,6 @@
-// Admin → Packages → "Edit page": the web page of one package (/test/<slug>), section by section, with AI writing.
-// Its own screen (address #page/<id>) so it doesn't mix with the booking admin.
+// Admin → Packages → "Edit page": the web page of one package (/package/<slug>), section by section, with AI writing.
+// Also "Edit home page" (address #home): our story timeline, numbers and texts of drsarwantests.com.
+// Its own screen (address #page/<id> or #home) so it doesn't mix with the booking admin.
 (function () {
   'use strict';
   const A = () => window.DSLAdmin;
@@ -39,6 +40,22 @@
       extra: [['book.sub', 'Booking box: line under “Book a home test”', 'text'], ['book.meta', 'Booking box: small line under the price', 'text'], ['book.bar', 'Bottom bar: package name', 'text']] },
   ];
   const AI_SECTIONS = SEC.map((x) => x.key);
+  const HOME_SEC = [
+    { key: 'hero', title: 'Top of the home page', help: 'The first thing visitors see on drsarwantests.com.',
+      fields: [['badge', 'Small label', 'text', 'e.g. Since 2015'], ['title', 'Main heading', 'ta'], ['text', 'Text under the heading', 'ta'], ['cta', 'Button text', 'text', 'Scrolls to the packages']] },
+    { key: 'stats', title: 'Numbers / badges', help: 'The boxes beside the heading (NABL, CGHS, years, centres…). Only write numbers you can stand behind.',
+      fields: [], list: { path: 'stats', label: 'Box', fields: [['big', 'Big text', 'text', 'e.g. NABL, 25+, 2015'], ['small', 'Small text', 'text']] } },
+    { key: 'story', title: 'Our journey – timeline', help: 'Milestones from 2015 to today, left to right. Leave the year empty to show a dot instead.',
+      fields: [['title', 'Heading', 'text'], ['intro', 'Intro line', 'ta']],
+      list: { key: 'items', label: 'Milestone', fields: [['year', 'Year', 'text', 'e.g. 2015, 2019, Today'], ['title', 'Title', 'text'], ['text', 'Text', 'ta']] } },
+    { key: 'packages', title: 'Packages section', help: 'The cards come by themselves from every package with a published page (Packages → Edit page → Publish).',
+      fields: [['title', 'Heading', 'text'], ['intro', 'Intro line', 'ta']] },
+    { key: 'features', title: 'Why us – three points', help: 'Short points under the packages.',
+      fields: [], list: { path: 'features', label: 'Point', fields: [['title', 'Title', 'text'], ['text', 'Text', 'ta']] } },
+    { key: 'seo', title: 'Google', help: 'Title and description Google shows for the home page.',
+      fields: [['title', 'Page title (Google)', 'text', 'Under 65 characters'], ['description', 'Description (Google)', 'ta', 'Under 155 characters']] },
+  ];
+  const secs = () => (S.home ? HOME_SEC : SEC);
 
   // ---------- path helpers ----------
   const getP = (o, path) => path.split('.').reduce((a, k) => (a == null ? a : a[k]), o);
@@ -67,20 +84,32 @@ ${L.sub ? listHTML(`${path}.${i}.${L.sub.key}`, L.sub) : ''}</div>`).join('')}
     const busy = S.busy[x.key];
     return `<section class="pe-sec card" id="pe-${x.key}">
 <div class="pe-sec-h"><div><h2 class="h2" style="margin:0">${esc(x.title)}</h2><p class="meta" style="margin:4px 0 0">${esc(x.help)}</p></div>
-${S.ai ? `<div class="pe-ai"><input class="inp" data-ins="${x.key}" placeholder="Tell the AI something (optional)" value="${esc(S.ins[x.key] || '')}" aria-label="Instructions for the AI">
+${S.ai && !S.home ? `<div class="pe-ai"><input class="inp" data-ins="${x.key}" placeholder="Tell the AI something (optional)" value="${esc(S.ins[x.key] || '')}" aria-label="Instructions for the AI">
 <button type="button" class="btn sm ai" data-pe="ai" data-s="${x.key}" ${busy ? 'disabled' : ''}>${busy ? '<span class="spin"></span> Writing…' : '✨ Write with AI'}</button></div>` : ''}</div>
-${x.key === 'hero' ? `<div class="pe-price">Price on the page: <b>${A().money(S.pkg.price)}</b>${S.pkg.mrp ? ` <span class="meta">(MRP ${A().money(S.pkg.mrp)})</span>` : ''} <span class="meta">– comes from the package. Change it in Packages → Edit.</span></div>` : ''}
+${x.key === 'hero' && !S.home ? `<div class="pe-price">Price on the page: <b>${A().money(S.pkg.price)}</b>${S.pkg.mrp ? ` <span class="meta">(MRP ${A().money(S.pkg.mrp)})</span>` : ''} <span class="meta">– comes from the package. Change it in Packages → Edit.</span></div>` : ''}
 <div class="pe-grid">${x.fields.map((f) => field(x.key, f)).join('')}${(x.extra || []).map((f) => field('', f)).join('')}</div>
-${x.list ? listHTML(`${x.key}.${x.list.key}`, x.list) : ''}
+${x.list ? listHTML(x.list.path || `${x.key}.${x.list.key}`, x.list) : ''}
 ${x.after ? `<div class="pe-grid">${x.after.map((f) => field(x.key, f)).join('')}</div>` : ''}
 ${x.list2 ? listHTML(`${x.key}.${x.list2.key}`, x.list2) : ''}
 </section>`;
   }
-  const filled = (k) => { const v = S.page[k] || {}; return k === 'hero' ? !!v.headline : k === 'seo' ? !!v.title : k === 'canCant' ? !!(v.can || []).length : k === 'tests' ? !!(v.groups || []).length : !!(v.items || []).length; };
+  const filled = (k) => { const v = S.page[k] || {}; if (Array.isArray(v)) return !!v.length; if (S.home) return k === 'story' ? !!(v.items || []).length : !!(v.title || v.badge); return k === 'hero' ? !!v.headline : k === 'seo' ? !!v.title : k === 'canCant' ? !!(v.can || []).length : k === 'tests' ? !!(v.groups || []).length : !!(v.items || []).length; };
 
   function render() {
     const y = window.scrollY;
-    const url = S.pkg.is_default ? '/' : '/test/' + S.slug;
+    if (S.home) {
+      root.innerHTML = `<div class="pe-bar"><div class="pe-bar-in">
+<button type="button" class="btn ghost sm" data-pe="back">← Packages</button>
+<div class="pe-t"><b>Home page</b><span class="meta">drsarwantests.com – our story, then the packages</span></div>
+<span class="pe-st live">● Live${S.dirty ? ' · unsaved changes' : ''}</span>
+<span class="pe-acts"><button type="button" class="btn ghost sm" data-pe="preview">Preview</button><button type="button" class="btn sm" data-pe="publish">Save &amp; update home page</button></span></div></div>
+<div class="pe-wrap"><nav class="pe-nav" aria-label="Page sections">
+<div class="pe-url"><a href="/" target="_blank" rel="noopener">Open home page ↗</a><span class="meta">Package cards shown: ${S.packages.length ? S.packages.map((p) => esc(p.name)).join(', ') : 'none yet – publish a package page'}</span></div>
+${HOME_SEC.map((x) => `<a href="#pe-${x.key}" data-pe="jump" data-s="${x.key}"><i class="${filled(x.key) ? 'ok' : ''}"></i>${esc(x.title.split(' – ')[0])}</a>`).join('')}
+</nav><div class="pe-main">${HOME_SEC.map(secHTML).join('')}</div></div>`;
+      window.scrollTo(0, y); return;
+    }
+    const url = '/package/' + S.slug;
     root.innerHTML = `<div class="pe-bar"><div class="pe-bar-in">
 <button type="button" class="btn ghost sm" data-pe="back">← Packages</button>
 <div class="pe-t"><b>${esc(S.pkg.name)}</b><span class="meta">${A().money(S.pkg.price)} · ${esc(S.pkg.tests || '')}</span></div>
@@ -93,8 +122,8 @@ ${S.live ? `<button type="button" class="btn ghost sm" data-pe="unpublish">Unpub
 </span></div></div>
 <div class="pe-wrap">
 <nav class="pe-nav" aria-label="Page sections">
-<div class="pe-url"><label for="peSlug" class="meta">Web address</label><div class="pe-slug"><span>drsarwantests.com/test/</span><input id="peSlug" class="inp" value="${esc(S.slug)}" autocomplete="off" spellcheck="false"></div>
-${S.live && S.pkg.active ? `<a href="${esc(url)}" target="_blank" rel="noopener">Open live page ↗</a>` : '<span class="meta">Visible once published</span>'}${S.pkg.is_default ? '<span class="meta">Website test: this page is also the home page.</span>' : ''}</div>
+<div class="pe-url"><label for="peSlug" class="meta">Web address</label><div class="pe-slug"><span>drsarwantests.com/package/</span><input id="peSlug" class="inp" value="${esc(S.slug)}" autocomplete="off" spellcheck="false"></div>
+${S.live && S.pkg.active ? `<a href="${esc(url)}" target="_blank" rel="noopener">Open live page ↗</a>` : '<span class="meta">Visible once published</span>'}<span class="meta">Published pages also get a card on the home page.</span></div>
 ${SEC.map((x) => `<a href="#pe-${x.key}" data-pe="jump" data-s="${x.key}"><i class="${S.busy[x.key] ? 'busy' : filled(x.key) ? 'ok' : ''}"></i>${esc(x.title.split(' – ')[0])}</a>`).join('')}
 ${S.ai ? '' : '<p class="meta" style="margin-top:12px">AI writing needs the ANTHROPIC_API_KEY secret in Cloudflare.</p>'}
 </nav>
@@ -108,6 +137,14 @@ ${S.ai ? '' : '<p class="meta" style="margin-top:12px">AI writing needs the ANTH
     if (!id) return;
     if (S && S.id === id && S.page && S.dirty) { render(); return; } // came back without leaving: keep the edits
     root.innerHTML = '<p class="meta" style="padding:30px">Loading page…</p>';
+    if (id === 'home') {
+      try {
+        const r = await A().api('/api/admin/home');
+        S = { id, home: true, page: r.page, packages: r.packages, dirty: false, busy: {}, ins: {} };
+        render(); window.scrollTo(0, 0);
+      } catch (e) { root.innerHTML = `<p class="err" style="padding:30px">${esc(e.message)}</p>`; }
+      return;
+    }
     try {
       const r = await A().api(`/api/admin/packages/${id}/page`);
       S = { id, pkg: r.package, page: r.page, slug: r.slug, live: r.live, saved: r.saved, ai: r.ai, dirty: false, busy: {}, ins: {} };
@@ -115,6 +152,10 @@ ${S.ai ? '' : '<p class="meta" style="margin-top:12px">AI writing needs the ANTH
     } catch (e) { root.innerHTML = `<p class="err" style="padding:30px">${esc(e.message)}</p>`; }
   }
   async function save(live) {
+    if (S.home) {
+      try { await A().post('/api/admin/home', { page: S.page }); S.dirty = false; A().toast('Home page updated ✓'); render(); } catch (e) { A().toast(e.message); }
+      return;
+    }
     const btns = root.querySelectorAll('[data-pe="save"],[data-pe="publish"],[data-pe="unpublish"]'); btns.forEach((b) => (b.disabled = true));
     try {
       const r = await A().post(`/api/admin/packages/${S.id}/page`, { page: S.page, slug: $('#peSlug').value, live });
@@ -141,7 +182,7 @@ ${S.ai ? '' : '<p class="meta" style="margin-top:12px">AI writing needs the ANTH
     f.srcdoc = '<p style="font-family:sans-serif;padding:30px;color:#5a6880">Loading preview…</p>';
     dlg.showModal();
     try {
-      const r = await fetch(`/api/admin/packages/${S.id}/page/preview`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-session': sessionStorage.getItem('dsl_staff') || '' }, body: JSON.stringify({ page: S.page }) });
+      const r = await fetch(S.home ? '/api/admin/home/preview' : `/api/admin/packages/${S.id}/page/preview`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-session': sessionStorage.getItem('dsl_staff') || '' }, body: JSON.stringify({ page: S.page }) });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Preview failed');
       f.srcdoc = await r.text();
     } catch (e) { f.srcdoc = `<p style="font-family:sans-serif;padding:30px;color:#b23f28">${esc(e.message)}</p>`; }

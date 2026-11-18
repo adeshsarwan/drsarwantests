@@ -1,4 +1,4 @@
-// Package pages: every package can have its own landing page at /test/<slug>, with the same layout as the home page.
+// Package pages: every package can have its own landing page at /package/<slug>, with the same layout as the home page.
 // The page content is JSON (stored in packages.page), edited in Admin → Packages → "Edit page", and drawn into
 // public/index.html with HTMLRewriter: the home page's content sections are swapped for this package's sections,
 // and the booking form is preselected for this package (price, tests and payment all come from the package).

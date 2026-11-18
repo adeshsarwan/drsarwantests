@@ -119,7 +119,7 @@
       try { sessionStorage.setItem('dsl_staff', KEY); sessionStorage.setItem('dsl_me', JSON.stringify(ME)); } catch (e2) {}
       if (isOp()) tab = 'ops';
       applyRole(); $('#pw').value = '';
-      await refreshAll(); $('#login').hidden = true; $('#app').hidden = false; showTab(/^#page\/\d+$/.test(location.hash) ? 'page' : tab);
+      await refreshAll(); $('#login').hidden = true; $('#app').hidden = false; showTab(/^#(page\/\d+|home)$/.test(location.hash) ? 'page' : tab);
     } catch (err) { $('#loginErr').textContent = err.message; }
   };
   fetch('/api/config').then((r) => r.json()).then((c) => (CFG = { ...CFG, ...c })).catch(() => {});
@@ -128,8 +128,8 @@
   function showTab(name) {
     if (isOp() && ADMIN_TABS.includes(name)) name = 'ops';
     // the page editor is its own screen (opened from Packages → Edit page, address #page/<id>)
-    if (name === 'page' && !/^#page\/\d+$/.test(location.hash)) name = 'tests';
-    if (name !== 'page' && /^#page\//.test(location.hash)) { if (window.DSLPage && !window.DSLPage.canLeave()) return; history.replaceState(null, '', location.pathname); }
+    if (name === 'page' && !/^#(page\/\d+|home)$/.test(location.hash)) name = 'tests';
+    if (name !== 'page' && /^#(page\/|home)/.test(location.hash)) { if (window.DSLPage && !window.DSLPage.canLeave()) return; history.replaceState(null, '', location.pathname); }
     tab = name; if (name !== 'page') pref.set('tab', name);
     const hl = name === 'page' ? 'tests' : name;
     $$('.tab').forEach((t) => (t.getAttribute('data-tab') === hl ? t.setAttribute('aria-current', 'page') : t.removeAttribute('aria-current')));
@@ -144,7 +144,7 @@
     $('#view-payments').hidden = name !== 'payments';
     $('#view-page').hidden = name !== 'page';
     document.body.classList.toggle('pe-on', name === 'page');
-    if (name === 'page' && window.DSLPage) window.DSLPage.open(Number(location.hash.split('/')[1]));
+    if (name === 'page' && window.DSLPage) window.DSLPage.open(location.hash === '#home' ? 'home' : Number(location.hash.split('/')[1]));
     if (name === 'payments') loadPays().catch((e) => toast(e.message));
     if (name === 'ops') renderOps();
     if (name === 'inbox') loadChats().catch((e) => toast(e.message));
@@ -155,7 +155,7 @@
     if (name === 'wa') loadWa().catch((e) => toast(e.message));
   }
   $$('.tab').forEach((t) => (t.onclick = () => showTab(t.getAttribute('data-tab'))));
-  window.addEventListener('hashchange', () => { if (/^#page\/\d+$/.test(location.hash) && KEY && !isOp()) showTab('page'); });
+  window.addEventListener('hashchange', () => { if (/^#(page\/\d+|home)$/.test(location.hash) && KEY && !isOp()) showTab('page'); });
 
   async function refreshAll() {
     await Promise.all([load(), loadPkgs().catch(() => {}), isOp() ? null : loadPays(true).catch(() => {}), loadCentres().catch(() => {}), loadReview().catch(() => {}), isOp() ? null : loadWa(true).catch(() => {}), isOp() ? null : loadChats().catch(() => {})]);
@@ -1110,7 +1110,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
 <td>${esc(p.target || '—')}</td>
 <td class="num">${p.bookings || 0}</td>
 <td>${p.is_default ? '<span class="badge web">Website test</span>' : ''}<span class="badge ${p.active ? 'on' : 'off'}">${p.active ? 'Active' : 'Hidden'}</span></td>
-<td class="pg-cell">${p.page_live && p.active ? `<a class="pg-live" href="${p.is_default ? '/' : '/test/' + esc(p.slug)}" target="_blank" rel="noopener" title="Open the live page">● Live page</a>` : p.has_page ? '<span class="pg-draft">Draft page</span>' : '<span class="pg-none">No page yet</span>'}<a class="pg-edit" href="#page/${p.id}">Edit page →</a></td>
+<td class="pg-cell">${p.page_live && p.active ? `<a class="pg-live" href="/package/${esc(p.slug)}" target="_blank" rel="noopener" title="Open the live page">● Live page</a>` : p.has_page ? '<span class="pg-draft">Draft page</span>' : '<span class="pg-none">No page yet</span>'}<a class="pg-edit" href="#page/${p.id}">Edit page →</a></td>
 <td><button type="button" class="btn ghost sm" data-act="pkg-edit" data-pid="${p.id}">Edit</button></td></tr>`).join('')
       : '<tr><td colspan="10" class="meta" style="padding:18px">No tests match.</td></tr>';
     $('#pkgCount').textContent = `${PKGS.filter((p) => p.active).length} active · ${PKGS.filter((p) => !p.active).length} hidden`;
@@ -2179,7 +2179,7 @@ ${t.meta !== false ? `<button type="button" class="btn ghost sm" data-act="wa-su
   });
 
   window.DSLAdmin = { api, post, toast, esc, money, showTab, reloadPkgs: () => loadPkgs().catch(() => {}), pkgs: () => PKGS };
-  if (KEY && ME) { applyRole(); refreshAll().then(() => { $('#app').hidden = false; showTab(/^#page\/\d+$/.test(location.hash) ? 'page' : tab); }).catch(() => logout()); }
+  if (KEY && ME) { applyRole(); refreshAll().then(() => { $('#app').hidden = false; showTab(/^#(page\/\d+|home)$/.test(location.hash) ? 'page' : tab); }).catch(() => logout()); }
   else if (KEY) logout();
   else $('#login').hidden = false;
 })();
