@@ -31,12 +31,14 @@ Unpaid bookings never block a slot and are marked expired after 2 hours.
   `INSTAMOJO_SALT` (Private salt). Optional plain variable `INSTAMOJO_ENV=test` for the sandbox (test.instamojo.com) – remove it to go live.
 
 ## Package pages
-- Every package has a web page at `drsarwantests.com/test/<slug>` with the same layout as the home page. **Admin → Packages → Edit page**
+- The home page (`/`) tells our story (timeline since 2015, NABL / CGHS) and then shows a card for every package with a published page.
+  Edit it in **Admin → Packages → Edit home page**.
+- Every package has a web page at `drsarwantests.com/package/<slug>` (old `/test/<slug>` links redirect there) with the same layout as the home page. **Admin → Packages → Edit page**
   opens a separate editor: hero (main question, button, price from the package), *Which question brought you here*, stories (current conversations,
   with sources), can / can't, the tests, precautions, FAQ, and Google title/description.
 - **✨ Write with AI** (per section) or **Write whole page** uses Claude (`ANTHROPIC_API_KEY`, model from Admin → WhatsApp). Stories use web search
   and list their sources. Nothing is saved until you press *Save draft* / *Publish*; *Preview* shows the page before it goes live.
-- The booking form on a package page is preselected for that package (its price, tests and payment). The **website test**'s page is also the home page (`/`).
+- The booking form on a package page is preselected for that package (its price, tests and payment). `/sitemap.xml` lists the published pages.
 
 ## Collection centres, users and portals
 - **Centres tab** (`/admin`): add / edit collection centres – name, address, contact person and the **WhatsApp numbers**

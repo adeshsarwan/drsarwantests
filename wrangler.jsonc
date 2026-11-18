@@ -5,7 +5,7 @@
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/*", "/", "/test/*"]
+    "run_worker_first": ["/api/*", "/", "/test/*", "/package/*", "/sitemap.xml"]
   },
   "d1_databases": [
     {

@@ -2,6 +2,7 @@
 // Cloudflare Worker + D1. Static site is served from ./public via the ASSETS binding.
 import "../public/shared/msgs.js"; // WhatsApp message texts, shared with the admin page
 import { imConfigured, imIsTest, imCreateRequest, imGetRequest, imGetPayment, imPaymentOk, imMacOk } from "./instamojo.js";
+import { renderHome, homeFromBody, HOME_DEFAULT } from "./home.js";
 import { renderPackagePage, pageFromBody, defaultPageFor, slugify, aiGeneratePage, PAGE_SECTIONS, HORMONE_PAGE } from "./pages.js";
 const M = globalThis.DSLMsg;
 
@@ -279,7 +280,7 @@ async function migrateTestsAndReports(env) {
 async function seedPackages(env) {
   const cols = await env.DB.prepare("PRAGMA table_info(packages)").all();
   if (!(cols.results || []).some((c) => c.name === "prep")) await env.DB.prepare("ALTER TABLE packages ADD COLUMN prep TEXT").run();
-  // website page per package: slug (/test/<slug>), page = JSON of the sections, page_live = 1 when published
+  // website page per package: slug (/package/<slug>), page = JSON of the sections, page_live = 1 when published
   for (const [c, t] of [["slug", "TEXT"], ["page", "TEXT"], ["page_live", "INTEGER NOT NULL DEFAULT 0"], ["page_at", "TEXT"]])
     if (!(cols.results || []).some((x) => x.name === c)) {
       try { await env.DB.prepare(`ALTER TABLE packages ADD COLUMN ${c} ${t}`).run(); } catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
@@ -298,7 +299,7 @@ async function seedPackages(env) {
   const d = await env.DB.prepare("SELECT id, name FROM packages WHERE is_default=1").first();
   if (d) await env.DB.prepare("UPDATE bookings SET package_id=?1, package_name=?2 WHERE package_id IS NULL AND status!='blocked'").bind(d.id, d.name).run();
 }
-// Every package gets a web address (/test/<slug>); the website test starts with the current home-page content, published.
+// Every package gets a web address (/package/<slug>); the website test starts with the old home-page content, published.
 async function seedPages(env) {
   const { results } = await env.DB.prepare("SELECT id, name, slug, page, is_default FROM packages WHERE slug IS NULL OR (is_default=1 AND page IS NULL)").all();
   for (const r of results) {
@@ -569,7 +570,7 @@ async function reslot(env, req, id) {
 //    state a verified UPI screenshot used to give, so it shows up in Bookings and follows the normal steps.
 // Payments that fail or are never finished stay in the payments table → Admin → Payments.
 const PAY_ABANDON_MIN = 30; // an Instamojo page not paid after this long counts as "not completed"
-const okBack = (b) => (/^\/(test\/[a-z0-9-]{1,80}\/?)?$/.test(String(b || "")) ? String(b) : "/");
+const okBack = (b) => (/^\/((test|package)\/[a-z0-9-]{1,80}\/?)?$/.test(String(b || "")) ? String(b) : "/");
 
 async function checkout(env, req, url, id) {
   if (!imConfigured(env)) return bad("Online payment isn't set up yet. Please call 8368143677.", 503);
@@ -1082,14 +1083,35 @@ async function adminPackages(env, staff) {
   return json({ packages: results });
 }
 
-// ---- package web pages (/test/<slug>) – Admin → Packages → "Edit page" ----
+// ---- website: "/" = our story + package cards; /package/<slug> = a package page (Admin → Packages → "Edit page") ----
 async function sitePage(env, req, url, slug) {
-  const pkg = slug === null
-    ? await env.DB.prepare("SELECT * FROM packages WHERE active=1 AND is_default=1 AND page_live=1 AND page IS NOT NULL LIMIT 1").first()
-    : await env.DB.prepare("SELECT * FROM packages WHERE slug=?1 AND active=1 AND page_live=1 AND page IS NOT NULL").bind(slug).first();
+  const pkg = await env.DB.prepare("SELECT * FROM packages WHERE slug=?1 AND active=1 AND page_live=1 AND page IS NOT NULL").bind(slug).first();
   if (!pkg) return null;
   let page; try { page = JSON.parse(pkg.page); } catch { return null; }
-  return renderPackagePage(env, req, pkg, page, { canonical: slug === null || pkg.is_default ? "https://drsarwantests.com/" : `https://drsarwantests.com/test/${pkg.slug}` });
+  return renderPackagePage(env, req, pkg, page, { canonical: `https://drsarwantests.com/package/${pkg.slug}` });
+}
+async function homeContent(env) {
+  const r = await env.DB.prepare("SELECT v FROM settings WHERE k='home_page'").first();
+  try { return r && r.v ? JSON.parse(r.v) : HOME_DEFAULT; } catch { return HOME_DEFAULT; }
+}
+const livePackages = (env) => env.DB.prepare("SELECT name, slug, price, mrp, tests, page FROM packages WHERE active=1 AND page_live=1 AND page IS NOT NULL AND slug IS NOT NULL ORDER BY is_default DESC, sort, id").all().then((r) => r.results);
+async function homePage(env, home, preview) {
+  return new Response(renderHome(home, await livePackages(env), { preview }), {
+    headers: { "content-type": "text/html; charset=utf-8", "cache-control": preview ? "no-store" : "public, max-age=60" } });
+}
+async function sitemap(env) {
+  const pk = await livePackages(env);
+  const urls = ["/", ...pk.map((p) => `/package/${p.slug}`), "/contact", "/privacy", "/service", "/refund", "/delivery"];
+  return new Response(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map((u) => `  <url><loc>https://drsarwantests.com${u}</loc></url>`).join("\n")}\n</urlset>\n`,
+    { headers: { "content-type": "application/xml; charset=utf-8", "cache-control": "public, max-age=3600" } });
+}
+async function adminHome(env) { return json({ page: homeFromBody(await homeContent(env)), packages: (await livePackages(env)).map((p) => ({ name: p.name, slug: p.slug })) }); }
+async function adminSaveHome(env, req) {
+  const b = await req.json().catch(() => ({}));
+  const page = homeFromBody(b.page);
+  if (!page.hero.title) return bad("Write the main heading first.");
+  await env.DB.prepare("INSERT INTO settings (k, v) VALUES ('home_page', ?1) ON CONFLICT(k) DO UPDATE SET v=excluded.v").bind(JSON.stringify(page)).run();
+  return json({ ok: true });
 }
 async function adminPage(env, id) {
   const pkg = await env.DB.prepare("SELECT * FROM packages WHERE id=?1").bind(id).first();
@@ -1097,7 +1119,7 @@ async function adminPage(env, id) {
   let page = null; try { page = pkg.page ? JSON.parse(pkg.page) : null; } catch {}
   const { page: _, ...info } = pkg;
   return json({ package: info, page: pageFromBody(page || defaultPageFor(pkg)), saved: !!page, slug: pkg.slug || slugify(pkg.name), live: !!pkg.page_live,
-    url: `/test/${pkg.slug || slugify(pkg.name)}`, ai: !!aiKey(env) });
+    url: `/package/${pkg.slug || slugify(pkg.name)}`, ai: !!aiKey(env) });
 }
 async function adminSavePage(env, req, id) {
   const b = await req.json().catch(() => ({}));
@@ -1105,19 +1127,19 @@ async function adminSavePage(env, req, id) {
   if (!pkg) return bad("Package not found", 404);
   const slug = slugify(b.slug || pkg.slug || pkg.name);
   if (slug.length < 3) return bad("The web address needs at least 3 letters or numbers.");
-  if (await env.DB.prepare("SELECT 1 FROM packages WHERE slug=?1 AND id!=?2").bind(slug, id).first()) return bad(`/test/${slug} is already used by another package.`);
+  if (await env.DB.prepare("SELECT 1 FROM packages WHERE slug=?1 AND id!=?2").bind(slug, id).first()) return bad(`/package/${slug} is already used by another package.`);
   const page = pageFromBody(b.page);
   const live = b.live ? 1 : 0;
   if (live && !pkg.active) return bad("This package is hidden – make it Active before publishing its page.");
   if (live && !page.hero.headline) return bad("Write the main question (hero headline) before publishing.");
   await env.DB.prepare("UPDATE packages SET slug=?1, page=?2, page_live=?3, page_at=?4 WHERE id=?5").bind(slug, JSON.stringify(page), live, isoNow(), id).run();
-  return json({ ok: true, slug, live: !!live, url: `/test/${slug}` });
+  return json({ ok: true, slug, live: !!live, url: `/package/${slug}` });
 }
 async function adminPreviewPage(env, req, id) {
   const b = await req.json().catch(() => ({}));
   const pkg = await env.DB.prepare("SELECT * FROM packages WHERE id=?1").bind(id).first();
   if (!pkg) return bad("Package not found", 404);
-  const res = await renderPackagePage(env, req, pkg, b.page || {}, { preview: true, canonical: `https://drsarwantests.com/test/${pkg.slug || slugify(pkg.name)}` });
+  const res = await renderPackagePage(env, req, pkg, b.page || {}, { preview: true, canonical: `https://drsarwantests.com/package/${pkg.slug || slugify(pkg.name)}` });
   return new Response(await res.text(), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
 }
 async function adminAiPage(env, req, id) {
@@ -3887,6 +3909,10 @@ export default {
           if (p === "/api/admin/bookings" && req.method === "POST") return adminCreate(env, req);
           if (p === "/api/admin/packages" && req.method === "GET") return adminPackages(env, staff);
           if (p === "/api/admin/packages" && req.method === "POST") return adminSavePackage(env, req, null);
+          if (p.startsWith("/api/admin/home") && staff.role !== "admin") return bad("Only an admin can do this.", 403);
+          if (p === "/api/admin/home" && req.method === "GET") return adminHome(env);
+          if (p === "/api/admin/home" && req.method === "POST") return adminSaveHome(env, req);
+          if (p === "/api/admin/home/preview" && req.method === "POST") return homePage(env, (await req.json().catch(() => ({}))).page || {}, true);
           m = p.match(/^\/api\/admin\/packages\/(\d{1,9})\/page(?:\/(preview|ai))?$/);
           if (m && staff.role !== "admin") return bad("Only an admin can do this.", 403);
           if (m && !m[2] && req.method === "GET") return adminPage(env, Number(m[1]));
@@ -3998,15 +4024,19 @@ export default {
         }
         return bad("Not found", 404);
       }
-      // package landing pages: "/" = the website test's page (if published), /test/<slug> = any published package page
-      const tm = p === "/" ? [p, null] : p.match(/^\/test\/([a-z0-9-]{1,80})\/?$/);
-      if (tm && req.method === "GET" && env.DB) {
+      // website: "/" = our story + packages, /package/<slug> = a published package page (old /package/<slug> links move there)
+      const old = p.match(/^\/test\/([a-z0-9-]{1,80})\/?$/);
+      if (old) return Response.redirect(new URL(`/package/${old[1]}${url.search}`, req.url).toString(), 301);
+      const tm = p.match(/^\/package\/([a-z0-9-]{1,80})\/?$/);
+      if ((tm || p === "/" || p === "/sitemap.xml") && req.method === "GET" && env.DB) {
         try {
           await ensureSchema(env);
+          if (p === "/") return await homePage(env, await homeContent(env), false);
+          if (p === "/sitemap.xml") return await sitemap(env);
           const res = await sitePage(env, req, url, tm[1]);
           if (res) return res;
         } catch (e) { console.log("site page", p, String(e && e.stack || e)); }
-        if (tm[1] !== null) return Response.redirect(new URL("/", req.url).toString(), 302);
+        if (tm) return Response.redirect(new URL("/#packages", req.url).toString(), 302);
       }
       return env.ASSETS.fetch(req);
     } catch (e) {

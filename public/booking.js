@@ -3,7 +3,7 @@
   const root = $('#booker');
   if (!root) return;
   const state = { date: null, slot: null, slotLabel: '', booking: null, cfg: null, timer: null };
-  // package pages (/test/<slug>) preselect their package; the home page uses the website test
+  // package pages (/package/<slug>) preselect their package
   const PKG = root.dataset.package || '';
   const PREVIEW = root.dataset.preview === '1';
   const online = () => state.cfg && state.cfg.gateway === 'instamojo';
