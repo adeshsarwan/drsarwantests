@@ -1474,18 +1474,27 @@ Return every single test in this package through the lab_tests tool:
 - Fix spelling and casing; keep Indian lab naming.
 - If the text says only something like "85 tests" without naming them, list only what is named.
 - "purpose" is for our team and patients: plain words, 1–2 sentences, no medical advice.`;
-  const r = await fetch(`${env.ANTHROPIC_URL || "https://api.anthropic.com"}/v1/messages`, {
-    method: "POST",
-    headers: { "x-api-key": aiKey(env), "anthropic-version": "2023-06-01", "content-type": "application/json" },
-    body: JSON.stringify({ model: S.ai_model || AI_MODEL_DEFAULT, max_tokens: 16000,
-      tools: [{ name: "lab_tests", description: "The single tests in the package.", input_schema: LABTEST_SCHEMA }],
-      tool_choice: { type: "tool", name: "lab_tests" }, messages: [{ role: "user", content: prompt }] }),
-  });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok || j.type === "error") throw new Error((j.error && j.error.message) || `AI request failed (${r.status})`);
-  const use = (j.content || []).find((c) => c.type === "tool_use" && c.name === "lab_tests");
-  if (!use || !use.input || !Array.isArray(use.input.tests)) throw new Error("The AI didn't return the tests. Please try again.");
-  return use.input.tests;
+  // some models don't allow forcing a tool: ask for it (tool_choice auto), accept plain JSON too, and nudge once if needed
+  const messages = [{ role: "user", content: prompt + "\n\nCall the lab_tests tool with the result." }];
+  for (let turn = 0; turn < 2; turn++) {
+    const r = await fetch(`${env.ANTHROPIC_URL || "https://api.anthropic.com"}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": aiKey(env), "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model: S.ai_model || AI_MODEL_DEFAULT, max_tokens: 16000,
+        tools: [{ name: "lab_tests", description: "The single tests in the package.", input_schema: LABTEST_SCHEMA }],
+        tool_choice: { type: "auto" }, messages }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.type === "error") throw new Error((j.error && j.error.message) || `AI request failed (${r.status})`);
+    const use = (j.content || []).find((c) => c.type === "tool_use" && c.name === "lab_tests");
+    if (use && use.input && Array.isArray(use.input.tests)) return use.input.tests;
+    const txt = (j.content || []).filter((c) => c.type === "text").map((c) => c.text).join("");
+    const m = /\{[\s\S]*\}/.exec(txt);
+    if (m) { try { const o = JSON.parse(m[0]); if (o && Array.isArray(o.tests)) return o.tests; } catch {} }
+    messages.push({ role: "assistant", content: j.content && j.content.length ? j.content : [{ type: "text", text: txt || "(no answer)" }] },
+      { role: "user", content: "Now call the lab_tests tool with every test." });
+  }
+  throw new Error("The AI didn't return the tests. Please try again.");
 }
 async function adminAiPackageTests(env, pid) {
   if (!aiKey(env)) return bad("Add the ANTHROPIC_API_KEY secret in Cloudflare first.");
