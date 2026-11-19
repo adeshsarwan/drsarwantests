@@ -1112,7 +1112,10 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   function testsTip(p) {
     const l = testList(p.tests);
     if (!l.length) return `<button type="button" class="prep-i none" data-tip="No tests listed yet. Click to add them." data-act="pkg-edit" data-pid="${p.id}" aria-label="No tests listed – add them">⚠</button>`;
-    const n = l.length > 1 ? l.length : (/(\d+)\s*tests?/i.exec(l[0]) || [])[1] || '';
+    // count: "85 tests: …" at the start wins, else the sum of "(N Tests)" groups, else one per listed test
+    const txt = String(p.tests || ''), lead = /^\s*(\d+)\s*tests?\b/i.exec(txt);
+    const groups = [...txt.matchAll(/\((\d+)\s*tests?\)/gi)].reduce((a, m) => a + Number(m[1]), 0);
+    const n = lead ? lead[1] : groups || (l.length > 1 ? l.length : '');
     return `<button type="button" class="prep-i tests-i" data-tip="${esc(l.join('\n'))}" data-tip-title="Tests${n ? ' (' + n + ')' : ''}" data-act="pkg-edit" data-pid="${p.id}" aria-label="Tests: ${esc(l.join(', '))}">🧪${n ? `<small>${n}</small>` : ''}</button>`;
   }
   function renderPkgs() {
