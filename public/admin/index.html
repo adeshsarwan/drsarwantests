@@ -33,6 +33,7 @@
 <button type="button" class="tab" data-tab="bookings" aria-current="page">Bookings</button>
 <button type="button" class="tab" data-tab="calendar">Calendar</button>
 <button type="button" class="tab adm" data-tab="tests">Packages</button>
+<button type="button" class="tab adm" data-tab="labtests">Tests</button>
 <button type="button" class="tab adm" data-tab="payments">Payments <span class="tab-n late" id="payN" hidden></span></button>
 <button type="button" class="tab adm" data-tab="centres">Centres</button>
 <button type="button" class="tab adm" data-tab="users">Users</button>
@@ -89,6 +90,22 @@
 <tbody id="pkgBody"></tbody>
 </table></div>
 <p class="meta" id="pkgCount" style="margin:10px 0 0"></p>
+</div>
+</main>
+
+<!-- ================= LAB TESTS TAB (single tests inside packages) ================= -->
+<main id="view-labtests" class="wrap" style="padding-bottom:40px" hidden>
+<div class="card">
+<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+<div><h2 class="h2" style="margin:0">Tests</h2><p class="meta" style="margin:4px 0 0">Every single test we offer, what it's for, and which packages include it. Price and margin per test are kept for later – they aren't used anywhere yet.</p></div>
+<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><input id="ltSearch" class="inp" type="search" placeholder="Search tests…" aria-label="Search tests"><select id="ltCat" class="inp" aria-label="Category"><option value="">All categories</option></select><button class="btn ghost sm" data-act="lt-ai-all" id="ltAiAll">✨ Build from packages with AI</button><button class="btn sm" data-act="lt-add">+ Add test</button></div>
+</div>
+<p class="note" id="ltProgress" hidden style="margin:12px 0 0"></p>
+<div class="tbl-wrap"><table class="tbl lt-t">
+<thead><tr><th>Test</th><th>What it's for</th><th>Category</th><th>Sample</th><th>In packages</th><th class="num">Price <span class="meta">(later)</span></th><th class="num">Margin <span class="meta">(later)</span></th><th>Status</th><th></th></tr></thead>
+<tbody id="ltBody"></tbody>
+</table></div>
+<p class="meta" id="ltCount" style="margin:10px 0 0"></p>
 </div>
 </main>
 
@@ -351,6 +368,30 @@
 <div class="dlg-f"><button class="btn" id="pkgSave" style="flex:1">Save test</button><button type="button" class="btn warn" id="pkgDel" hidden>Delete</button><button type="button" class="btn ghost" data-close="pkgDlg">Cancel</button></div>
 </form>
 </dialog>
+
+<!-- one lab test -->
+<dialog id="ltDlg" class="dlg" style="max-width:min(94vw,620px)">
+<form id="ltForm" novalidate>
+<div class="dlg-h"><b id="ltTitle">Add test</b><div class="meta">Shown to our team. "What it's for" can be written by AI and edited.</div></div>
+<div class="dlg-b fgrid">
+<div class="fld wide"><label for="ltName">Test name</label><input id="ltName" class="inp" autocomplete="off" required placeholder="e.g. Thyroid Stimulating Hormone (TSH)"></div>
+<div class="fld"><label for="ltCode">Code <span class="meta">(optional)</span></label><input id="ltCode" class="inp" autocomplete="off" placeholder="TSH"></div>
+<div class="fld"><label for="ltCatSel">Category</label><select id="ltCatSel" class="inp"></select></div>
+<div class="fld"><label for="ltSample">Sample</label><input id="ltSample" class="inp" autocomplete="off" placeholder="Blood"></div>
+<div class="fld"><label for="ltAlso">Also called <span class="meta">(optional)</span></label><input id="ltAlso" class="inp" autocomplete="off"></div>
+<div class="fld wide"><label for="ltPurpose" style="display:flex;justify-content:space-between;align-items:center">What it's for <button type="button" class="btn ghost sm" id="ltAi">✨ Write with AI</button></label><textarea id="ltPurpose" class="inp ta" rows="3" placeholder="What the test measures and why doctors order it"></textarea></div>
+<div class="fld"><label for="ltPrice">Price (₹) <span class="meta">– for later</span></label><input id="ltPrice" class="inp" inputmode="numeric" autocomplete="off"></div>
+<div class="fld"><label for="ltMargin">Margin (₹) <span class="meta">– for later</span></label><input id="ltMargin" class="inp" inputmode="numeric" autocomplete="off"></div>
+<div class="fld wide"><label>In packages</label><div id="ltPkgs" class="lt-pkgs"></div></div>
+<label class="fld wide chk"><span><input type="checkbox" id="ltActive" checked> <b>Active</b></span></label>
+</div>
+<p class="err" id="ltErr" style="padding:0 18px;margin:0"></p>
+<div class="dlg-f"><button class="btn" id="ltSave" style="flex:1">Save test</button><button type="button" class="btn warn" id="ltDel" hidden>Delete</button><button type="button" class="btn ghost" data-close="ltDlg">Cancel</button></div>
+</form>
+</dialog>
+
+<!-- tests in a package: opens when you hover the 🧪 in Packages -->
+<div id="ptPop" class="pt-pop" role="dialog" aria-label="Tests in this package" hidden></div>
 
 <!-- sample collected: vial no. -->
 <dialog id="vialDlg" class="dlg" style="max-width:min(94vw,420px)">

@@ -46,6 +46,14 @@ Unpaid bookings never block a slot and are marked expired after 2 hours.
   and list their sources. Nothing is saved until you press *Save draft* / *Publish*; *Preview* shows the page before it goes live.
 - The booking form on a package page is preselected for that package (its price, tests and payment). `/sitemap.xml` lists the published pages.
 
+## Tests (single lab tests)
+- **Admin → Tests** lists every single test, *what it's for* (written by Claude, editable), category, sample, and the packages that include it.
+  Price and margin per test are placeholders for later – not used anywhere yet.
+- **✨ Build from packages with AI** reads each package's "Tests included" text (packages without linked tests only), splits it into single tests,
+  reuses tests already in the list, explains new ones and links them to the package.
+- **Admin → Packages → 🧪** (hover or click) opens a small form: the package's tests with ×, a search box to add a test (or create a new one),
+  *✨ Redo with AI*, and *Use as "Tests included"* to rewrite the package's patient-facing summary from the linked list.
+
 ## Collection centres, users and portals
 - **Centres tab** (`/admin`): add / edit collection centres – name, address, contact person and the **WhatsApp numbers**
   of the people who work for the centre (these will be allowed to use the centre's WhatsApp menu; booking details go to the first number).

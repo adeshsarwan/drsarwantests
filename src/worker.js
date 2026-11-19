@@ -193,6 +193,12 @@ const SCHEMA = [
     payment_id TEXT, amount INTEGER NOT NULL, status TEXT NOT NULL, reason TEXT, method TEXT, back TEXT, checked_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS payments_by_booking ON payments(booking_id)`,
   `CREATE INDEX IF NOT EXISTS payments_by_status ON payments(status, created_at)`,
+  // lab tests (the single tests inside packages) and which package has which test. price / margin are placeholders for later.
+  `CREATE TABLE IF NOT EXISTS lab_tests (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, code TEXT, also_called TEXT, category TEXT, sample TEXT,
+    purpose TEXT, price INTEGER, margin INTEGER, active INTEGER NOT NULL DEFAULT 1, ai_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS lab_tests_name ON lab_tests(lower(name))`,
+  `CREATE TABLE IF NOT EXISTS package_tests (package_id INTEGER NOT NULL, test_id INTEGER NOT NULL, sort INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (package_id, test_id))`,
+  `CREATE INDEX IF NOT EXISTS package_tests_test ON package_tests(test_id)`,
   // receipts: one per paid booking, numbered DSL/<financial year>/<n> (e.g. DSL/2026-27/0001)
   `CREATE TABLE IF NOT EXISTS receipts (booking_id TEXT PRIMARY KEY, no TEXT NOT NULL UNIQUE, fy TEXT NOT NULL, seq INTEGER NOT NULL, created_at TEXT NOT NULL)`,
   // phone numbers: calls / website / marketing = 83681 43677, WhatsApp chats = 98180 28755. Texts saved in the database had
@@ -1229,7 +1235,8 @@ async function adminPackages(env, staff) {
   const { results } = await env.DB.prepare(
     `SELECT p.*, (SELECT COUNT(*) FROM bookings b WHERE b.package_id = p.id AND b.status NOT IN ('cancelled','expired','blocked')) AS bookings
      FROM packages p ORDER BY p.sort, p.id`).all();
-  for (const r of results) { r.has_page = !!r.page; delete r.page; if (staff && staff.role === "operator") r.margin = null; }
+  const { results: links } = await env.DB.prepare("SELECT pt.package_id, t.id, t.name FROM package_tests pt JOIN lab_tests t ON t.id = pt.test_id ORDER BY pt.package_id, pt.sort").all();
+  for (const r of results) { r.has_page = !!r.page; delete r.page; if (staff && staff.role === "operator") r.margin = null; r.linked = links.filter((l) => l.package_id === r.id).map((l) => ({ id: l.id, name: l.name })); }
   return json({ packages: results });
 }
 
@@ -1351,8 +1358,181 @@ async function adminDeletePackage(env, id) {
   if (cur.is_default) return bad("This is the website test. Make another test the website test first.", 409);
   const used = await env.DB.prepare("SELECT COUNT(*) AS n FROM bookings WHERE package_id=?1").bind(id).first();
   if (used && used.n) return bad(`${used.n} booking(s) use this test, so it can't be deleted. Hide it instead.`, 409);
-  await env.DB.prepare("DELETE FROM packages WHERE id=?1").bind(id).run();
+  await env.DB.batch([env.DB.prepare("DELETE FROM package_tests WHERE package_id=?1").bind(id), env.DB.prepare("DELETE FROM packages WHERE id=?1").bind(id)]);
   return json({ ok: true });
+}
+
+
+// ---- lab tests: the single tests inside packages (Admin → Tests) ----
+// Each test has a plain-language "what it's for" (written by Claude, editable). Packages link to tests (package_tests).
+// The package's own "tests" text stays the short summary patients see; "Use linked tests" in the package form rewrites it.
+const TEST_CATS = ["Hormones", "Fertility", "Thyroid", "Diabetes", "Liver", "Kidney", "Heart & lipids", "Vitamins & minerals", "Blood count",
+  "Infection", "Cancer markers", "Pregnancy", "Allergy", "Urine", "Electrolytes", "Inflammation", "Toxic elements", "Other"];
+const normTest = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+function readLabTest(b) {
+  const name = clean(b.name, 120);
+  if (name.length < 2) return { err: "Enter the test name." };
+  const n = (v) => (v === "" || v === null || v === undefined ? null : Number.isFinite(+v) && +v >= 0 && +v <= 10000000 ? Math.round(+v) : NaN);
+  const price = n(b.price), margin = n(b.margin);
+  if (Number.isNaN(price) || Number.isNaN(margin)) return { err: "Price and margin must be numbers." };
+  return { name, code: clean(b.code, 40) || null, also_called: clean(b.also_called, 200) || null, category: clean(b.category, 40) || null,
+    sample: clean(b.sample, 60) || null, purpose: clean(b.purpose, 1200) || null, price, margin, active: b.active === false || b.active === 0 ? 0 : 1 };
+}
+async function adminLabTests(env) {
+  const [{ results: tests }, { results: links }, { results: pkgs }] = await Promise.all([
+    env.DB.prepare("SELECT * FROM lab_tests ORDER BY lower(name)").all(),
+    env.DB.prepare("SELECT package_id, test_id, sort FROM package_tests ORDER BY package_id, sort, test_id").all(),
+    env.DB.prepare("SELECT id, name, tests, active FROM packages ORDER BY sort, id").all(),
+  ]);
+  return json({ tests, links, packages: pkgs, cats: TEST_CATS, ai: !!aiKey(env) });
+}
+async function adminSaveLabTest(env, req, id) {
+  const b = await req.json().catch(() => ({}));
+  const t = readLabTest(b);
+  if (t.err) return bad(t.err);
+  const dup = await env.DB.prepare("SELECT id FROM lab_tests WHERE lower(name)=lower(?1) AND id != ?2").bind(t.name, id || 0).first();
+  if (dup) return bad("A test with this name already exists.", 409);
+  const now = isoNow();
+  if (id) {
+    const r = await env.DB.prepare(`UPDATE lab_tests SET name=?1, code=?2, also_called=?3, category=?4, sample=?5, purpose=?6, price=?7, margin=?8, active=?9, updated_at=?10 WHERE id=?11`)
+      .bind(t.name, t.code, t.also_called, t.category, t.sample, t.purpose, t.price, t.margin, t.active, now, id).run();
+    if (!r.meta.changes) return bad("Test not found", 404);
+  } else {
+    await env.DB.prepare(`INSERT INTO lab_tests (name, code, also_called, category, sample, purpose, price, margin, active, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)`)
+      .bind(t.name, t.code, t.also_called, t.category, t.sample, t.purpose, t.price, t.margin, t.active, now).run();
+    id = (await env.DB.prepare("SELECT id FROM lab_tests WHERE lower(name)=lower(?1)").bind(t.name).first()).id;
+  }
+  // optional: which packages include this test (from the test form)
+  if (Array.isArray(b.package_ids)) {
+    const want = [...new Set(b.package_ids.map(Number).filter((x) => x > 0))];
+    const { results: have } = await env.DB.prepare("SELECT package_id FROM package_tests WHERE test_id=?1").bind(id).all();
+    const stmts = [];
+    for (const h of have) if (!want.includes(h.package_id)) stmts.push(env.DB.prepare("DELETE FROM package_tests WHERE package_id=?1 AND test_id=?2").bind(h.package_id, id));
+    for (const pid of want) if (!have.some((h) => h.package_id === pid))
+      stmts.push(env.DB.prepare("INSERT OR IGNORE INTO package_tests (package_id, test_id, sort) SELECT ?1, ?2, COALESCE(MAX(sort), 0) + 1 FROM package_tests WHERE package_id=?1").bind(pid, id));
+    if (stmts.length) await env.DB.batch(stmts);
+  }
+  return json({ ok: true, id });
+}
+async function adminDeleteLabTest(env, id) {
+  await env.DB.batch([env.DB.prepare("DELETE FROM package_tests WHERE test_id=?1").bind(id), env.DB.prepare("DELETE FROM lab_tests WHERE id=?1").bind(id)]);
+  return json({ ok: true });
+}
+// The tests of one package, in order (add / remove / reorder from the Packages hover form). summary=true also rewrites the
+// package's "Tests included" text from the linked names.
+async function adminSetPackageTests(env, req, pid) {
+  const b = await req.json().catch(() => ({}));
+  const pkg = await env.DB.prepare("SELECT id FROM packages WHERE id=?1").bind(pid).first();
+  if (!pkg) return bad("Package not found", 404);
+  const ids = [...new Set((Array.isArray(b.test_ids) ? b.test_ids : []).map(Number).filter((x) => x > 0))].slice(0, 400);
+  const stmts = [env.DB.prepare("DELETE FROM package_tests WHERE package_id=?1").bind(pid),
+    ...ids.map((tid, i) => env.DB.prepare("INSERT INTO package_tests (package_id, test_id, sort) SELECT ?1, id, ?3 FROM lab_tests WHERE id=?2").bind(pid, tid, i + 1))];
+  await env.DB.batch(stmts);
+  if (b.summary) {
+    const { results } = await env.DB.prepare("SELECT t.name FROM package_tests pt JOIN lab_tests t ON t.id = pt.test_id WHERE pt.package_id=?1 ORDER BY pt.sort").bind(pid).all();
+    await env.DB.prepare("UPDATE packages SET tests=?1, updated_at=?2 WHERE id=?3").bind(results.map((x) => x.name).join(", ").slice(0, 4000), isoNow(), pid).run();
+  }
+  return json({ ok: true });
+}
+
+// ---- AI: split a package's test list into single tests, explain each, and link them ----
+const LABTEST_SCHEMA = {
+  type: "object",
+  properties: {
+    tests: {
+      type: "array",
+      description: "Every single test in the package, in the order given.",
+      items: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Clear standard name, e.g. 'Thyroid Stimulating Hormone (TSH)'. If the same test is in the existing list, use that exact name." },
+          code: { type: "string", description: "Short code if there is a common one (TSH, AMH, HbA1c, LFT). Empty if none." },
+          also_called: { type: "string", description: "Other names or how it was written in the package, comma separated. Empty if none." },
+          category: { type: "string", enum: TEST_CATS },
+          sample: { type: "string", description: "Sample needed: Blood, Urine, Blood (fasting), Stool…" },
+          purpose: { type: "string", description: "1–2 short sentences in plain English: what the test measures and why a doctor orders it. No diagnosis, no scare words." },
+        },
+        required: ["name", "category", "sample", "purpose"],
+      },
+    },
+  },
+  required: ["tests"],
+};
+async function aiSplitPackage(env, S, pkg, known) {
+  const prompt = `You are helping an Indian diagnostic lab (Dr. Sarwan Diagnostic Labs, NABL & CGHS approved) keep a catalogue of single lab tests.
+
+Package: ${pkg.name}
+What the package says it includes (written by the team, may be messy, may list groups like "Liver (12 Tests)"):
+"""${String(pkg.tests || "").slice(0, 6000)}"""
+
+Tests already in our catalogue (reuse these EXACT names when it is the same test):
+${known.length ? known.map((t) => `- ${t.name}${t.code ? " [" + t.code + "]" : ""}`).join("\n") : "(none yet)"}
+
+Return every single test in this package through the lab_tests tool:
+- Split groups into the individual tests that are named. A group with no names listed (e.g. "Urine routine") is one test, e.g. "Urine Routine Examination".
+- A profile that is normally ordered as one (e.g. "Thyroid profile") may be listed as its parts (T3, T4, TSH) when the parts are named; otherwise as the profile.
+- Fix spelling and casing; keep Indian lab naming.
+- If the text says only something like "85 tests" without naming them, list only what is named.
+- "purpose" is for our team and patients: plain words, 1–2 sentences, no medical advice.`;
+  const r = await fetch(`${env.ANTHROPIC_URL || "https://api.anthropic.com"}/v1/messages`, {
+    method: "POST",
+    headers: { "x-api-key": aiKey(env), "anthropic-version": "2023-06-01", "content-type": "application/json" },
+    body: JSON.stringify({ model: S.ai_model || AI_MODEL_DEFAULT, max_tokens: 16000,
+      tools: [{ name: "lab_tests", description: "The single tests in the package.", input_schema: LABTEST_SCHEMA }],
+      tool_choice: { type: "tool", name: "lab_tests" }, messages: [{ role: "user", content: prompt }] }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.type === "error") throw new Error((j.error && j.error.message) || `AI request failed (${r.status})`);
+  const use = (j.content || []).find((c) => c.type === "tool_use" && c.name === "lab_tests");
+  if (!use || !use.input || !Array.isArray(use.input.tests)) throw new Error("The AI didn't return the tests. Please try again.");
+  return use.input.tests;
+}
+async function adminAiPackageTests(env, pid) {
+  if (!aiKey(env)) return bad("Add the ANTHROPIC_API_KEY secret in Cloudflare first.");
+  const pkg = await env.DB.prepare("SELECT id, name, tests FROM packages WHERE id=?1").bind(pid).first();
+  if (!pkg) return bad("Package not found", 404);
+  if (!String(pkg.tests || "").trim()) return json({ ok: true, added: 0, linked: 0, note: "This package has no tests written yet." });
+  const S = await getSettings(env);
+  const { results: known } = await env.DB.prepare("SELECT id, name, code, also_called FROM lab_tests").all();
+  let list;
+  try { list = await aiSplitPackage(env, S, pkg, known); } catch (e) { return bad(String(e.message || e), 502); }
+  const byName = new Map(known.map((t) => [normTest(t.name), t]));
+  const byCode = new Map(known.filter((t) => t.code).map((t) => [normTest(t.code), t]));
+  const ids = [], now = isoNow();
+  let added = 0;
+  for (const x of list) {
+    const t = readLabTest({ ...x, category: TEST_CATS.includes(x.category) ? x.category : "Other" });
+    if (t.err) continue;
+    let hit = byName.get(normTest(t.name)) || (t.code && byCode.get(normTest(t.code)));
+    if (!hit) {
+      await env.DB.prepare(`INSERT OR IGNORE INTO lab_tests (name, code, also_called, category, sample, purpose, active, ai_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?7, ?7)`)
+        .bind(t.name, t.code, t.also_called, t.category, t.sample, t.purpose, now).run();
+      hit = await env.DB.prepare("SELECT id, name, code FROM lab_tests WHERE lower(name)=lower(?1)").bind(t.name).first();
+      if (!hit) continue;
+      added++; byName.set(normTest(hit.name), hit); if (hit.code) byCode.set(normTest(hit.code), hit);
+    } else {
+      // fill in what's missing on an existing test (never overwrite what the team wrote)
+      await env.DB.prepare(`UPDATE lab_tests SET code=COALESCE(code, ?1), category=COALESCE(category, ?2), sample=COALESCE(sample, ?3), purpose=COALESCE(purpose, ?4), updated_at=?5 WHERE id=?6`)
+        .bind(t.code, t.category, t.sample, t.purpose, now, hit.id).run();
+    }
+    if (!ids.includes(hit.id)) ids.push(hit.id);
+  }
+  await env.DB.batch([env.DB.prepare("DELETE FROM package_tests WHERE package_id=?1").bind(pid),
+    ...ids.map((tid, i) => env.DB.prepare("INSERT INTO package_tests (package_id, test_id, sort) VALUES (?1, ?2, ?3)").bind(pid, tid, i + 1))]);
+  return json({ ok: true, added, linked: ids.length });
+}
+// "What it's for" for one test, written again by the AI
+async function adminAiLabTest(env, id) {
+  if (!aiKey(env)) return bad("Add the ANTHROPIC_API_KEY secret in Cloudflare first.");
+  const t = await env.DB.prepare("SELECT * FROM lab_tests WHERE id=?1").bind(id).first();
+  if (!t) return bad("Test not found", 404);
+  const S = await getSettings(env);
+  let list;
+  try { list = await aiSplitPackage(env, S, { name: "single test", tests: t.name + (t.code ? ` (${t.code})` : "") }, []); } catch (e) { return bad(String(e.message || e), 502); }
+  const x = list[0] || {};
+  await env.DB.prepare("UPDATE lab_tests SET purpose=?1, category=COALESCE(category, ?2), sample=COALESCE(sample, ?3), code=COALESCE(code, ?4), ai_at=?5, updated_at=?5 WHERE id=?6")
+    .bind(clean(x.purpose, 1200) || t.purpose, TEST_CATS.includes(x.category) ? x.category : null, clean(x.sample, 60) || null, clean(x.code, 40) || null, isoNow(), id).run();
+  return json({ ok: true, purpose: clean(x.purpose, 1200) });
 }
 
 async function adminBlock(env, req) {
@@ -4153,6 +4333,14 @@ export default {
           if (p === "/api/admin/bookings" && req.method === "POST") return adminCreate(env, req);
           { const dm = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})$/); if (dm && req.method === "DELETE") return adminDeleteBooking(env, req, dm[1]); }
           if (p === "/api/admin/packages" && req.method === "GET") return adminPackages(env, staff);
+          if (p.startsWith("/api/admin/labtests") && staff.role !== "admin") return bad("Only an admin can do this.", 403);
+          if (p === "/api/admin/labtests" && req.method === "GET") return adminLabTests(env);
+          if (p === "/api/admin/labtests" && req.method === "POST") return adminSaveLabTest(env, req, null);
+          { const lm = p.match(/^\/api\/admin\/labtests\/(\d{1,9})(\/ai)?$/);
+            if (lm && req.method === "POST") return lm[2] ? adminAiLabTest(env, Number(lm[1])) : adminSaveLabTest(env, req, Number(lm[1]));
+            if (lm && !lm[2] && req.method === "DELETE") return adminDeleteLabTest(env, Number(lm[1])); }
+          { const pm2 = p.match(/^\/api\/admin\/labtests\/package\/(\d{1,9})(\/ai)?$/);
+            if (pm2 && req.method === "POST") return pm2[2] ? adminAiPackageTests(env, Number(pm2[1])) : adminSetPackageTests(env, req, Number(pm2[1])); }
           if (p === "/api/admin/packages" && req.method === "POST") return adminSavePackage(env, req, null);
           if (p.startsWith("/api/admin/home") && staff.role !== "admin") return bad("Only an admin can do this.", 403);
           if (p === "/api/admin/home" && req.method === "GET") return adminHome(env);
