@@ -20,6 +20,8 @@
   ],
   "vars": {
     "PRICE_INR": "1899",
+    // TEMPORARY: booking form on /package/female-pcos charges Rs 10 to test Instamojo. Delete this line to go back to the real price.
+    "TEST_PRICE": "female-pcos=10",
     // Paytm merchant UPI ID, shown to customers for copy/paste
     "UPI_ID": "paytmqr28100505010115zcn7xuztuf@paytm",
     // Exact payment string from the Paytm QR (signed by Paytm, so it is used as-is; customers enter the amount)

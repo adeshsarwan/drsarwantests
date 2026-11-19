@@ -100,6 +100,12 @@ function amount(env) { return parseInt(env.PRICE_INR || "1899", 10); }
 async function defaultPackage(env) {
   return await env.DB.prepare("SELECT * FROM packages WHERE active=1 ORDER BY is_default DESC, sort, id LIMIT 1").first();
 }
+// TEMPORARY test price for the public booking form only: variable TEST_PRICE = "<slug>=<rupees>" (e.g. "female-pcos=10").
+// The page itself still shows the real price; admin bookings and other packages are unaffected. Remove the variable to end it.
+function testPrice(env, pkg) {
+  const m = /^\s*([a-z0-9-]+)\s*=\s*(\d+)\s*$/.exec(String(env.TEST_PRICE || ""));
+  return pkg && m && pkg.slug === m[1] ? { ...pkg, price: parseInt(m[2], 10) } : pkg;
+}
 async function packageById(env, id, activeOnly = true) {
   if (!id) return null;
   return await env.DB.prepare(`SELECT * FROM packages WHERE id=?1 ${activeOnly ? "AND active=1" : ""}`).bind(parseInt(id, 10) || 0).first();
@@ -425,7 +431,7 @@ async function getSlots(env, url) {
 
 async function getConfig(env, url) {
   const want = url && url.searchParams.get("package");
-  const pkg = (want && (await packageById(env, want))) || (await defaultPackage(env));
+  const pkg = testPrice(env, (want && (await packageById(env, want))) || (await defaultPackage(env)));
   const today = istParts().date;
   const dates = [];
   for (let i = 0; i <= BOOK_DAYS_AHEAD; i++) {
@@ -469,7 +475,7 @@ async function createBooking(env, req) {
   await expireHolds(env);
   const room = await slotRoom(env, date, slot, city);
   if (!room.ok) return bad("Sorry, " + room.msg, 409);
-  const pkg = (await packageById(env, b.package_id)) || (await defaultPackage(env));
+  const pkg = testPrice(env, (await packageById(env, b.package_id)) || (await defaultPackage(env)));
   const price = pkg ? pkg.price : amount(env);
   const id = "DSL-" + randId(6), token = randId(24, "abcdefghijklmnopqrstuvwxyz0123456789");
   const now = isoNow(), expires = new Date(Date.now() + HOLD_MIN * 60000).toISOString();
@@ -1108,7 +1114,7 @@ async function sitePage(env, req, url, slug) {
   const pkg = await env.DB.prepare("SELECT * FROM packages WHERE slug=?1 AND active=1 AND page_live=1 AND page IS NOT NULL").bind(slug).first();
   if (!pkg) return null;
   let page; try { page = JSON.parse(pkg.page); } catch { return null; }
-  return renderPackagePage(env, req, pkg, page, { canonical: `https://drsarwantests.com/package/${pkg.slug}` });
+  return renderPackagePage(env, req, pkg, page, { canonical: `https://drsarwantests.com/package/${pkg.slug}`, formPrice: testPrice(env, pkg).price });
 }
 async function homeContent(env) {
   const r = await env.DB.prepare("SELECT v FROM settings WHERE k='home_page'").first();

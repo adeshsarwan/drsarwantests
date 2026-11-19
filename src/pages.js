@@ -366,7 +366,7 @@ export async function renderPackagePage(env, req, pkg, page, opts = {}) {
       el.remove();
     } })
     .on('[data-pk="book-sub"]', { element(el) { el.setInnerContent(p.book.sub || `${pkg.name}, collected at your doorstep.`); } })
-    .on('[data-pk="book-price"]', { element(el) { el.setInnerContent(rs(pkg.price)); } })
+    .on('[data-pk="book-price"]', { element(el) { el.setInnerContent(rs(opts.formPrice ?? pkg.price)); } })
     .on('[data-pk="book-meta"]', { element(el) { el.setInnerContent(p.book.meta || (fasting ? "Fasting · " : "") + "Home sample collection · E-report"); } })
     .on('[data-pk="bar"]', { element(el) {
       el.setInnerContent(`<span class="hide-sm">${esc(p.book.bar || pkg.name)} · </span><span style="font-family: Anton, sans-serif; font-size: 22px; font-weight: 400">${rs(pkg.price)}</span>`, { html: true });
