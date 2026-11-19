@@ -506,6 +506,7 @@ ${histHTML(b.id)}</div>`;
     if (b.status === 'confirmed' && !b.vial_reported) f.push(`<button class="btn warn" data-act="status" data-id="${b.id}" data-st="no_show">Reached – patient not available</button>`);
     if (b.status === 'cancelled' && hasPaidProof(b)) f.push(`<button class="btn ghost" data-act="status" data-id="${b.id}" data-st="confirmed">Restore &amp; confirm</button>`);
     if (CANCELLABLE.includes(b.status)) f.push(`<button class="btn warn" data-act="status" data-id="${b.id}" data-st="cancelled">Cancel &amp; free slot</button>`);
+    if (!isOp()) f.push(`<button class="btn ghost" data-act="del-booking" data-id="${b.id}" title="For test or fake bookings only – removes everything about it">Delete permanently</button>`);
     const payNote = b.pay_method === 'instamojo' && (b.status === 'payment_submitted' || PAID.includes(b.status)) ? `Paid online (Instamojo)${b.utr ? ' · payment ' + b.utr : ''}`
       : b.status === 'payment_submitted' ? 'Paid · choose a centre to confirm'
       : ['pending', 'expired'].includes(b.status) ? (hasPaidProof(b) ? 'Screenshot uploaded · slot not held' : 'Not paid yet · slot not reserved')
@@ -1438,7 +1439,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   }
   function renderCentres() {
     $('#centreNote').innerHTML = CENTRES.some((c) => c.is_default && c.active)
-      ? `New bookings go to <b>${esc(CENTRES.find((c) => c.is_default && c.active).name)}</b> automatically once the payment is approved. Change it on any booking with <b>Collection centre → Change</b>.`
+      ? `Bookings added by the team without a centre go to <b>${esc(CENTRES.find((c) => c.is_default && c.active).name)}</b>. Online-paid bookings wait in <b>Operations → Assign centre</b> for you to choose. Change it on any booking with <b>Collection centre → Change</b>.`
       : 'No default centre: after the payment is approved, choose the centre for each booking (or mark a centre as <b>Default</b> to do it automatically).';
     $('#centreBody').innerHTML = CENTRES.length ? CENTRES.map((c) => `<tr class="${c.active ? '' : 'off'}">
 <td><b>${esc(c.name)}</b>${c.is_default ? ' <span class="badge web" title="New paid bookings go here automatically">Default</span>' : ''}${c.contact_name ? `<small>${esc(c.contact_name)}</small>` : ''}</td>
@@ -2128,6 +2129,12 @@ ${t.meta !== false ? `<button type="button" class="btn ghost sm" data-act="wa-su
     else if (a.startsWith('wa-')) waAct(a, el);
     else if (a === 'pkg-add') openPkg(null);
     else if (a === 'assign-open') openAssign(id);
+    else if (a === 'del-booking') {
+      const b = findB(id);
+      if (!confirm(`Delete ${id}${b ? ' (' + b.name + ')' : ''} permanently?\n\nThe booking, its payments, receipt, messages and reports are removed for good. This can't be undone. For a real booking, use Cancel instead.`)) return;
+      api(`/api/admin/bookings/${id}`, { method: 'DELETE' }).then(() => { document.querySelectorAll('dialog[open]').forEach((d) => d.close()); toast('Booking deleted'); return refreshAll(); })
+        .catch((err) => toast(err.message));
+    }
     else if (a === 'centre-add') openCentre(null);
     else if (a === 'centre-edit') openCentre(Number(el.dataset.cid));
     else if (a === 'centre-num-add') addNumRow({}, true);

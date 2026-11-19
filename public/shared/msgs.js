@@ -11,7 +11,7 @@
 //   e.g. "Before the test:" + {{prep}} disappears together when the test has no instructions.
 (function (root) {
   'use strict';
-  const SIGN = '— Dr. Sarwan Diagnostic Labs · 9818028755';
+  const SIGN = '— Dr. Sarwan Diagnostic Labs · 8368143677';
 
   // key: what the message is for. to: who gets it. meta: false = only sent inside an open chat (no WhatsApp template).
   // buttons: quick-reply buttons (WhatsApp only; with manual sending they're simply not there).
@@ -24,7 +24,7 @@
         '💳 Payment of {{amount}} received. Thank you!', '🧪 Tests: {{tests_detail}}', '',
         'Before the test:', '{{prep}}', '(If your doctor gave you different instructions, follow your doctor.)', '',
         '📄 Your reports will also be on https://drsarwantests.com/reports/ (sign in with your mobile number and date of birth).', '',
-        'Need to reschedule? Call/WhatsApp 9818028755.'].join('\n') },
+        'Need to reschedule? Reply here or call 8368143677.'].join('\n') },
     { key: 'center', label: 'Booking details to collection centre', to: 'centre', wa_name: 'dsl_centre_new_job',
       buttons: [{ id: 'c_accept', text: 'Accept' }, { id: 'c_decline', text: "Can't do" }],
       body: [
@@ -62,13 +62,13 @@
       buttons: [{ id: 'report', text: 'Get my report' }],
       body: [
         'Hi {{first_name}} 👋', 'Your test results are ready 📄', '', '{{reports_list}}', '', 'Vial no.: {{vial}}',
-        'Please share them with your doctor. Questions? Reply here or call 9818028755.', '',
+        'Please share them with your doctor. Questions? Reply here or call 8368143677.', '',
         'You can open your reports any time on https://drsarwantests.com/reports/ with your mobile number and date of birth.', SIGN].join('\n') },
     { key: 'paylink', label: 'Payment link (booked by our team, not paid yet)', to: 'patient', wa_name: 'dsl_payment_link', buttons: [],
       body: [
         'Hi {{first_name}} 👋', 'Your home test *{{tests}}* is booked for *{{date}}, {{slot}}*.', '',
         'Please pay *{{amount}}* on this page – scan the QR code or open your UPI app, then upload the payment screenshot there:', '{{pay_link}}', '',
-        'Your visit is confirmed once we receive the payment. Questions? Reply here or call 9818028755.', SIGN].join('\n') },
+        'Your visit is confirmed once we receive the payment. Questions? Reply here or call 8368143677.', SIGN].join('\n') },
     { key: 'pay', label: 'Payment reminder', to: 'patient', wa_name: 'dsl_payment_reminder', buttons: [{ id: 'pay', text: 'How to pay' }],
       body: [
         'Hi {{first_name}} 👋', "We received your request for *{{tests}}* on *{{date}}, {{slot}}*, but your payment hasn't reached us yet.", '',

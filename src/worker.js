@@ -195,11 +195,12 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS payments_by_status ON payments(status, created_at)`,
   // receipts: one per paid booking, numbered DSL/<financial year>/<n> (e.g. DSL/2026-27/0001)
   `CREATE TABLE IF NOT EXISTS receipts (booking_id TEXT PRIMARY KEY, no TEXT NOT NULL UNIQUE, fy TEXT NOT NULL, seq INTEGER NOT NULL, created_at TEXT NOT NULL)`,
-  // official WhatsApp / contact number is 98180 28755 (was 83681 43677) – also in texts already saved in the database
-  `UPDATE msg_templates SET body=replace(replace(body,'8368143677','9818028755'),'83681 43677','98180 28755') WHERE body LIKE '%8368143677%' OR body LIKE '%83681 43677%'`,
-  `UPDATE menu_items SET title=replace(title,'8368143677','9818028755'), description=replace(description,'8368143677','9818028755') WHERE title LIKE '%8368143677%' OR description LIKE '%8368143677%'`,
-  `UPDATE packages SET page=replace(replace(page,'918368143677','919818028755'),'8368143677','9818028755') WHERE page LIKE '%8368143677%'`,
-  `UPDATE settings SET v=replace(replace(v,'918368143677','919818028755'),'8368143677','9818028755') WHERE k='home_page' AND v LIKE '%8368143677%'`,
+  // phone numbers: calls / website / marketing = 83681 43677, WhatsApp chats = 98180 28755. Texts saved in the database had
+  // briefly been switched to 98180 28755 everywhere – put the call number back, keeping WhatsApp links (wa.me/919818028755)
+  `UPDATE msg_templates SET body=replace(replace(body,'9818028755','8368143677'),'98180 28755','83681 43677') WHERE body LIKE '%9818028755%' OR body LIKE '%98180 28755%'`,
+  `UPDATE menu_items SET title=replace(title,'9818028755','8368143677'), description=replace(description,'9818028755','8368143677') WHERE title LIKE '%9818028755%' OR description LIKE '%9818028755%'`,
+  `UPDATE packages SET page=replace(replace(replace(page,'wa.me/919818028755','@@WA@@'),'9818028755','8368143677'),'@@WA@@','wa.me/919818028755') WHERE page LIKE '%9818028755%'`,
+  `UPDATE settings SET v=replace(replace(replace(v,'wa.me/919818028755','@@WA@@'),'9818028755','8368143677'),'@@WA@@','wa.me/919818028755') WHERE k='home_page' AND v LIKE '%9818028755%'`,
 ];
 
 // Tests / packages from DRSARWAN_TESTS_PACKAGES.xlsx — loaded once into an empty database.
@@ -507,8 +508,8 @@ async function createBooking(env, req) {
 // The payment page behind the WhatsApp payment link (?pay=ID&t=TOKEN): what to pay and how.
 async function payInfo(env, url, id) {
   const row = await env.DB.prepare("SELECT * FROM bookings WHERE id=?1").bind(id).first();
-  if (!row || !safeEqual(row.token, url.searchParams.get("t") || "")) return bad("This payment link isn't valid. Please call 9818028755.", 404);
-  if (!["pending", "expired", "payment_submitted"].includes(row.status)) return bad(row.status === "cancelled" ? "This booking was cancelled. Please call 9818028755." : "This booking is already paid ✅", 409);
+  if (!row || !safeEqual(row.token, url.searchParams.get("t") || "")) return bad("This payment link isn't valid. Please call 8368143677.", 404);
+  if (!["pending", "expired", "payment_submitted"].includes(row.status)) return bad(row.status === "cancelled" ? "This booking was cancelled. Please call 8368143677." : "This booking is already paid ✅", 409);
   const t = await env.DB.prepare("SELECT name FROM booking_tests WHERE booking_id=?1 ORDER BY id").bind(id).all();
   return json({ id, token: row.token, date: row.date, dateLabel: prettyDate(row.date), slot: row.slot, slotLabel: slotLabel(row.slot), amount: row.amount,
     testName: t.results.map((x) => x.name).join(", "), status: row.status, name: row.name, phone: row.phone, address: row.address, city: row.city, state: row.state, pincode: row.pincode,
@@ -607,7 +608,7 @@ const PAY_ABANDON_MIN = 30; // an Instamojo page not paid after this long counts
 const okBack = (b) => (/^\/((test|package)\/[a-z0-9-]{1,80}\/?)?$/.test(String(b || "")) ? String(b) : "/");
 
 async function checkout(env, req, url, id) {
-  if (!imConfigured(env)) return bad("Online payment isn't set up yet. Please call 9818028755.", 503);
+  if (!imConfigured(env)) return bad("Online payment isn't set up yet. Please call 8368143677.", 503);
   const b = await req.json().catch(() => ({}));
   const row = await env.DB.prepare("SELECT * FROM bookings WHERE id=?1").bind(id).first();
   if (!row || !safeEqual(row.token, b.token)) return bad("Booking not found.", 404);
@@ -629,7 +630,7 @@ async function checkout(env, req, url, id) {
     console.log("instamojo create", String(e));
     await env.DB.prepare("INSERT INTO payments (booking_id, gateway, amount, status, reason, back, created_at, updated_at) VALUES (?1, 'instamojo', ?2, 'failed', ?3, ?4, ?5, ?5)")
       .bind(id, row.amount, ("Couldn't open the payment page: " + String(e.message || e)).slice(0, 300), back, now).run();
-    return bad("We couldn't open the payment page. Please try again, or call 9818028755.", 502);
+    return bad("We couldn't open the payment page. Please try again, or call 8368143677.", 502);
   }
   await env.DB.batch([
     env.DB.prepare("INSERT INTO payments (booking_id, gateway, request_id, amount, status, back, created_at, updated_at) VALUES (?1, 'instamojo', ?2, ?3, 'created', ?4, ?5, ?5)").bind(id, pr.id, row.amount, back, now),
@@ -804,7 +805,7 @@ table{width:100%;border-collapse:collapse;margin-top:16px;font-size:15px}
 .btn{display:inline-block;margin:18px auto 0;background:#1f6977;color:#fff;border:0;border-radius:999px;padding:10px 22px;font-weight:700;font-size:15px;cursor:pointer}
 @media print{body{background:#fff;padding:0}.r{box-shadow:none;padding:0}.np{display:none}}
 </style></head><body><div class="r">
-<div class="top"><img src="/assets/logo.png" alt="Dr. Sarwan Diagnostic Labs"><div class="org"><b>Dr. Sarwan Diagnostic Labs</b><br>Shop 37–38, Vardhaman Crown Mall, Dwarka Sector 19<br>New Delhi 110078<br>WhatsApp / call 98180 28755 · drsarwantests.com<br>NABL &amp; CGHS approved</div></div>
+<div class="top"><img src="/assets/logo.png" alt="Dr. Sarwan Diagnostic Labs"><div class="org"><b>Dr. Sarwan Diagnostic Labs</b><br>Shop 37–38, Vardhaman Crown Mall, Dwarka Sector 19<br>New Delhi 110078<br>Call 83681 43677 · WhatsApp 98180 28755 · drsarwantests.com<br>NABL &amp; CGHS approved</div></div>
 <h1>Payment receipt</h1><span class="paid">PAID ✓</span>
 <table class="kv">
 ${row("Receipt no.", `<b>${rEsc(r.no)}</b>`)}
@@ -824,6 +825,29 @@ ${adj ? `<tr><td>${adj < 0 ? "Discount" : "Adjustment"}</td><td class="n">${adj 
 </div></body></html>`);
 }
 
+
+// Admin only: remove a booking for good (test or fake data) – with its tests, payments, receipt, messages, reports and
+// history. Its patient login goes too if the patient has no other booking. Real bookings should be cancelled instead.
+async function adminDeleteBooking(env, req, id) {
+  const st = STAFF.get(req);
+  if (st && st.role !== "admin") return bad("Only an admin can delete a booking.", 403);
+  const b = await env.DB.prepare("SELECT id, patient_id FROM bookings WHERE id=?1").bind(id).first();
+  if (!b) return bad("Booking not found", 404);
+  const files = await env.DB.prepare("SELECT id FROM report_files WHERE booking_id=?1").bind(id).all();
+  await env.DB.batch([
+    ...files.results.map((f) => env.DB.prepare("DELETE FROM report_parts WHERE report_id=?1").bind(f.id)),
+    ...["report_files", "report_chunks", "booking_tests", "payment_proofs", "msg_log", "wa_outbox", "activity", "payments", "receipts"]
+      .map((t) => env.DB.prepare(`DELETE FROM ${t} WHERE booking_id=?1`).bind(id)),
+    env.DB.prepare("DELETE FROM bookings WHERE id=?1").bind(id),
+  ]);
+  if (b.patient_id && !(await env.DB.prepare("SELECT 1 FROM bookings WHERE patient_id=?1 LIMIT 1").bind(b.patient_id).first()))
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM sessions WHERE user_id=?1").bind(b.patient_id),
+      env.DB.prepare("DELETE FROM users WHERE id=?1 AND role='patient'").bind(b.patient_id),
+    ]);
+  console.log("booking deleted", id, st ? st.name : "admin");
+  return json({ ok: true });
+}
 // ---- admin API ----
 function isAdmin(env, req) {
   const want = String(env.ADMIN_PASSWORD || "").trim();
@@ -2750,7 +2774,7 @@ class Bot {
     const hi = role === "centre" ? `Hi${this.who.name ? " " + this.who.name : ""} 👋 ${this.who.centre} – what would you like to do?`
       : role === "team" ? "Hi 👋 Dr. Sarwan Diagnostic Labs team menu."
       : `Hi${this.c.name ? " " + String(this.c.name).split(" ")[0] : ""} 👋 Welcome to *Dr. Sarwan Diagnostic Labs*. How can we help?`;
-    if (!rows.length) return this.say(hi + "\n\nPlease call us on 9818028755.");
+    if (!rows.length) return this.say(hi + "\n\nPlease call us on 8368143677.");
     return this.list(greet ? hi : "What else can we help with?", "Menu", rows);
   }
 
@@ -2806,7 +2830,7 @@ class Bot {
       await deliver(env, rows[0] ? rows[0].id : "", "team_alert", { S: this.S, alert: `+91 ${this.phone} (${this.c.name || "patient"}) asked to talk to the team` })
         .catch(() => {});
       if (!rows[0]) for (const t of teamNumbers(this.S)) await waText(env, this.S, t, `🔔 +91 ${this.phone} (${this.c.name || "new contact"}) asked to talk to the team on WhatsApp.`).catch(() => {});
-      return this.say("Thanks! Someone from our team will call you shortly. You can also call us on 9818028755.");
+      return this.say("Thanks! Someone from our team will call you shortly. You can also call us on 8368143677.");
     }
     if (a === "pay") {
       let b = id ? await this.ownBooking(id) : null;
@@ -2829,7 +2853,7 @@ class Bot {
     if (a === "resched") {
       let b = id ? await this.ownBooking(id) : null;
       if (!b) { const rows = await this.bookings(true); if (!rows.length) return this.say("You don't have an upcoming visit to change. Book a new one at " + SITE); b = await this.pick(rows, "resched", "Which visit do you want to move?"); if (!b) return; }
-      if (!["pending", "payment_submitted", "confirmed", "expired"].includes(b.status)) return this.say("This visit can't be moved any more. Please call us on 9818028755.");
+      if (!["pending", "payment_submitted", "confirmed", "expired"].includes(b.status)) return this.say("This visit can't be moved any more. Please call us on 8368143677.");
       const today = istParts().date, rows = [];
       for (let i = 0; i <= BOOK_DAYS_AHEAD && rows.length < 10; i++) {
         const d = addDays(today, i);
@@ -2837,12 +2861,12 @@ class Bot {
         for (const s of SLOTS) if (isBookable(d, s) && (await slotRoom(env, d, s, b.city, b.id)).ok) n++;
         if (n) rows.push({ id: `a:rs_d:${b.id}:${d.replace(/-/g, "")}`, title: M.fmtDate(d), description: `${n} time${n === 1 ? "" : "s"} free` });
       }
-      if (!rows.length) return this.say("Sorry, there are no free times in the next two weeks. Please call us on 9818028755.");
+      if (!rows.length) return this.say("Sorry, there are no free times in the next two weeks. Please call us on 8368143677.");
       return this.list(`Your visit is on *${M.fmtDate(b.date)}, ${M.slotLabel(b.slot)}*. Pick a new day:`, "Choose day", rows);
     }
     if (a === "rs_d" || a === "rs_s") {
       const b = await this.ownBooking(id);
-      if (!b || !["pending", "payment_submitted", "confirmed", "expired"].includes(b.status)) return this.say("This visit can't be moved any more. Please call us on 9818028755.");
+      if (!b || !["pending", "payment_submitted", "confirmed", "expired"].includes(b.status)) return this.say("This visit can't be moved any more. Please call us on 8368143677.");
       const d = String(extra || "").replace(/^(\d{4})(\d{2})(\d{2}).*$/, "$1-$2-$3");
       if (a === "rs_d") {
         const rows = [];
@@ -2884,7 +2908,7 @@ class Bot {
       const bid = String(data || "").split("|")[0];
       const users = dob ? (await this.db.prepare("SELECT id FROM users WHERE role='patient' AND active=1 AND phone=?1 AND dob=?2").bind(this.phone, dob).all()).results : [];
       if (!users.length) {
-        if (tries >= 3) { await this.state(null); return this.say("That date of birth doesn't match our records. For your safety we've stopped here – please call us on 9818028755."); }
+        if (tries >= 3) { await this.state(null); return this.say("That date of birth doesn't match our records. For your safety we've stopped here – please call us on 8368143677."); }
         await this.state("dob", `${bid}|${tries}`);
         return this.say(dob ? "That date of birth doesn't match our records for this number. Please check and try again (DD-MM-YYYY)." : "Please send the date of birth like this: 14-05-1990");
       }
@@ -3813,6 +3837,11 @@ async function adminWaSubmit(env, key) {
 }
 // The new version was approved: send with it from now on.
 async function promoteTemplate(env, key) {
+  const t = (await templates(env)).find((x) => x.key === key);
+  if (!t || !t.nx_body || t.nx_body.trim() !== String(t.body).trim()) { // the text changed since – that version is outdated
+    await env.DB.prepare("UPDATE msg_templates SET nx_name=NULL, nx_id=NULL, nx_status=NULL, nx_body=NULL, nx_reason=NULL WHERE key=?1").bind(key).run();
+    return;
+  }
   await env.DB.prepare(`UPDATE msg_templates SET cur_name=nx_name, wa_id=nx_id, wa_status='APPROVED', wa_body=nx_body, wa_reason=NULL,
     nx_name=NULL, nx_id=NULL, nx_status=NULL, nx_body=NULL, nx_reason=NULL, updated_at=?1 WHERE key=?2 AND nx_id IS NOT NULL`).bind(isoNow(), key).run();
 }
@@ -3859,7 +3888,8 @@ async function adminWaSync(env) {
     if (t.meta === false) continue;
     const nx = find(t.nx_name);
     if (nx) {
-      if (nx.status === "APPROVED") promote.push(t.key);
+      if (t.nx_body && t.nx_body.trim() !== String(t.body).trim()) stmts.push(env.DB.prepare("UPDATE msg_templates SET nx_name=NULL, nx_id=NULL, nx_status=NULL, nx_body=NULL, nx_reason=NULL WHERE key=?1").bind(t.key)); // the text changed again – that version is outdated
+      else if (nx.status === "APPROVED") promote.push(t.key);
       else stmts.push(env.DB.prepare("UPDATE msg_templates SET nx_id=?1, nx_status=?2, nx_reason=?3 WHERE key=?4").bind(nx.id, nx.status, why(nx), t.key));
     }
     const m = find(t.wa_name);
@@ -4121,6 +4151,7 @@ export default {
           if (p === "/api/admin/export.csv" && req.method === "GET") return adminCsv(env, url);
           if (p === "/api/admin/block" && req.method === "POST") return adminBlock(env, req);
           if (p === "/api/admin/bookings" && req.method === "POST") return adminCreate(env, req);
+          { const dm = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})$/); if (dm && req.method === "DELETE") return adminDeleteBooking(env, req, dm[1]); }
           if (p === "/api/admin/packages" && req.method === "GET") return adminPackages(env, staff);
           if (p === "/api/admin/packages" && req.method === "POST") return adminSavePackage(env, req, null);
           if (p.startsWith("/api/admin/home") && staff.role !== "admin") return bad("Only an admin can do this.", 403);
@@ -4259,7 +4290,7 @@ export default {
       console.log("error", p, String(e && e.stack || e));
       // staff screens get the real reason (helps fixing); the public site keeps the friendly text
       if (/^\/api\/(admin|staff|centre)\//.test(p)) return bad("Server error: " + String((e && e.message) || e).slice(0, 200), 500);
-      return bad("Something went wrong. Please call 9818028755 to book.", 500);
+      return bad("Something went wrong. Please call 8368143677 to book.", 500);
     }
   },
 };
