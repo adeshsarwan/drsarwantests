@@ -193,6 +193,8 @@ const SCHEMA = [
     payment_id TEXT, amount INTEGER NOT NULL, status TEXT NOT NULL, reason TEXT, method TEXT, back TEXT, checked_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS payments_by_booking ON payments(booking_id)`,
   `CREATE INDEX IF NOT EXISTS payments_by_status ON payments(status, created_at)`,
+  // receipts: one per paid booking, numbered DSL/<financial year>/<n> (e.g. DSL/2026-27/0001)
+  `CREATE TABLE IF NOT EXISTS receipts (booking_id TEXT PRIMARY KEY, no TEXT NOT NULL UNIQUE, fy TEXT NOT NULL, seq INTEGER NOT NULL, created_at TEXT NOT NULL)`,
   // official WhatsApp / contact number is 98180 28755 (was 83681 43677) – also in texts already saved in the database
   `UPDATE msg_templates SET body=replace(replace(body,'8368143677','9818028755'),'83681 43677','98180 28755') WHERE body LIKE '%8368143677%' OR body LIKE '%83681 43677%'`,
   `UPDATE menu_items SET title=replace(title,'8368143677','9818028755'), description=replace(description,'8368143677','9818028755') WHERE title LIKE '%8368143677%' OR description LIKE '%8368143677%'`,
@@ -651,7 +653,7 @@ async function verifyPay(env, req, id) {
   const paid = r.ok || HOLDING.includes(cur.status);
   const t = await env.DB.prepare("SELECT name FROM booking_tests WHERE booking_id=?1 ORDER BY id").bind(id).all();
   const waOn = paid && waAuto(env, await getSettings(env));
-  return json({ ok: true, paid, waAuto: waOn, pending: !paid && !!r.pending, reason: paid ? "" : r.reason || "", id, token: cur.token, amount: cur.amount, status: cur.status,
+  return json({ ok: true, paid, waAuto: waOn, receipt: paid ? `/receipt/${id}?t=${cur.token}` : "", pending: !paid && !!r.pending, reason: paid ? "" : r.reason || "", id, token: cur.token, amount: cur.amount, status: cur.status,
     date: cur.date, dateLabel: prettyDate(cur.date), slot: cur.slot, slotLabel: slotLabel(cur.slot), testName: t.results.map((x) => x.name).join(", "),
     name: cur.name, phone: cur.phone, paymentId: paid ? cur.utr || payId : "" });
 }
@@ -697,8 +699,9 @@ async function settleRequest(env, pay, via, payId = "") {
       .bind(now, payId, pay.booking_id).run();
     if (r.meta.changes) {
       await logAct(env, pay.booking_id, "Instamojo", "system", `Paid online ₹${v.amount} (payment ${payId}${v.method ? ", " + v.method : ""}) – via ${via}. Booking confirmed automatically.`);
-      await autoAssign(env, pay.booking_id); // default centre (the team can still change it)
-      // automatic WhatsApp: confirmation to the patient now, job to the centre; collector details follow when the centre accepts
+      await ensureReceipt(env, await env.DB.prepare("SELECT * FROM bookings WHERE id=?1").bind(pay.booking_id).first()).catch((e) => console.log("receipt", String(e)));
+      // the operator chooses the collection centre (Operations → Step 1 "Assign centre"); the team gets an alert
+      // automatic WhatsApp: confirmation to the patient now; the job goes to the centre once it's chosen
       await waEvent(env, "paid_online", pay.booking_id).catch((e) => console.log("paid_online wa", String(e)));
     }
     return { ok: true };
@@ -721,7 +724,7 @@ async function paymentSweep(env) {
 async function adminPayments(env, url) {
   const days = Math.min(365, Math.max(1, parseInt(url.searchParams.get("days") || "30", 10) || 30));
   const since = new Date(Date.now() - days * 86400000).toISOString();
-  const { results } = await env.DB.prepare(`SELECT p.*, b.name, b.phone, b.date, b.slot, b.city, b.status AS booking_status, b.package_name, b.created_at AS booked_at
+  const { results } = await env.DB.prepare(`SELECT p.*, b.name, b.phone, b.date, b.slot, b.city, b.status AS booking_status, b.package_name, b.created_at AS booked_at, b.token
     FROM payments p LEFT JOIN bookings b ON b.id = p.booking_id WHERE p.created_at >= ?1 ORDER BY p.id DESC LIMIT 500`).bind(since).all();
   return json({ payments: results.map((r) => ({ ...r, slotLabel: r.slot ? slotLabel(r.slot) : "", paid_later: r.status !== "success" && HOLDING.includes(r.booking_status) })),
     gateway: { on: imConfigured(env), api: imApi(env), test: imIsTest(env), salt: !!env.INSTAMOJO_SALT, webhook: `${url.origin}/api/pay/instamojo` } });
@@ -734,6 +737,90 @@ async function adminPaymentCheck(env, id) {
   const r = await settleRequest(env, { ...pay, status: pay.status === "abandoned" ? "created" : pay.status }, "admin check", pay.payment_id || "");
   const now = await env.DB.prepare("SELECT status, reason FROM payments WHERE id=?1").bind(id).first();
   return json({ ok: true, paid: r.ok, status: now.status, reason: r.reason || now.reason || "" });
+}
+
+
+// ---- receipts (our own, for every paid booking) ----
+// Number DSL/<FY>/<n>, the Indian financial year (April–March) of the payment. Made the first time it's needed.
+const RECEIPT_STATES = ["payment_submitted", "confirmed", "collected", "report_ready", "completed", "no_show"];
+function finYear(iso) {
+  const { date } = istParts(new Date(iso || Date.now()));
+  const y = +date.slice(0, 4), m = +date.slice(5, 7);
+  const a = m >= 4 ? y : y - 1;
+  return `${a}-${String((a + 1) % 100).padStart(2, "0")}`;
+}
+async function ensureReceipt(env, b) {
+  if (!b || !RECEIPT_STATES.includes(b.status)) return null;
+  const have = await env.DB.prepare("SELECT * FROM receipts WHERE booking_id=?1").bind(b.id).first();
+  if (have) return have;
+  const fy = finYear(b.paid_at || b.created_at);
+  for (let i = 0; i < 5; i++) {
+    const mx = await env.DB.prepare("SELECT MAX(seq) AS m FROM receipts WHERE fy=?1").bind(fy).first();
+    const seq = ((mx && mx.m) || 0) + 1, no = `DSL/${fy}/${String(seq).padStart(4, "0")}`;
+    try {
+      await env.DB.prepare("INSERT INTO receipts (booking_id, no, fy, seq, created_at) VALUES (?1, ?2, ?3, ?4, ?5)").bind(b.id, no, fy, seq, isoNow()).run();
+      return { booking_id: b.id, no, fy, seq };
+    } catch (e) {
+      if (!/UNIQUE/i.test(String(e))) throw e;
+      const again = await env.DB.prepare("SELECT * FROM receipts WHERE booking_id=?1").bind(b.id).first();
+      if (again) return again; // made at the same moment by another request
+    }
+  }
+  throw new Error("Couldn't number the receipt");
+}
+const rEsc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+// GET /receipt/<booking id>?t=<booking token> – printable receipt (the patient has the token; the admin page links it too)
+async function receiptPage(env, id, t) {
+  const html = (body, status = 200) => new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-robots-tag": "noindex" } });
+  const b = await env.DB.prepare("SELECT * FROM bookings WHERE id=?1").bind(id).first();
+  if (!b || !safeEqual(b.token, t || "")) return html("<p style='font-family:sans-serif'>This receipt link isn't valid. Please WhatsApp us on 9818028755.</p>", 404);
+  const r = await ensureReceipt(env, b);
+  if (!r) return html("<p style='font-family:sans-serif'>There's no receipt yet – this booking hasn't been paid.</p>", 404);
+  const { results: tests } = await env.DB.prepare("SELECT name, price FROM booking_tests WHERE booking_id=?1 ORDER BY id").bind(id).all();
+  const pay = b.pay_method === "instamojo"
+    ? await env.DB.prepare("SELECT payment_id, method FROM payments WHERE booking_id=?1 AND status='success' ORDER BY id DESC LIMIT 1").bind(id).first() : null;
+  const inr = (n) => "₹" + Number(n || 0).toLocaleString("en-IN");
+  const lines = tests.length ? tests : [{ name: b.package_name || "Home sample collection test", price: b.amount }];
+  const listed = lines.reduce((a, x) => a + (Number(x.price) || 0), 0);
+  const adj = Number(b.amount) - listed; // discount / test price (e.g. a temporary price) – the amount paid is what counts
+  const paidOn = istParts(new Date(b.paid_at || b.created_at));
+  const method = b.pay_method === "instamojo" ? `Online (Instamojo${pay && pay.method ? " · " + pay.method : ""})` : b.utr ? "UPI" : "Paid to Dr. Sarwan Diagnostic Labs";
+  const ref = (pay && pay.payment_id) || b.utr || "";
+  const row = (k, v) => `<tr><th>${k}</th><td>${v}</td></tr>`;
+  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Receipt ${rEsc(r.no)} – Dr. Sarwan Diagnostic Labs</title><meta name="robots" content="noindex">
+<style>
+body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#13213a;background:#eef2f6;margin:0;padding:24px}
+.r{max-width:720px;margin:0 auto;background:#fff;border-radius:14px;padding:32px;box-shadow:0 2px 12px rgba(0,0,0,.06)}
+.top{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;border-bottom:2px solid #1f6977;padding-bottom:16px}
+.top img{height:54px}.org{font-size:13px;line-height:1.5;color:#3b4a68;text-align:right}
+h1{font-size:22px;margin:22px 0 4px}.paid{display:inline-block;background:#dff3ea;color:#17694a;font-weight:800;border-radius:999px;padding:4px 12px;font-size:13px}
+table{width:100%;border-collapse:collapse;margin-top:16px;font-size:15px}
+.kv th{text-align:left;color:#5b6884;font-weight:600;width:38%;padding:6px 0;vertical-align:top}.kv td{padding:6px 0}
+.items th,.items td{padding:10px 8px;border-bottom:1px solid #e3e8ef;text-align:left}.items .n{text-align:right;white-space:nowrap}
+.items tfoot td{font-weight:800;font-size:17px;border-bottom:0}
+.foot{margin-top:24px;font-size:12.5px;color:#5b6884;line-height:1.6}
+.btn{display:inline-block;margin:18px auto 0;background:#1f6977;color:#fff;border:0;border-radius:999px;padding:10px 22px;font-weight:700;font-size:15px;cursor:pointer}
+@media print{body{background:#fff;padding:0}.r{box-shadow:none;padding:0}.np{display:none}}
+</style></head><body><div class="r">
+<div class="top"><img src="/assets/logo.png" alt="Dr. Sarwan Diagnostic Labs"><div class="org"><b>Dr. Sarwan Diagnostic Labs</b><br>Shop 37–38, Vardhaman Crown Mall, Dwarka Sector 19<br>New Delhi 110078<br>WhatsApp / call 98180 28755 · drsarwantests.com<br>NABL &amp; CGHS approved</div></div>
+<h1>Payment receipt</h1><span class="paid">PAID ✓</span>
+<table class="kv">
+${row("Receipt no.", `<b>${rEsc(r.no)}</b>`)}
+${row("Date", `${rEsc(prettyDate(paidOn.date))}`)}
+${row("Booking ref", rEsc(b.id))}
+${row("Patient", `${rEsc(b.name)}<br>+91 ${rEsc(b.phone)}`)}
+${row("Home collection", `${rEsc(prettyDate(b.date))}, ${rEsc(slotLabel(b.slot))}${b.address ? `<br>${rEsc(b.address)}${b.city ? ", " + rEsc(b.city) : ""}${b.pincode ? " – " + rEsc(b.pincode) : ""}` : ""}`)}
+${row("Paid by", rEsc(method))}
+${ref ? row(b.pay_method === "instamojo" ? "Payment ID" : "Transaction ref", rEsc(ref)) : ""}
+</table>
+<table class="items"><thead><tr><th>Description</th><th class="n">Amount</th></tr></thead><tbody>
+${lines.map((x) => `<tr><td>${rEsc(x.name)}<br><span style="color:#5b6884;font-size:13px">Home sample collection · e-report</span></td><td class="n">${inr(x.price)}</td></tr>`).join("")}
+${adj ? `<tr><td>${adj < 0 ? "Discount" : "Adjustment"}</td><td class="n">${adj < 0 ? "− " + inr(-adj) : inr(adj)}</td></tr>` : ""}
+</tbody><tfoot><tr><td>Total paid</td><td class="n">${inr(b.amount)}</td></tr></tfoot></table>
+<p class="foot">This is a computer-generated receipt and needs no signature.<br>Reschedule any time before the visit; refunds follow our policy at drsarwantests.com/refund.</p>
+<div class="np" style="text-align:center"><button class="btn" onclick="print()">Print / save as PDF</button></div>
+</div></body></html>`);
 }
 
 // ---- admin API ----
@@ -1509,7 +1596,12 @@ async function adminAssignCentre(env, req, id) {
   if (cur.centre_id && (cur.vial_reported || ["collected", "report_ready", "completed"].includes(cur.status)))
     return bad("The sample is already collected, so the collection centre can't be changed.", 409);
   await assignCentre(env, id, cid);
-  if (cid && cid !== cur.centre_id) later(req, centreJob(env, req, id, "assigned"));
+  // payment is never checked by hand any more: a paid booking still marked "payment submitted" is confirmed by choosing its centre
+  if (cid && cur.status === "payment_submitted") {
+    await env.DB.prepare("UPDATE bookings SET status='confirmed', paid_at=COALESCE(paid_at, ?1), updated_at=?1 WHERE id=?2").bind(isoNow(), id).run();
+    await logAct(env, id, (STAFF.get(req) || {}).name || "Admin", (STAFF.get(req) || {}).role || "admin", "Centre chosen – booking confirmed");
+    later(req, centreJob(env, req, id, "paid_online")); // patient's confirmation (once) + job to the centre
+  } else if (cid && cid !== cur.centre_id) later(req, centreJob(env, req, id, "assigned"));
   return json({ ok: true });
 }
 // a paid booking without a centre goes to the default centre (Centres tab → "Default"), if there is an active one
@@ -3681,6 +3773,33 @@ async function adminWaSubmit(env, key) {
     return bad(`WhatsApp said: ${e.message}`, 400);
   }
 }
+// Every message text that WhatsApp hasn't approved in its current wording is sent for approval automatically:
+// new texts, texts edited in the admin, and texts whose wording changed in the code (e.g. a new phone number).
+// Runs from the cron at most every 30 minutes; a text WhatsApp is still reviewing is left alone.
+// Meta allows an approved template to be edited once a day (10 times a month) – a refusal is simply retried next time.
+async function autoSubmitTemplates(env, force) {
+  const S = await getSettings(env);
+  if (!env.WA_TOKEN || !S.wa_waba_id) return { skipped: "WhatsApp isn't set up" };
+  const last = await env.DB.prepare("SELECT v FROM settings WHERE k='tpl_auto_at'").first();
+  if (!force && last && Date.now() - Date.parse(last.v) < 30 * 60000) return { skipped: "ran recently" };
+  await env.DB.prepare("INSERT OR REPLACE INTO settings (k, v) VALUES ('tpl_auto_at', ?1)").bind(isoNow()).run();
+  await adminWaSync(env).catch(() => {}); // fresh statuses from Meta first
+  const out = [];
+  for (const t of await templates(env)) {
+    if (t.meta === false || ["PENDING", "IN_APPEAL"].includes(t.wa_status)) continue;
+    const changed = !t.wa_id || !t.wa_body || t.wa_body.trim() !== String(t.body).trim();
+    if (!changed) continue;
+    const r = await adminWaSubmit(env, t.key);
+    const j = await r.json().catch(() => ({}));
+    out.push({ key: t.key, ok: r.ok, status: j.status || null, error: r.ok ? null : j.error || String(r.status) });
+    if (!r.ok) {
+      console.log("template auto-submit", t.key, j.error);
+      await env.DB.prepare("UPDATE msg_templates SET wa_reason=?1 WHERE key=?2").bind(String("Auto-submit: " + (j.error || r.status)).slice(0, 300), t.key).run().catch(() => {});
+    }
+    if (out.length >= 8) break; // the rest next time
+  }
+  return { submitted: out };
+}
 async function adminWaSync(env) {
   const S = await getSettings(env);
   if (!env.WA_TOKEN || !S.wa_waba_id) return bad("Set the WA_TOKEN secret and the WhatsApp account ID first.");
@@ -3893,6 +4012,7 @@ export default {
       await paymentSweep(env).catch((e) => console.log("payment sweep", String(e))); // online payments nobody came back from
       // every 10 minutes while any message text is waiting for WhatsApp's approval: load its status from Meta
       // (Meta also tells us through the webhook, but only if "message_template_status_update" is subscribed)
+      await autoSubmitTemplates(env).catch((e) => console.log("template auto-submit", String(e))); // every 30 min: wording changed → send for approval
       if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() % 10 === 0
         && (await env.DB.prepare("SELECT 1 FROM msg_templates WHERE wa_status IN ('PENDING','IN_APPEAL') LIMIT 1").first())) await adminWaSync(env).catch(() => {});
     })());
@@ -4068,6 +4188,8 @@ export default {
       // website: "/" = our story + packages, /package/<slug> = a published package page (old /package/<slug> links move there)
       const old = p.match(/^\/test\/([a-z0-9-]{1,80})\/?$/);
       if (old) return Response.redirect(new URL(`/package/${old[1]}${url.search}`, req.url).toString(), 301);
+      const rc = p.match(/^\/receipt\/(DSL-[A-Za-z0-9]{1,20})\/?$/);
+      if (rc && req.method === "GET" && env.DB) { await ensureSchema(env); return receiptPage(env, rc[1], url.searchParams.get("t")); }
       const tm = p.match(/^\/package\/([a-z0-9-]{1,80})\/?$/);
       if ((tm || p === "/" || p === "/sitemap.xml") && req.method === "GET" && env.DB) {
         try {

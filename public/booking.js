@@ -233,6 +233,9 @@
       ].filter((x) => x !== null).join('\n');
       const waMsg = paidOnline && r.waAuto ? `Hi, my booking ref is ${b.id}.` : msg;
       $('#bk-done-wa').href = 'https://wa.me/919818028755?text=' + encodeURIComponent(waMsg);
+      // our receipt for this payment (opens a printable page)
+      const old = $('#bk-done-rcpt'); if (old) old.remove();
+      if (r.receipt) $('#bk-done-ref').parentNode.insertAdjacentHTML('afterend', `<p id="bk-done-rcpt" style="margin:8px 0 0"><a href="${r.receipt}" target="_blank" rel="noopener" style="color:#1f6977;font-weight:700">🧾 View / download your receipt</a></p>`);
       if (window.gtag) gtag('event', 'purchase', { transaction_id: b.id, value: b.amount, currency: 'INR' });
       show(4);
   }

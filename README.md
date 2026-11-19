@@ -25,8 +25,11 @@ Unpaid bookings never block a slot and are marked expired after 2 hours.
   right after their details. Without them the old UPI QR + screenshot flow is used.
 - The booking only becomes **Paid** (*Paid online ✓*) after we check the payment with Instamojo's API –
   on the patient's return, through the webhook (`/api/pay/instamojo`) or by a cron sweep for people who closed the tab. Then it follows the normal steps (Confirm → centre → …).
-- A verified online payment **confirms the booking automatically** (no *Confirm* click): the default centre gets the job and, in automatic WhatsApp mode,
-  the patient gets the booking confirmation from 98180 28755 straight away (collector details follow when the centre accepts).
+- A verified online payment **confirms the booking automatically** – nobody confirms payments by hand. In automatic WhatsApp mode the patient gets
+  the booking confirmation from 98180 28755 straight away. The operator's Step 1 is **Assign centre** (Operations): choosing the centre sends the job;
+  collector details follow when the centre accepts. Team bookings are always paid and get their centre while booking.
+- **Receipts**: every paid booking gets our own numbered receipt (`DSL/2026-27/0001`, by financial year) at `/receipt/<booking ref>?t=<token>` –
+  linked on the patient's success screen, in the booking window (*Receipt*) and in Admin → Payments. Print / save as PDF from the page.
 - Unpaid online checkouts never hold a slot and don't show in Bookings / Calendar. **Admin → Payments** lists every attempt:
   *Failed*, *Not completed* (opened the payment page, never paid, after 30 min), *Paid online*, with **Check again** and a WhatsApp follow-up link.
 - Setup (Cloudflare → Worker → Settings → Variables and Secrets, type Secret), from Instamojo → API & Plugins:
@@ -76,8 +79,8 @@ Unpaid bookings never block a slot and are marked expired after 2 hours.
 - **WhatsApp menus** (editable): patients (bookings, tracking, how to prepare, change time, pay + screenshot, report, talk to us),
   centres – recognised by the numbers in the Centres tab (accept / decline, collector details, vial no., upload report PDF),
   and the team numbers (choose centres, today's summary).
-- People who haven't written to us in 24 hours can only get **approved templates**: press *Send for approval* on each text,
-  then *Check approvals*.
+- People who haven't written to us in 24 hours can only get **approved templates**. Texts are sent to Meta for approval **automatically**
+  (every 30 minutes, any text that's new or whose wording changed); approvals are picked up by themselves too.
 - Setup: Cloudflare secrets `WA_TOKEN`, `WA_APP_SECRET`, `WA_VERIFY_TOKEN`; in Meta set the webhook to
   `https://drsarwantests.com/api/wa/webhook` (subscribe to *messages*); in Admin → WhatsApp enter the phone number ID and team numbers.
 

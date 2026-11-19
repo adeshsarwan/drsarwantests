@@ -99,7 +99,7 @@
 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
 <div><h2 class="h2" style="margin:0">Online payments</h2><p class="meta" style="margin:4px 0 0">A booking only opens for its slot after a successful payment. Payments that failed or were never finished stay here, so you can call the patient.</p></div>
 <div style="display:flex;gap:8px;flex-wrap:wrap">
-<select id="payFilter" class="inp" aria-label="Show"><option value="problem">Failed &amp; not completed</option><option value="failed">Failed</option><option value="abandoned">Not completed</option><option value="created">Waiting (on the payment page)</option><option value="success">Paid online</option><option value="all">All attempts</option></select>
+<select id="payFilter" class="inp" aria-label="Show"><option value="all" selected>All attempts</option><option value="success">Paid online</option><option value="problem">Failed &amp; not completed</option><option value="failed">Failed</option><option value="abandoned">Not completed</option><option value="created">Waiting (on the payment page)</option></select>
 <select id="payDays" class="inp" aria-label="Period"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last 12 months</option></select>
 </div>
 </div>
