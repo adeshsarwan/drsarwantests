@@ -1,13 +1,19 @@
-// Instamojo payment gateway (API v2, OAuth client credentials).
-// Secrets (Cloudflare → Worker → Settings → Variables and Secrets):
-//   INSTAMOJO_CLIENT_ID, INSTAMOJO_CLIENT_SECRET – Instamojo dashboard → API & Plugins → "Generate credentials"
-//   INSTAMOJO_SALT – the "Private salt" on the same page (checks that webhook calls really come from Instamojo)
-// Variable INSTAMOJO_ENV = "test" uses test.instamojo.com (sandbox); anything else = live.
+// Instamojo payment gateway. Two kinds of keys work (Cloudflare → Worker → Settings → Variables and Secrets):
+//   v1.1 (what the Instamojo dashboard shows under API & Plugins):
+//     INSTAMOJO_API_KEY    – "Private API Key"
+//     INSTAMOJO_AUTH_TOKEN – "Private Auth Token"
+//   v2 (OAuth app credentials, if Instamojo gives you those instead):
+//     INSTAMOJO_CLIENT_ID, INSTAMOJO_CLIENT_SECRET
+//   INSTAMOJO_SALT – "Private Salt" (checks that webhook calls really come from Instamojo), for either kind
+// If both kinds are set, v1.1 is used. Variable INSTAMOJO_ENV = "test" uses test.instamojo.com (sandbox); anything else = live.
 // INSTAMOJO_URL overrides the base URL (local testing only).
 
-export const imConfigured = (env) => !!(env.INSTAMOJO_CLIENT_ID && env.INSTAMOJO_CLIENT_SECRET);
+const v1 = (env) => !!(env.INSTAMOJO_API_KEY && env.INSTAMOJO_AUTH_TOKEN);
+const v2 = (env) => !!(env.INSTAMOJO_CLIENT_ID && env.INSTAMOJO_CLIENT_SECRET);
+export const imConfigured = (env) => v1(env) || v2(env);
+export const imApi = (env) => (v1(env) ? "v1.1" : v2(env) ? "v2" : "");
 export const imIsTest = (env) => String(env.INSTAMOJO_ENV || "").toLowerCase() === "test";
-const base = (env) => (env.INSTAMOJO_URL || (imIsTest(env) ? "https://test.instamojo.com" : "https://api.instamojo.com")).replace(/\/+$/, "");
+const base = (env) => (env.INSTAMOJO_URL || (imIsTest(env) ? "https://test.instamojo.com" : v1(env) ? "https://www.instamojo.com" : "https://api.instamojo.com")).replace(/\/+$/, "");
 
 let tok = null; // { key, value, exp }
 async function token(env) {
@@ -25,16 +31,19 @@ async function token(env) {
 }
 
 async function call(env, method, path, form) {
-  const t = await token(env);
+  const auth = v1(env)
+    ? { "x-api-key": env.INSTAMOJO_API_KEY, "x-auth-token": env.INSTAMOJO_AUTH_TOKEN }
+    : { authorization: `Bearer ${await token(env)}` };
   const r = await fetch(`${base(env)}${path}`, {
     method,
-    headers: { authorization: `Bearer ${t}`, ...(form ? { "content-type": "application/x-www-form-urlencoded" } : {}) },
+    headers: { ...auth, ...(form ? { "content-type": "application/x-www-form-urlencoded" } : {}) },
     body: form ? new URLSearchParams(form) : undefined,
   });
   const j = await r.json().catch(() => ({}));
   if (r.status === 401) tok = null;
-  if (!r.ok) {
-    const msg = typeof j === "object" ? Object.entries(j).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(" ") : typeof v === "object" ? JSON.stringify(v) : v}`).join("; ") : "";
+  if (!r.ok || j.success === false) {
+    const e = j && typeof j.message === "object" ? j.message : j && j.message ? { message: j.message } : j;
+    const msg = e && typeof e === "object" ? Object.entries(e).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(" ") : typeof v === "object" ? JSON.stringify(v) : v}`).join("; ") : "";
     throw new Error(`Instamojo ${r.status}${msg ? " – " + msg : ""}`);
   }
   return j;
@@ -48,13 +57,30 @@ export async function imCreateRequest(env, { amount, purpose, name, phone, email
   };
   if (email) form.email = email;
   if (webhookUrl && /^https:\/\//.test(webhookUrl)) form.webhook = webhookUrl; // Instamojo only calls public https URLs
-  const j = await call(env, "POST", "/v2/payment_requests/", form);
+  let j = await call(env, "POST", v1(env) ? "/api/1.1/payment-requests/" : "/v2/payment_requests/", form);
+  if (v1(env)) j = j.payment_request || {};
   if (!j.id || !j.longurl) throw new Error("Instamojo didn't return a payment page");
   return { id: j.id, url: j.longurl, raw: j };
 }
 
-export const imGetRequest = (env, id) => call(env, "GET", `/v2/payment_requests/${encodeURIComponent(id)}/`);
-export const imGetPayment = (env, id) => call(env, "GET", `/v2/payments/${encodeURIComponent(id)}/`);
+// A payment request with its payments. `payments` is always a list of payment ids.
+export async function imGetRequest(env, id) {
+  if (!v1(env)) {
+    const j = await call(env, "GET", `/v2/payment_requests/${encodeURIComponent(id)}/`);
+    return { ...j, payments: (j.payments || []).map((u) => (/([A-Za-z0-9]{8,})\/?$/.exec(String(u)) || [])[1]).filter(Boolean) };
+  }
+  const j = (await call(env, "GET", `/api/1.1/payment-requests/${encodeURIComponent(id)}/`)).payment_request || {};
+  return { ...j, payments: (j.payments || []).map((p) => (p && typeof p === "object" ? p.payment_id : (/([A-Za-z0-9]{8,})\/?$/.exec(String(p)) || [])[1])).filter(Boolean) };
+}
+
+// One payment, made against payment request `requestId`.
+export async function imGetPayment(env, id, requestId) {
+  if (!v1(env)) return call(env, "GET", `/v2/payments/${encodeURIComponent(id)}/`);
+  // v1.1: asking through the payment request also proves the payment belongs to it (404 otherwise)
+  const j = await call(env, "GET", `/api/1.1/payment-requests/${encodeURIComponent(requestId)}/${encodeURIComponent(id)}/`);
+  const p = (j.payment_request && j.payment_request.payment) || j.payment || null;
+  return p && { ...p, payment_request: requestId };
+}
 
 // Was this payment successful, for this payment request, for at least this amount?
 export function imPaymentOk(p, requestId, amount) {

@@ -27,8 +27,9 @@ Unpaid bookings never block a slot and are marked expired after 2 hours.
   on the patient's return, through the webhook (`/api/pay/instamojo`) or by a cron sweep for people who closed the tab. Then it follows the normal steps (Confirm → centre → …).
 - Unpaid online checkouts never hold a slot and don't show in Bookings / Calendar. **Admin → Payments** lists every attempt:
   *Failed*, *Not completed* (opened the payment page, never paid, after 30 min), *Paid online*, with **Check again** and a WhatsApp follow-up link.
-- Setup (Cloudflare → Worker → Settings → Variables and Secrets): `INSTAMOJO_CLIENT_ID`, `INSTAMOJO_CLIENT_SECRET` (Instamojo → API & Plugins),
-  `INSTAMOJO_SALT` (Private salt). Optional plain variable `INSTAMOJO_ENV=test` for the sandbox (test.instamojo.com) – remove it to go live.
+- Setup (Cloudflare → Worker → Settings → Variables and Secrets, type Secret), from Instamojo → API & Plugins:
+  `INSTAMOJO_API_KEY` (Private API Key), `INSTAMOJO_AUTH_TOKEN` (Private Auth Token), `INSTAMOJO_SALT` (Private Salt).
+  OAuth app keys also work instead of the first two: `INSTAMOJO_CLIENT_ID`, `INSTAMOJO_CLIENT_SECRET`. Optional plain variable `INSTAMOJO_ENV=test` for the sandbox (test.instamojo.com) – remove it to go live.
 
 ## Package pages
 - The home page (`/`) tells our story (timeline since 2015, NABL / CGHS) and then shows a card for every package with a published page.
