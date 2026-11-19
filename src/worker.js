@@ -374,6 +374,7 @@ async function runSetup(env) {
       }
       await env.DB.batch(SCHEMA.map((q) => env.DB.prepare(q)));
       for (const [tbl, col] of [["wa_contacts", "opted_out"], ["wa_contacts", "read_at"], ["wa_contacts", "human_until"], ["wa_inbox", "dir"], ["wa_inbox", "by_who"],
+        ["msg_templates", "cur_name"], ["msg_templates", "nx_name"], ["msg_templates", "nx_id"], ["msg_templates", "nx_status"], ["msg_templates", "nx_body"], ["msg_templates", "nx_reason"],
         ["wa_inbox", "status"], ["wa_inbox", "media_id"], ["wa_inbox", "media_type"], ["wa_inbox", "media_name"], ["wa_contacts", "last_act"],
         ...REPORT_REVIEW_COLS.map((c) => ["report_files", c])]) {
         try { await env.DB.prepare(`ALTER TABLE ${tbl} ADD COLUMN ${col} TEXT`).run(); } catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
@@ -2380,7 +2381,8 @@ async function templates(env) {
   const { results } = await env.DB.prepare("SELECT * FROM msg_templates").all();
   return M.TEMPLATES.map((t) => {
     const o = results.find((r) => r.key === t.key) || {};
-    return { ...t, default_body: t.body, body: o.body || t.body, custom: !!o.body, wa_id: o.wa_id || null, wa_status: o.wa_status || null, wa_reason: o.wa_reason || null, wa_body: o.wa_body || null };
+    return { ...t, base_name: t.wa_name, wa_name: o.cur_name || t.wa_name, default_body: t.body, body: o.body || t.body, custom: !!o.body, wa_id: o.wa_id || null, wa_status: o.wa_status || null, wa_reason: o.wa_reason || null, wa_body: o.wa_body || null,
+      nx_name: o.nx_name || null, nx_id: o.nx_id || null, nx_status: o.nx_status || null, nx_body: o.nx_body || null, nx_reason: o.nx_reason || null };
   });
 }
 async function bookingFull(env, id) {
@@ -2590,6 +2592,12 @@ async function waProcess(env, body) {
       const reason = v.reason && v.reason !== "NONE" ? String(v.reason).replace(/_/g, " ").toLowerCase() : null;
       await env.DB.prepare("UPDATE msg_templates SET wa_status=?1, wa_reason=?2, updated_at=?3 WHERE wa_id=?4")
         .bind(String(v.event).toUpperCase(), reason, isoNow(), String(v.message_template_id)).run().catch(() => {});
+      // a new version of a text: approved → it takes over; otherwise just note its status
+      const nx = await env.DB.prepare("SELECT key FROM msg_templates WHERE nx_id=?1").bind(String(v.message_template_id)).first().catch(() => null);
+      if (nx) {
+        if (String(v.event).toUpperCase() === "APPROVED") await promoteTemplate(env, nx.key);
+        else await env.DB.prepare("UPDATE msg_templates SET nx_status=?1, nx_reason=?2 WHERE key=?3").bind(String(v.event).toUpperCase(), reason, nx.key).run().catch(() => {});
+      }
       continue;
     }
     if (S.wa_phone_id && v.metadata && v.metadata.phone_number_id && String(v.metadata.phone_number_id) !== String(S.wa_phone_id)) continue;
@@ -3743,6 +3751,22 @@ async function adminWaSaveTemplate(env, req, key, reset) {
   return json({ ok: true });
 }
 // Send a text to WhatsApp for approval as a template (needed to message people who haven't written to us in 24 hours).
+// The WhatsApp version of a text: body (+ example values) and quick-reply buttons.
+function tplComponents(env, t) {
+  const { text, params } = M.metaBody(t.body);
+  if (text.length > 1024) return { error: `The WhatsApp version is ${text.length} characters; WhatsApp allows 1,024. Shorten the text.` };
+  if (/^\s*\{\{/.test(text) || /\}\}\s*$/.test(text)) return { error: "WhatsApp doesn't allow a template to start or end with a {{value}}. Add a few words before / after it." };
+  const ex = M.vars({ id: "DSL-AB12CD", name: "Asha Verma", phone: "9811122233", date: addDays(istParts().date, 2), slot: "07:30", address: "Flat 302, Sunrise Apartments, Sector 7",
+    city: "New Delhi", state: "Delhi", pincode: "110075", amount: 1899, vial_no: "AB1234", notes: "Gate 2", collector_info: "Ramesh, 98765 43210, 8:30 AM", status: "confirmed" },
+  { tests: [{ name: "FEMALE FERTILITY", includes: "FSH, LH, AMH, TSH" }], cfg: { amount: 1899, upiId: env.UPI_ID || "lab@upi", visitFee: 300 }, centre: { name: "Dwarka Sector 7 centre" }, alert: "Report uploaded" });
+  const comps = [{ type: "BODY", text, ...(params.length ? { example: { body_text_named_params: params.map((k) => ({ param_name: k, example: M.oneLine(ex[k]).slice(0, 200) })) } } : {}) }];
+  if (t.buttons.length) comps.push({ type: "BUTTONS", buttons: t.buttons.map((x) => ({ type: "QUICK_REPLY", text: x.text })) });
+  return { comps };
+}
+// Send a text to WhatsApp for approval as a template (needed to message people who haven't written to us in 24 hours).
+// An APPROVED text is never edited in place (Meta often refuses that, and it would stop sending while under review):
+// the new wording goes in as a new version (<name>_v2, _v3 …). The approved version keeps being used until the new one
+// is approved, then the new one takes over by itself (adminWaSync / the webhook → promoteTemplate).
 async function adminWaSubmit(env, key) {
   const S = await getSettings(env);
   if (!env.WA_TOKEN) return bad("Add the WA_TOKEN secret in Cloudflare first.");
@@ -3750,17 +3774,31 @@ async function adminWaSubmit(env, key) {
   const t = (await templates(env)).find((x) => x.key === key);
   if (!t) return bad("Unknown message", 404);
   if (t.meta === false) return bad("This message only goes out inside an open chat, so it doesn't need WhatsApp's approval.");
-  const { text, params } = M.metaBody(t.body);
-  if (text.length > 1024) return bad(`The WhatsApp version is ${text.length} characters; WhatsApp allows 1,024. Shorten the text.`);
-  if (/^\s*\{\{/.test(text) || /\}\}\s*$/.test(text)) return bad("WhatsApp doesn't allow a template to start or end with a {{value}}. Add a few words before / after it.");
-  const ex = M.vars({ id: "DSL-AB12CD", name: "Asha Verma", phone: "9811122233", date: addDays(istParts().date, 2), slot: "07:30", address: "Flat 302, Sunrise Apartments, Sector 7",
-    city: "New Delhi", state: "Delhi", pincode: "110075", amount: 1899, vial_no: "AB1234", notes: "Gate 2", collector_info: "Ramesh, 98765 43210, 8:30 AM", status: "confirmed" },
-  { tests: [{ name: "FEMALE FERTILITY", includes: "FSH, LH, AMH, TSH" }], cfg: { amount: 1899, upiId: env.UPI_ID || "lab@upi", visitFee: 300 }, centre: { name: "Dwarka Sector 7 centre" }, alert: "Report uploaded" });
-  const comps = [{ type: "BODY", text, ...(params.length ? { example: { body_text_named_params: params.map((k) => ({ param_name: k, example: M.oneLine(ex[k]).slice(0, 200) })) } } : {}) }];
-  if (t.buttons.length) comps.push({ type: "BUTTONS", buttons: t.buttons.map((x) => ({ type: "QUICK_REPLY", text: x.text })) });
+  const c = tplComponents(env, t);
+  if (c.error) return bad(c.error);
+  const comps = c.comps;
+  if (t.wa_id && ["APPROVED", "PAUSED", "DISABLED"].includes(t.wa_status)) {
+    const m = /_v(\d+)$/.exec(t.wa_name);
+    let n = Math.max(m ? +m[1] + 1 : 2, (/_v(\d+)$/.exec(t.nx_name || "") || [0, 0])[1] * 1 + 1);
+    for (let tries = 0; tries < 4; tries++, n++) {
+      const name = `${t.base_name}_v${n}`;
+      try {
+        const j = await graph(env, S, `${S.wa_waba_id}/message_templates`, { method: "POST", body: { name, language: "en", category: "UTILITY", parameter_format: "NAMED", components: comps } });
+        const status = j.status || "PENDING";
+        await env.DB.prepare("UPDATE msg_templates SET nx_name=?1, nx_id=?2, nx_status=?3, nx_body=?4, nx_reason=NULL, wa_reason=NULL, updated_at=?5 WHERE key=?6")
+          .bind(name, j.id, status, t.body, isoNow(), key).run();
+        if (status === "APPROVED") await promoteTemplate(env, key);
+        return json({ ok: true, status, version: name });
+      } catch (e) {
+        if (/already exists|2388024|2388023/i.test(e.message)) continue; // that name is taken (e.g. an older attempt) – next number
+        return bad(`WhatsApp said: ${e.message}`, 400);
+      }
+    }
+    return bad("WhatsApp already has templates with the next version names – try again later.");
+  }
   try {
     let id = t.wa_id, status = "PENDING";
-    if (id) await graph(env, S, id, { method: "POST", body: { components: comps } }); // edit the existing template
+    if (id) await graph(env, S, id, { method: "POST", body: { components: comps } }); // not approved yet (pending / rejected): edit it
     else {
       const j = await graph(env, S, `${S.wa_waba_id}/message_templates`, { method: "POST", body: { name: t.wa_name, language: "en", category: "UTILITY", parameter_format: "NAMED", components: comps } });
       id = j.id; status = j.status || "PENDING";
@@ -3772,6 +3810,11 @@ async function adminWaSubmit(env, key) {
     if (/already exists|2388024|2388023/i.test(e.message)) { await adminWaSync(env); return bad("WhatsApp already has a template with this name – its status has been loaded. Press Submit again to update it."); }
     return bad(`WhatsApp said: ${e.message}`, 400);
   }
+}
+// The new version was approved: send with it from now on.
+async function promoteTemplate(env, key) {
+  await env.DB.prepare(`UPDATE msg_templates SET cur_name=nx_name, wa_id=nx_id, wa_status='APPROVED', wa_body=nx_body, wa_reason=NULL,
+    nx_name=NULL, nx_id=NULL, nx_status=NULL, nx_body=NULL, nx_reason=NULL, updated_at=?1 WHERE key=?2 AND nx_id IS NOT NULL`).bind(isoNow(), key).run();
 }
 // Every message text that WhatsApp hasn't approved in its current wording is sent for approval automatically:
 // new texts, texts edited in the admin, and texts whose wording changed in the code (e.g. a new phone number).
@@ -3789,6 +3832,8 @@ async function autoSubmitTemplates(env, force) {
     if (t.meta === false || ["PENDING", "IN_APPEAL"].includes(t.wa_status)) continue;
     const changed = !t.wa_id || !t.wa_body || t.wa_body.trim() !== String(t.body).trim();
     if (!changed) continue;
+    // this wording is already waiting as a new version (or WhatsApp turned it down – don't send the same text again)
+    if (t.nx_body && t.nx_body.trim() === String(t.body).trim() && ["PENDING", "IN_APPEAL", "REJECTED"].includes(t.nx_status)) continue;
     const r = await adminWaSubmit(env, t.key);
     const j = await r.json().catch(() => ({}));
     out.push({ key: t.key, ok: r.ok, status: j.status || null, error: r.ok ? null : j.error || String(r.status) });
@@ -3807,19 +3852,27 @@ async function adminWaSync(env) {
   try { j = await graph(env, S, `${S.wa_waba_id}/message_templates?fields=id,name,status,language,rejected_reason,components&limit=200`); }
   catch (e) { return bad(`WhatsApp said: ${e.message}`, 502); }
   const { results: rows } = await env.DB.prepare("SELECT key, wa_body FROM msg_templates").all();
-  const stmts = [];
-  for (const t of M.TEMPLATES) {
+  const find = (name) => name && (j.data || []).find((d) => d.name === name && /^en/.test(d.language || ""));
+  const why = (m) => (m.rejected_reason && m.rejected_reason !== "NONE" ? m.rejected_reason : null);
+  const stmts = [], promote = [];
+  for (const t of await templates(env)) {
     if (t.meta === false) continue;
-    const m = (j.data || []).find((d) => d.name === t.wa_name && /^en/.test(d.language || ""));
+    const nx = find(t.nx_name);
+    if (nx) {
+      if (nx.status === "APPROVED") promote.push(t.key);
+      else stmts.push(env.DB.prepare("UPDATE msg_templates SET nx_id=?1, nx_status=?2, nx_reason=?3 WHERE key=?4").bind(nx.id, nx.status, why(nx), t.key));
+    }
+    const m = find(t.wa_name);
     if (!m) continue;
     const have = rows.find((r) => r.key === t.key);
     const metaText = ((m.components || []).find((c) => c.type === "BODY") || {}).text || null;
     stmts.push(env.DB.prepare(`INSERT INTO msg_templates (key, wa_id, wa_status, wa_reason, wa_body, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-      ON CONFLICT(key) DO UPDATE SET wa_id=excluded.wa_id, wa_status=excluded.wa_status, wa_reason=excluded.wa_reason, wa_body=COALESCE(msg_templates.wa_body, excluded.wa_body), updated_at=excluded.updated_at`)
-      .bind(t.key, m.id, m.status, m.rejected_reason && m.rejected_reason !== "NONE" ? m.rejected_reason : null, have && have.wa_body ? have.wa_body : metaText, isoNow()));
+      ON CONFLICT(key) DO UPDATE SET wa_id=excluded.wa_id, wa_status=excluded.wa_status, wa_reason=COALESCE(excluded.wa_reason, CASE WHEN msg_templates.wa_reason LIKE 'Auto-submit:%' THEN msg_templates.wa_reason END), wa_body=COALESCE(msg_templates.wa_body, excluded.wa_body), updated_at=excluded.updated_at`)
+      .bind(t.key, m.id, m.status, why(m), have && have.wa_body ? have.wa_body : metaText, isoNow()));
   }
   if (stmts.length) await env.DB.batch(stmts);
-  return json({ ok: true, found: stmts.length });
+  for (const k of promote) await promoteTemplate(env, k);
+  return json({ ok: true, found: stmts.length, promoted: promote.length });
 }
 async function adminWaMenu(env, req) {
   const b = await req.json().catch(() => ({}));
@@ -4014,7 +4067,7 @@ export default {
       // (Meta also tells us through the webhook, but only if "message_template_status_update" is subscribed)
       await autoSubmitTemplates(env).catch((e) => console.log("template auto-submit", String(e))); // every 30 min: wording changed → send for approval
       if (new Date(event.scheduledTime || Date.now()).getUTCMinutes() % 10 === 0
-        && (await env.DB.prepare("SELECT 1 FROM msg_templates WHERE wa_status IN ('PENDING','IN_APPEAL') LIMIT 1").first())) await adminWaSync(env).catch(() => {});
+        && (await env.DB.prepare("SELECT 1 FROM msg_templates WHERE wa_status IN ('PENDING','IN_APPEAL') OR nx_status IN ('PENDING','IN_APPEAL') LIMIT 1").first())) await adminWaSync(env).catch(() => {});
     })());
   },
   async fetch(req, env, ctx) {

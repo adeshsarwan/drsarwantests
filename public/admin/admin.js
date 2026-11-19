@@ -2016,10 +2016,11 @@ Webhook URL for Meta → WhatsApp → Configuration: <code>${esc(WA.webhook)}</c
     $('#waVars').innerHTML = WA.vars.map(([k, d]) => `<code>{{${k}}}</code> ${esc(d)}`).join(' · ');
     $('#waTexts').innerHTML = WA.templates.map((t) => {
       const ms = t.meta === false ? ['Only inside an open chat', 'st-cancelled'] : META_ST[t.wa_status] || ['Not sent for approval', 'st-cancelled'];
-      const changed = t.wa_body && t.wa_body !== t.body && t.meta !== false;
+      const waiting = t.nx_name && t.nx_body === t.body && ['PENDING', 'IN_APPEAL'].includes(t.nx_status);
+      const changed = t.wa_body && t.wa_body !== t.body && t.meta !== false && !waiting;
       return `<div class="wa-t" data-key="${t.key}"><div class="wa-t-h"><div><b>${esc(t.label)}</b> <span class="meta">→ ${ROLE_T[t.to]}${t.buttons.length ? ' · buttons: ' + t.buttons.map((x) => esc(x.text)).join(', ') : ''}</span></div>
 <span><span class="pill ${ms[1]}" style="margin:0">${ms[0]}</span>${t.wa_name && t.meta !== false ? ` <code class="meta">${t.wa_name}</code>` : ''}</span></div>
-${t.wa_reason ? `<p class="err" style="margin:6px 0 0">WhatsApp: ${esc(t.wa_reason)}</p>` : ''}${changed ? '<p class="meta" style="margin:6px 0 0;color:#8a5a00">Edited since it was sent for approval – WhatsApp still uses the approved version until you send it again.</p>' : ''}
+${t.wa_reason ? `<p class="err" style="margin:6px 0 0">WhatsApp: ${esc(t.wa_reason)}</p>` : ''}${waiting ? `<p class="meta" style="margin:6px 0 0;color:#2a4a8a">New wording sent to WhatsApp as <code>${esc(t.nx_name)}</code> – waiting for approval. The approved version keeps going out until then; the new one takes over by itself.</p>` : ''}${t.nx_status === 'REJECTED' && t.nx_body === t.body ? `<p class="err" style="margin:6px 0 0">WhatsApp turned down the new wording (${esc(t.nx_name)})${t.nx_reason ? ': ' + esc(t.nx_reason) : ''}. Change the text and it's sent again automatically.</p>` : ''}${changed ? '<p class="meta" style="margin:6px 0 0;color:#8a5a00">Edited since it was sent for approval – it goes to WhatsApp for approval automatically within 30 minutes; the approved version is used until then.</p>' : ''}
 <textarea class="inp" data-body="${t.key}" spellcheck="true">${esc(t.body)}</textarea>
 <div class="acts"><button type="button" class="btn sm" data-act="wa-tsave" data-key="${t.key}">Save text</button>${t.custom ? `<button type="button" class="btn ghost sm" data-act="wa-treset" data-key="${t.key}">Back to default</button>` : ''}
 ${t.meta !== false ? `<button type="button" class="btn ghost sm" data-act="wa-submit" data-key="${t.key}">${t.wa_id ? 'Send again for approval' : 'Send for approval'}</button>` : ''}<span class="meta" data-tmsg="${t.key}"></span></div></div>`;
