@@ -1324,16 +1324,30 @@ function readPackage(b) {
   if (price === null || !Number.isFinite(price) || price <= 0) return { err: "Enter the price shown to patients." };
   for (const v of [mrp, margin]) if (v !== null && (!Number.isFinite(v) || v < 0)) return { err: "MRP and margin must be numbers." };
   const prep = b.prep === undefined ? null : String(b.prep).replace(/\r/g, "").replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, " ").split("\n").map((l) => l.trim()).join("\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, 1500);
-  return { name, tests: clean(b.tests, 1000), price, mrp, margin, target: clean(b.target, 120), prep,
+  return { name, tests: clean(b.tests, 4000), price, mrp, margin, target: clean(b.target, 120), prep,
     active: b.active === false || b.active === 0 || b.active === "0" ? 0 : 1, is_default: b.is_default ? 1 : 0 };
 }
 async function adminSavePackage(env, req, id) {
-  const p = readPackage(await req.json().catch(() => ({})));
+  const body = await req.json().catch(() => ({}));
+  const p = readPackage(body);
   if (p.err) return bad(p.err);
+  // tests picked from Admin → Tests: they're linked to the package and "Tests included" is written from their names
+  let testIds = null;
+  if (Array.isArray(body.test_ids)) {
+    testIds = [...new Set(body.test_ids.map(Number).filter((x) => x > 0))].slice(0, 400);
+    const { results: tt } = testIds.length ? await env.DB.prepare(`SELECT id, name FROM lab_tests WHERE id IN (${testIds.map((_, i) => "?" + (i + 1)).join(",")})`).bind(...testIds).all() : { results: [] };
+    testIds = testIds.filter((x) => tt.some((t) => t.id === x));
+    p.tests = testIds.map((x) => tt.find((t) => t.id === x).name).join(", ").slice(0, 4000);
+  }
+  const linkTests = async (pid) => {
+    if (!testIds) return;
+    await env.DB.batch([env.DB.prepare("DELETE FROM package_tests WHERE package_id=?1").bind(pid),
+      ...testIds.map((tid, i) => env.DB.prepare("INSERT INTO package_tests (package_id, test_id, sort) VALUES (?1, ?2, ?3)").bind(pid, tid, i + 1))]);
+  };
   if (p.is_default && !p.active) return bad("The website test can't be hidden. Make another test the website test first.");
   const now = isoNow();
   const dup = await env.DB.prepare("SELECT id FROM packages WHERE lower(name)=lower(?1) AND id != ?2").bind(p.name, id || 0).first();
-  if (dup) return bad("A test with this name already exists.", 409);
+  if (dup) return bad("A package with this name already exists.", 409);
   const stmts = [];
   if (p.is_default) stmts.push(env.DB.prepare("UPDATE packages SET is_default=0 WHERE id != ?1").bind(id || 0));
   if (id) {
@@ -1343,6 +1357,7 @@ async function adminSavePackage(env, req, id) {
     stmts.push(env.DB.prepare("UPDATE packages SET name=?1, tests=?2, mrp=?3, price=?4, margin=?5, target=?6, active=?7, is_default=?8, updated_at=?9, prep=COALESCE(?11, prep) WHERE id=?10")
       .bind(p.name, p.tests, p.mrp, p.price, p.margin, p.target, p.active, p.is_default, now, id, p.prep));
     await env.DB.batch(stmts);
+    await linkTests(id);
     return json({ ok: true, id });
   }
   const mx = await env.DB.prepare("SELECT COALESCE(MAX(sort), 0) AS m FROM packages").first();
@@ -1350,6 +1365,7 @@ async function adminSavePackage(env, req, id) {
     .bind(p.name, p.tests, p.mrp, p.price, p.margin, p.target, p.active, p.is_default, (mx ? mx.m : 0) + 10, now, p.prep));
   await env.DB.batch(stmts);
   const row = await env.DB.prepare("SELECT id FROM packages WHERE name=?1").bind(p.name).first();
+  if (row) await linkTests(row.id);
   return json({ ok: true, id: row && row.id }, 201);
 }
 async function adminDeletePackage(env, id) {

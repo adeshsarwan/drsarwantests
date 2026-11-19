@@ -83,7 +83,7 @@
 <div class="card">
 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
 <div><h2 class="h2" style="margin:0">Packages</h2><p class="meta" style="margin:4px 0 0">What patients can book. Each package with a published page gets <b>drsarwantests.com/package/&lt;name&gt;</b> and a card on the home page. Margin is only shown here.</p></div>
-<div style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn ghost sm" href="#home" style="align-self:center">Edit home page</a><input id="pkgSearch" class="inp" type="search" placeholder="Search packages…" aria-label="Search packages"><button class="btn sm" data-act="pkg-add">+ Add test</button></div>
+<div style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn ghost sm" href="#home" style="align-self:center">Edit home page</a><input id="pkgSearch" class="inp" type="search" placeholder="Search packages…" aria-label="Search packages"><button class="btn sm" data-act="pkg-add">+ Add package</button></div>
 </div>
 <div class="tbl-wrap"><table class="tbl pkg-t">
 <thead><tr><th>Test / package</th><th style="text-align:center">Tests</th><th style="text-align:center">Before test</th><th class="num">MRP</th><th class="num">Price</th><th class="num">Margin</th><th>Target</th><th class="num">Active bookings</th><th>Status</th><th>Web page</th><th></th></tr></thead>
@@ -351,20 +351,23 @@
 <!-- add / edit test -->
 <dialog id="pkgDlg" class="dlg" style="max-width:min(94vw,560px)">
 <form id="pkgForm" novalidate>
-<div class="dlg-h"><b id="pkgTitle">Add test</b><div class="meta">Price changes apply to new bookings only.</div></div>
+<div class="dlg-h"><b id="pkgTitle">Add package</b><div class="meta">Price changes apply to new bookings only.</div></div>
 <div class="dlg-b fgrid">
-<div class="fld wide"><label for="pName">Test / package name</label><input id="pName" name="name" class="inp" autocomplete="off" required></div>
-<div class="fld wide"><label for="pTests">Tests included</label><textarea id="pTests" name="tests" class="inp ta" rows="3" placeholder="e.g. FSH, LH, Prolactin, AMH, T3, T4, TSH"></textarea></div>
+<div class="fld wide"><label for="pName">Package name</label><input id="pName" name="name" class="inp" autocomplete="off" required></div>
+<div class="fld wide"><label for="pTestQ">Tests included <span class="meta">(picked from Admin → Tests)</span></label>
+<div id="pTestChips" class="pk-chips"></div>
+<div class="pk-pick"><input id="pTestQ" class="inp" autocomplete="off" placeholder="Add a test – type to search…"><div id="pTestSug" class="pk-sug" hidden></div></div>
+<span class="meta" id="pTestNote"></span></div>
 <div class="fld"><label for="pPrice">Price shown to patients (₹)</label><input id="pPrice" name="price" class="inp" inputmode="numeric" autocomplete="off" required></div>
 <div class="fld"><label for="pMrp">MRP (₹, optional)</label><input id="pMrp" name="mrp" class="inp" inputmode="numeric" autocomplete="off"></div>
 <div class="fld"><label for="pMargin">Margin (₹, private)</label><input id="pMargin" name="margin" class="inp" inputmode="numeric" autocomplete="off"></div>
 <div class="fld wide"><label for="pPrep">Before the test <span class="meta">(sent in the WhatsApp confirmation &amp; reminder)</span></label><textarea id="pPrep" name="prep" class="inp ta" rows="4" placeholder="• Fast for 10–12 hours overnight (water is fine)&#10;• Our phlebotomist will call you before arriving"></textarea><span class="meta">One instruction per line. Leave empty to send none.</span></div>
 <div class="fld"><label for="pTarget">Target (optional)</label><input id="pTarget" name="target" class="inp" autocomplete="off" placeholder="e.g. 50 / month"></div>
 <label class="fld wide chk"><span><input type="checkbox" id="pActive" name="active" checked> <b>Active</b> – can be booked</span></label>
-<label class="fld wide chk"><span><input type="checkbox" id="pDefault" name="is_default"> <b>Website test</b> – the test sold on the booking page</span></label>
+<label class="fld wide chk"><span><input type="checkbox" id="pDefault" name="is_default"> <b>Website package</b> – the package sold on the booking page</span></label>
 </div>
 <p class="err" id="pkgErr" style="padding:0 18px;margin:0"></p>
-<div class="dlg-f"><button class="btn" id="pkgSave" style="flex:1">Save test</button><button type="button" class="btn warn" id="pkgDel" hidden>Delete</button><button type="button" class="btn ghost" data-close="pkgDlg">Cancel</button></div>
+<div class="dlg-f"><button class="btn" id="pkgSave" style="flex:1">Save package</button><button type="button" class="btn warn" id="pkgDel" hidden>Delete</button><button type="button" class="btn ghost" data-close="pkgDlg">Cancel</button></div>
 </form>
 </dialog>
 

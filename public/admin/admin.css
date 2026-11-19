@@ -732,3 +732,10 @@ button.stat:hover{border-color:var(--teal);box-shadow:0 0 0 2px #d8ecef}
 .lt-t .lt-row{cursor:pointer}.lt-t .lt-row:hover td{background:#f7fafb}
 .lt-i{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;border:1.5px solid #1f6977;color:#1f6977;background:#fff;font:italic 700 11px Georgia,serif;cursor:help;vertical-align:1px;margin-left:4px;padding:0}
 .lt-i:hover,.lt-i:focus-visible{background:#1f6977;color:#fff}.lt-i.none{border-color:#c9d3df;color:#9aa6b6}
+/* package form: tests picked from the Tests list */
+.pk-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;max-height:180px;overflow:auto}
+.pk-chip{display:inline-flex;align-items:center;gap:6px;background:#eef7f6;color:#1f6977;border:1px solid #cfe6e3;border-radius:999px;padding:3px 4px 3px 10px;font-size:13px;font-weight:700}
+.pk-chip button{border:0;background:#fff;color:#a33a1f;border-radius:50%;width:20px;height:20px;line-height:18px;cursor:pointer;font-size:14px;padding:0}
+.pk-pick{position:relative}.pk-pick .inp{width:100%;box-sizing:border-box}
+.pk-sug{position:absolute;left:0;right:0;top:100%;z-index:5;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 24px rgba(20,40,70,.18);max-height:240px;overflow:auto}
+.pk-sug button{display:block;width:100%;text-align:left;border:0;background:none;padding:8px 10px;font-size:13.5px;cursor:pointer}.pk-sug button:hover,.pk-sug button:focus{background:#eef7f6}
