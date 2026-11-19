@@ -728,3 +728,4 @@ button.stat:hover{border-color:var(--teal);box-shadow:0 0 0 2px #d8ecef}
 .pt-pop .pt-sug{position:absolute;left:14px;right:14px;bottom:100%;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 24px rgba(20,40,70,.18);max-height:220px;overflow:auto}
 .pt-pop .pt-sug button{display:block;width:100%;text-align:left;border:0;background:none;padding:8px 10px;font-size:13.5px;cursor:pointer}.pt-pop .pt-sug button:hover,.pt-pop .pt-sug button:focus{background:#eef7f6}
 .pt-pop .pt-f{padding:8px 14px 12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.pt-pop .pt-add .inp{width:100%;box-sizing:border-box}
