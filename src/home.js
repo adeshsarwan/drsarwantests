@@ -33,7 +33,7 @@ export const HOME_DEFAULT = {
   ],
   seo: {
     title: "Dr. Sarwan Diagnostic Labs – NABL & CGHS approved, home sample collection",
-    description: "Diagnostic labs since 2015: radiology, pathology and health packages with home sample collection from 7 AM to 6 PM and e-reports on WhatsApp. Call 8368143677.",
+    description: "Diagnostic labs since 2015: radiology, pathology and health packages with home sample collection from 7 AM to 6 PM and e-reports on WhatsApp. Call 9818028755.",
   },
 };
 
@@ -77,7 +77,7 @@ export function renderHome(home, pkgs, opts = {}) {
 <a href="/package/${esc(p.slug)}" style="min-height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; background: #1f6977; color: #ffffff; text-decoration: none; font-weight: 700">See what it shows &amp; book</a>
 </article>`;
   }).join("\n");
-  const ld = { "@context": "https://schema.org", "@type": "MedicalOrganization", name: "Dr. Sarwan Diagnostic Labs", url: "https://drsarwantests.com/", telephone: "+91-8368143677",
+  const ld = { "@context": "https://schema.org", "@type": "MedicalOrganization", name: "Dr. Sarwan Diagnostic Labs", url: "https://drsarwantests.com/", telephone: "+91-9818028755",
     address: { "@type": "PostalAddress", streetAddress: "Shop 37-38, Vardhaman Crown Mall, Sector 19, Dwarka", addressLocality: "New Delhi", postalCode: "110078", addressCountry: "IN" } };
   return `<!doctype html>
 <html lang="en">
@@ -113,7 +113,7 @@ a{color:#1f6977}a:hover{color:#164e59}
 <a class="navlink" href="#story" style="color: #1b2a4e; text-decoration: none">Our story</a>
 <a class="navlink" href="#packages" style="color: #1b2a4e; text-decoration: none">Packages</a>
 <a class="navlink" href="/reports/" style="color: #1b2a4e; text-decoration: none">My reports</a>
-<a class="navlink" href="tel:8368143677" style="color: #1b2a4e; text-decoration: none; display: inline-flex; align-items: center; gap: 6px">${PHONE_SVG}8368143677</a>
+<a class="navlink" href="tel:9818028755" style="color: #1b2a4e; text-decoration: none; display: inline-flex; align-items: center; gap: 6px">${PHONE_SVG}9818028755</a>
 <a href="#packages" style="background: #1f6977; color: #ffffff; text-decoration: none; padding: 11px 20px; border-radius: 999px; min-height: 44px; display: inline-flex; align-items: center">Book a home test</a>
 </nav>
 </div>
@@ -127,7 +127,7 @@ ${h.hero.badge ? `<span style="align-self: flex-start; font-size: 13px; font-wei
 ${h.hero.text ? `<p style="margin: 0; font-size: 19px; line-height: 1.55; color: #3b4a68">${esc(h.hero.text)}</p>` : ""}
 <div style="display: flex; gap: 12px; flex-wrap: wrap">
 <a href="#packages" style="min-height: 48px; display: inline-flex; align-items: center; padding: 0 22px; border-radius: 999px; background: #1f6977; color: #ffffff; text-decoration: none; font-weight: 700">${esc(h.hero.cta)}</a>
-<a href="tel:8368143677" style="min-height: 48px; display: inline-flex; align-items: center; gap: 8px; padding: 0 22px; border-radius: 999px; border: 1.5px solid #1f6977; color: #1f6977; text-decoration: none; font-weight: 700">${PHONE_SVG}Call 8368143677</a>
+<a href="tel:9818028755" style="min-height: 48px; display: inline-flex; align-items: center; gap: 8px; padding: 0 22px; border-radius: 999px; border: 1.5px solid #1f6977; color: #1f6977; text-decoration: none; font-weight: 700">${PHONE_SVG}Call 9818028755</a>
 </div>
 </div>
 ${h.stats.length ? `<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px">
@@ -155,7 +155,7 @@ ${t.text ? `<span style="color: #3b4a68; line-height: 1.5; font-size: 15px">${es
 <div><h2 id="pk-h" style="margin: 0; font-family: Archivo, sans-serif; font-weight: 800; font-size: 36px">${esc(h.packages.title || "Health packages")}</h2>
 ${h.packages.intro ? `<p style="margin: 8px 0 0; color: #3b4a68">${esc(h.packages.intro)}</p>` : ""}</div>
 ${cards ? `<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 18px">\n${cards}\n</div>`
-  : '<p style="margin: 0; color: #3b4a68">Our packages are being updated. Please call <a href="tel:8368143677">8368143677</a> to book.</p>'}
+  : '<p style="margin: 0; color: #3b4a68">Our packages are being updated. Please call <a href="tel:9818028755">9818028755</a> to book.</p>'}
 </div>
 </section>
 
@@ -168,7 +168,7 @@ ${h.features.map((f) => `<div><h3 style="margin: 0 0 6px; font-family: Archivo, 
 <footer style="background: #1b2a4e; color: #d6deea">
 <div style="max-width: 1180px; margin: 0 auto; padding: 36px 24px; display: flex; flex-direction: column; gap: 12px; font-size: 14px">
 <b style="color: #ffffff; font-family: Archivo, sans-serif; font-size: 17px">Dr. Sarwan Diagnostic Labs</b>
-<span>Shop 37–38, Vardhaman Crown Mall, Sector 19, Dwarka, New Delhi 110078 · <a href="tel:8368143677" style="color: #d6deea">8368143677</a></span>
+<span>Shop 37–38, Vardhaman Crown Mall, Sector 19, Dwarka, New Delhi 110078 · <a href="tel:9818028755" style="color: #d6deea">9818028755</a></span>
 <span style="display: flex; gap: 16px; flex-wrap: wrap"><a href="/contact" style="color: #d6deea">Contact us</a><a href="/privacy" style="color: #d6deea">Privacy Policy</a><a href="/service" style="color: #d6deea">Terms of Service</a><a href="/refund" style="color: #d6deea">Refunds</a><a href="/delivery" style="color: #d6deea">Delivery</a><a href="/reports/" style="color: #d6deea">My reports</a></span>
 <span style="color: #9fb0c8">© Dr. Sarwan Diagnostic Labs</span>
 </div>

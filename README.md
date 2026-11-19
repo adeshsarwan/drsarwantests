@@ -14,7 +14,7 @@ Landing page + home-collection booking system for Dr. Sarwan Diagnostic Labs
 2. Customer enters name, mobile and address. The slot is **not** reserved yet.
 3. Customer pays Rs. 1899 to the Paytm QR / UPI ID and uploads the payment screenshot. That is when the slot is taken.
    If someone else paid for the same slot first, the payment is kept and the customer picks another free slot.
-4. Booking becomes **"Paid – verify"**, and the customer sends the details to 8368143677 on WhatsApp with one tap.
+4. Booking becomes **"Paid – verify"**, and the customer sends the details to 9818028755 on WhatsApp with one tap.
 5. You check the UTR in your Paytm business app, then click **Confirm** in `/admin`
    A ready-made WhatsApp confirmation message pops up with **Copy message** and **Open WhatsApp**.
 
@@ -23,8 +23,10 @@ Unpaid bookings never block a slot and are marked expired after 2 hours.
 ## Online payment (Instamojo)
 - When the Instamojo secrets are set, the booking form takes the patient to Instamojo's payment page (UPI, cards, net banking, wallets)
   right after their details. Without them the old UPI QR + screenshot flow is used.
-- The booking only becomes **Paid** (`payment_submitted`, shown as *Paid online ✓*) after we check the payment with Instamojo's API –
+- The booking only becomes **Paid** (*Paid online ✓*) after we check the payment with Instamojo's API –
   on the patient's return, through the webhook (`/api/pay/instamojo`) or by a cron sweep for people who closed the tab. Then it follows the normal steps (Confirm → centre → …).
+- A verified online payment **confirms the booking automatically** (no *Confirm* click): the default centre gets the job and, in automatic WhatsApp mode,
+  the patient gets the booking confirmation from 98180 28755 straight away (collector details follow when the centre accepts).
 - Unpaid online checkouts never hold a slot and don't show in Bookings / Calendar. **Admin → Payments** lists every attempt:
   *Failed*, *Not completed* (opened the payment page, never paid, after 30 min), *Paid online*, with **Check again** and a WhatsApp follow-up link.
 - Setup (Cloudflare → Worker → Settings → Variables and Secrets, type Secret), from Instamojo → API & Plugins:
@@ -119,7 +121,7 @@ Google Pay / PhonePe / Paytm / Other buttons, plus **Save QR image** for "scan f
 
 ## WhatsApp
 After paying, the customer taps **Send booking on WhatsApp**: WhatsApp opens with their booking
-details (ref, slot, name, mobile, address, UTR) already filled in, addressed to 8368143677.
+details (ref, slot, name, mobile, address, UTR) already filled in, addressed to 9818028755.
 They can attach the payment screenshot. Every booking is also saved in `/admin`, even if the
 customer doesn't send the WhatsApp message.
 

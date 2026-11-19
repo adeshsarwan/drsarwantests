@@ -193,6 +193,11 @@ const SCHEMA = [
     payment_id TEXT, amount INTEGER NOT NULL, status TEXT NOT NULL, reason TEXT, method TEXT, back TEXT, checked_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS payments_by_booking ON payments(booking_id)`,
   `CREATE INDEX IF NOT EXISTS payments_by_status ON payments(status, created_at)`,
+  // official WhatsApp / contact number is 98180 28755 (was 83681 43677) – also in texts already saved in the database
+  `UPDATE msg_templates SET body=replace(replace(body,'8368143677','9818028755'),'83681 43677','98180 28755') WHERE body LIKE '%8368143677%' OR body LIKE '%83681 43677%'`,
+  `UPDATE menu_items SET title=replace(title,'8368143677','9818028755'), description=replace(description,'8368143677','9818028755') WHERE title LIKE '%8368143677%' OR description LIKE '%8368143677%'`,
+  `UPDATE packages SET page=replace(replace(page,'918368143677','919818028755'),'8368143677','9818028755') WHERE page LIKE '%8368143677%'`,
+  `UPDATE settings SET v=replace(replace(v,'918368143677','919818028755'),'8368143677','9818028755') WHERE k='home_page' AND v LIKE '%8368143677%'`,
 ];
 
 // Tests / packages from DRSARWAN_TESTS_PACKAGES.xlsx — loaded once into an empty database.
@@ -499,8 +504,8 @@ async function createBooking(env, req) {
 // The payment page behind the WhatsApp payment link (?pay=ID&t=TOKEN): what to pay and how.
 async function payInfo(env, url, id) {
   const row = await env.DB.prepare("SELECT * FROM bookings WHERE id=?1").bind(id).first();
-  if (!row || !safeEqual(row.token, url.searchParams.get("t") || "")) return bad("This payment link isn't valid. Please call 8368143677.", 404);
-  if (!["pending", "expired", "payment_submitted"].includes(row.status)) return bad(row.status === "cancelled" ? "This booking was cancelled. Please call 8368143677." : "This booking is already paid ✅", 409);
+  if (!row || !safeEqual(row.token, url.searchParams.get("t") || "")) return bad("This payment link isn't valid. Please call 9818028755.", 404);
+  if (!["pending", "expired", "payment_submitted"].includes(row.status)) return bad(row.status === "cancelled" ? "This booking was cancelled. Please call 9818028755." : "This booking is already paid ✅", 409);
   const t = await env.DB.prepare("SELECT name FROM booking_tests WHERE booking_id=?1 ORDER BY id").bind(id).all();
   return json({ id, token: row.token, date: row.date, dateLabel: prettyDate(row.date), slot: row.slot, slotLabel: slotLabel(row.slot), amount: row.amount,
     testName: t.results.map((x) => x.name).join(", "), status: row.status, name: row.name, phone: row.phone, address: row.address, city: row.city, state: row.state, pincode: row.pincode,
@@ -599,7 +604,7 @@ const PAY_ABANDON_MIN = 30; // an Instamojo page not paid after this long counts
 const okBack = (b) => (/^\/((test|package)\/[a-z0-9-]{1,80}\/?)?$/.test(String(b || "")) ? String(b) : "/");
 
 async function checkout(env, req, url, id) {
-  if (!imConfigured(env)) return bad("Online payment isn't set up yet. Please call 8368143677.", 503);
+  if (!imConfigured(env)) return bad("Online payment isn't set up yet. Please call 9818028755.", 503);
   const b = await req.json().catch(() => ({}));
   const row = await env.DB.prepare("SELECT * FROM bookings WHERE id=?1").bind(id).first();
   if (!row || !safeEqual(row.token, b.token)) return bad("Booking not found.", 404);
@@ -621,7 +626,7 @@ async function checkout(env, req, url, id) {
     console.log("instamojo create", String(e));
     await env.DB.prepare("INSERT INTO payments (booking_id, gateway, amount, status, reason, back, created_at, updated_at) VALUES (?1, 'instamojo', ?2, 'failed', ?3, ?4, ?5, ?5)")
       .bind(id, row.amount, ("Couldn't open the payment page: " + String(e.message || e)).slice(0, 300), back, now).run();
-    return bad("We couldn't open the payment page. Please try again, or call 8368143677.", 502);
+    return bad("We couldn't open the payment page. Please try again, or call 9818028755.", 502);
   }
   await env.DB.batch([
     env.DB.prepare("INSERT INTO payments (booking_id, gateway, request_id, amount, status, back, created_at, updated_at) VALUES (?1, 'instamojo', ?2, ?3, 'created', ?4, ?5, ?5)").bind(id, pr.id, row.amount, back, now),
@@ -645,7 +650,8 @@ async function verifyPay(env, req, id) {
   const cur = await env.DB.prepare("SELECT * FROM bookings WHERE id=?1").bind(id).first();
   const paid = r.ok || HOLDING.includes(cur.status);
   const t = await env.DB.prepare("SELECT name FROM booking_tests WHERE booking_id=?1 ORDER BY id").bind(id).all();
-  return json({ ok: true, paid, pending: !paid && !!r.pending, reason: paid ? "" : r.reason || "", id, token: cur.token, amount: cur.amount, status: cur.status,
+  const waOn = paid && waAuto(env, await getSettings(env));
+  return json({ ok: true, paid, waAuto: waOn, pending: !paid && !!r.pending, reason: paid ? "" : r.reason || "", id, token: cur.token, amount: cur.amount, status: cur.status,
     date: cur.date, dateLabel: prettyDate(cur.date), slot: cur.slot, slotLabel: slotLabel(cur.slot), testName: t.results.map((x) => x.name).join(", "),
     name: cur.name, phone: cur.phone, paymentId: paid ? cur.utr || payId : "" });
 }
@@ -686,9 +692,15 @@ async function settleRequest(env, pay, via, payId = "") {
       return { ok: false, reason: v.reason };
     }
     await env.DB.prepare("UPDATE payments SET status='success', payment_id=?1, reason=NULL, method=?2, checked_at=?3, updated_at=?3 WHERE id=?4").bind(payId, clean(v.method, 40) || null, now, pay.id).run();
-    const r = await env.DB.prepare("UPDATE bookings SET status='payment_submitted', paid_at=?1, utr=?2, pay_method='instamojo', updated_at=?1 WHERE id=?3 AND status IN ('pending','expired')")
+    // Instamojo has confirmed the money, so there's nothing for the team to check: the booking is confirmed straight away
+    const r = await env.DB.prepare("UPDATE bookings SET status='confirmed', paid_at=?1, utr=?2, pay_method='instamojo', updated_at=?1 WHERE id=?3 AND status IN ('pending','expired')")
       .bind(now, payId, pay.booking_id).run();
-    if (r.meta.changes) await logAct(env, pay.booking_id, "Instamojo", "system", `Paid online ₹${v.amount} (payment ${payId}${v.method ? ", " + v.method : ""}) – via ${via}`);
+    if (r.meta.changes) {
+      await logAct(env, pay.booking_id, "Instamojo", "system", `Paid online ₹${v.amount} (payment ${payId}${v.method ? ", " + v.method : ""}) – via ${via}. Booking confirmed automatically.`);
+      await autoAssign(env, pay.booking_id); // default centre (the team can still change it)
+      // automatic WhatsApp: confirmation to the patient now, job to the centre; collector details follow when the centre accepts
+      await waEvent(env, "paid_online", pay.booking_id).catch((e) => console.log("paid_online wa", String(e)));
+    }
     return { ok: true };
   } catch (e) {
     console.log("instamojo settle", pay.id, String(e));
@@ -1017,7 +1029,7 @@ async function adminDeleteReport(env, rid) {
 }
 async function publicReport(env, token) {
   const f = await env.DB.prepare("SELECT f.*, b.name AS patient FROM report_files f JOIN bookings b ON b.id = f.booking_id WHERE f.token=?1 AND b.status NOT IN ('cancelled','blocked')").bind(token).first();
-  if (!f) return new Response("This report link is not valid. Please WhatsApp us on 8368143677.", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
+  if (!f) return new Response("This report link is not valid. Please WhatsApp us on 9818028755.", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
   return fileResponse(env, f, f.patient);
 }
 
@@ -1772,9 +1784,9 @@ async function patientLogin(env, req) {
   if (!phone) return bad("Enter your 10-digit mobile number.");
   if (!dob) return bad("Enter your date of birth.");
   const keys = [["p:" + phone, 8], ["ip:" + ipOf(req), 30]];
-  if (await loginBlocked(env, keys)) return bad("Too many wrong tries. Please wait 15 minutes or WhatsApp us on 8368143677.", 429);
+  if (await loginBlocked(env, keys)) return bad("Too many wrong tries. Please wait 15 minutes or WhatsApp us on 9818028755.", 429);
   const u = await env.DB.prepare("SELECT * FROM users WHERE role='patient' AND phone=?1 AND dob=?2 AND active=1 ORDER BY id LIMIT 1").bind(phone, dob).first();
-  if (!u) { await loginFailed(env, keys); return bad("We couldn't find reports for this mobile number and date of birth. Check both, or WhatsApp us on 8368143677.", 401); }
+  if (!u) { await loginFailed(env, keys); return bad("We couldn't find reports for this mobile number and date of birth. Check both, or WhatsApp us on 9818028755.", 401); }
   const token = await newSession(env, u, PATIENT_SESSION_HOURS * 3600000, { phone, dob });
   return json({ token, name: u.name });
 }
@@ -2386,6 +2398,9 @@ async function waEvent(env, ev, id, extra = {}) {
   // the patient's booking confirmation goes out once the collection centre has accepted the visit
   if (ev === "confirmed") {
     if (b.centre_id) await once("center"); else await deliver(env, b, "team_paid", { S, T });
+  } else if (ev === "paid_online") {
+    await once("confirm"); // paid online: the patient hears from us right away
+    if (b.centre_id) await once("center"); else await deliver(env, b, "team_paid", { S, T });
   } else if (ev === "assigned") await once("center");
   else if (ev === "accepted") { await once("confirm"); await deliver(env, b, "collector", { S, T }); }
   else if (ev === "accepted_hand") await once("confirm");
@@ -2635,7 +2650,7 @@ class Bot {
     const hi = role === "centre" ? `Hi${this.who.name ? " " + this.who.name : ""} 👋 ${this.who.centre} – what would you like to do?`
       : role === "team" ? "Hi 👋 Dr. Sarwan Diagnostic Labs team menu."
       : `Hi${this.c.name ? " " + String(this.c.name).split(" ")[0] : ""} 👋 Welcome to *Dr. Sarwan Diagnostic Labs*. How can we help?`;
-    if (!rows.length) return this.say(hi + "\n\nPlease call us on 8368143677.");
+    if (!rows.length) return this.say(hi + "\n\nPlease call us on 9818028755.");
     return this.list(greet ? hi : "What else can we help with?", "Menu", rows);
   }
 
@@ -2691,7 +2706,7 @@ class Bot {
       await deliver(env, rows[0] ? rows[0].id : "", "team_alert", { S: this.S, alert: `+91 ${this.phone} (${this.c.name || "patient"}) asked to talk to the team` })
         .catch(() => {});
       if (!rows[0]) for (const t of teamNumbers(this.S)) await waText(env, this.S, t, `🔔 +91 ${this.phone} (${this.c.name || "new contact"}) asked to talk to the team on WhatsApp.`).catch(() => {});
-      return this.say("Thanks! Someone from our team will call you shortly. You can also call us on 8368143677.");
+      return this.say("Thanks! Someone from our team will call you shortly. You can also call us on 9818028755.");
     }
     if (a === "pay") {
       let b = id ? await this.ownBooking(id) : null;
@@ -2714,7 +2729,7 @@ class Bot {
     if (a === "resched") {
       let b = id ? await this.ownBooking(id) : null;
       if (!b) { const rows = await this.bookings(true); if (!rows.length) return this.say("You don't have an upcoming visit to change. Book a new one at " + SITE); b = await this.pick(rows, "resched", "Which visit do you want to move?"); if (!b) return; }
-      if (!["pending", "payment_submitted", "confirmed", "expired"].includes(b.status)) return this.say("This visit can't be moved any more. Please call us on 8368143677.");
+      if (!["pending", "payment_submitted", "confirmed", "expired"].includes(b.status)) return this.say("This visit can't be moved any more. Please call us on 9818028755.");
       const today = istParts().date, rows = [];
       for (let i = 0; i <= BOOK_DAYS_AHEAD && rows.length < 10; i++) {
         const d = addDays(today, i);
@@ -2722,12 +2737,12 @@ class Bot {
         for (const s of SLOTS) if (isBookable(d, s) && (await slotRoom(env, d, s, b.city, b.id)).ok) n++;
         if (n) rows.push({ id: `a:rs_d:${b.id}:${d.replace(/-/g, "")}`, title: M.fmtDate(d), description: `${n} time${n === 1 ? "" : "s"} free` });
       }
-      if (!rows.length) return this.say("Sorry, there are no free times in the next two weeks. Please call us on 8368143677.");
+      if (!rows.length) return this.say("Sorry, there are no free times in the next two weeks. Please call us on 9818028755.");
       return this.list(`Your visit is on *${M.fmtDate(b.date)}, ${M.slotLabel(b.slot)}*. Pick a new day:`, "Choose day", rows);
     }
     if (a === "rs_d" || a === "rs_s") {
       const b = await this.ownBooking(id);
-      if (!b || !["pending", "payment_submitted", "confirmed", "expired"].includes(b.status)) return this.say("This visit can't be moved any more. Please call us on 8368143677.");
+      if (!b || !["pending", "payment_submitted", "confirmed", "expired"].includes(b.status)) return this.say("This visit can't be moved any more. Please call us on 9818028755.");
       const d = String(extra || "").replace(/^(\d{4})(\d{2})(\d{2}).*$/, "$1-$2-$3");
       if (a === "rs_d") {
         const rows = [];
@@ -2769,7 +2784,7 @@ class Bot {
       const bid = String(data || "").split("|")[0];
       const users = dob ? (await this.db.prepare("SELECT id FROM users WHERE role='patient' AND active=1 AND phone=?1 AND dob=?2").bind(this.phone, dob).all()).results : [];
       if (!users.length) {
-        if (tries >= 3) { await this.state(null); return this.say("That date of birth doesn't match our records. For your safety we've stopped here – please call us on 8368143677."); }
+        if (tries >= 3) { await this.state(null); return this.say("That date of birth doesn't match our records. For your safety we've stopped here – please call us on 9818028755."); }
         await this.state("dob", `${bid}|${tries}`);
         return this.say(dob ? "That date of birth doesn't match our records for this number. Please check and try again (DD-MM-YYYY)." : "Please send the date of birth like this: 14-05-1990");
       }
@@ -4069,7 +4084,7 @@ export default {
       console.log("error", p, String(e && e.stack || e));
       // staff screens get the real reason (helps fixing); the public site keeps the friendly text
       if (/^\/api\/(admin|staff|centre)\//.test(p)) return bad("Server error: " + String((e && e.message) || e).slice(0, 200), 500);
-      return bad("Something went wrong. Please call 8368143677 to book.", 500);
+      return bad("Something went wrong. Please call 9818028755 to book.", 500);
     }
   },
 };
