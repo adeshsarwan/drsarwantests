@@ -1316,35 +1316,70 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   window.addEventListener('scroll', () => { if (!pop.hidden && !popPinned) closePop(); }, { passive: true });
 
   let pkgEditing = null;
-  function openPkg(id) {
+  // tests picked for the package (ids from Admin → Tests)
+  let pkPick = [];
+  function renderPkPick() {
+    const byId = (id) => (LT ? LT.tests.find((t) => t.id === id) : null);
+    $('#pTestChips').innerHTML = pkPick.length ? pkPick.map((id) => { const t = byId(id); return t ? `<span class="pk-chip">${esc(t.name)}<button type="button" data-pk-rm="${id}" aria-label="Remove ${esc(t.name)}">×</button></span>` : ''; }).join('')
+      : '<span class="meta">No tests picked yet.</span>';
+    $('#pTestNote').textContent = pkPick.length ? `${pkPick.length} test${pkPick.length === 1 ? '' : 's'} · patients see these names as “Tests included”` : '';
+  }
+  function pkSuggest() {
+    const q = $('#pTestQ').value.trim().toLowerCase(), box = $('#pTestSug');
+    if (!q || !LT) { box.hidden = true; return; }
+    const hits = LT.tests.filter((t) => !pkPick.includes(t.id) && [t.name, t.code, t.also_called].join(' ').toLowerCase().includes(q)).slice(0, 12);
+    const exact = LT.tests.some((t) => t.name.toLowerCase() === q);
+    box.innerHTML = hits.map((t) => `<button type="button" data-pk-add="${t.id}">${esc(t.name)}${t.code ? ` <span class="meta">${esc(t.code)}</span>` : ''}</button>`).join('')
+      + (exact ? '' : `<button type="button" data-pk-new="1"><b>+ Create “${esc($('#pTestQ').value.trim())}”</b> <span class="meta">as a new test</span></button>`);
+    box.hidden = false;
+  }
+  $('#pTestQ').addEventListener('input', pkSuggest);
+  $('#pTestQ').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); const b = $('#pTestSug button'); if (b && !$('#pTestSug').hidden) b.click(); } if (e.key === 'Escape') { $('#pTestSug').hidden = true; e.stopPropagation(); } });
+  $('#pkgDlg').addEventListener('click', async (e) => {
+    const rm = e.target.closest('[data-pk-rm]'), add = e.target.closest('[data-pk-add]'), nw = e.target.closest('[data-pk-new]');
+    if (rm) { pkPick = pkPick.filter((x) => x !== Number(rm.dataset.pkRm)); renderPkPick(); }
+    else if (add) { pkPick.push(Number(add.dataset.pkAdd)); $('#pTestQ').value = ''; $('#pTestSug').hidden = true; renderPkPick(); $('#pTestQ').focus(); }
+    else if (nw) {
+      const name = $('#pTestQ').value.trim(); nw.disabled = true;
+      try { const r = await post('/api/admin/labtests', { name, sample: 'Blood' }); await loadLabTests(true); pkPick.push(r.id); $('#pTestQ').value = ''; $('#pTestSug').hidden = true; renderPkPick(); toast('New test added – describe it in the Tests tab'); }
+      catch (err) { $('#pkgErr').textContent = err.message; }
+    } else if (!e.target.closest('.pk-pick')) $('#pTestSug').hidden = true;
+  });
+  async function openPkg(id) {
     const p = id ? PKGS.find((x) => x.id === id) : null;
     pkgEditing = p ? p.id : null;
     $('#pkgForm').reset(); $('#pkgErr').textContent = '';
-    $('#pkgTitle').textContent = p ? `Edit ${p.name}` : 'Add test';
-    $('#pName').value = p ? p.name : ''; $('#pTests').value = p ? p.tests || '' : '';
+    $('#pkgTitle').textContent = p ? `Edit ${p.name}` : 'Add package';
+    $('#pName').value = p ? p.name : '';
     $('#pPrice').value = p ? p.price : ''; $('#pMrp').value = p && p.mrp != null ? p.mrp : '';
     $('#pMargin').value = p && p.margin != null ? p.margin : ''; $('#pTarget').value = p ? p.target || '' : '';
     $('#pPrep').value = p ? p.prep || '' : '• Our phlebotomist will call you before arriving';
     $('#pActive').checked = p ? !!p.active : true; $('#pDefault').checked = p ? !!p.is_default : false;
     $('#pkgDel').hidden = !p;
+    pkPick = p ? (p.linked || []).map((x) => x.id) : []; $('#pTestSug').hidden = true;
+    $('#pTestChips').innerHTML = '<span class="meta">Loading tests…</span>';
     $$('dialog[open]').forEach((d) => d.close());
     $('#pkgDlg').showModal(); setTimeout(() => $('#pName').focus(), 50);
+    try { if (!LT) await loadLabTests(true); } catch (err) { $('#pkgErr').textContent = err.message; }
+    renderPkPick();
+    if (p && !pkPick.length && p.tests) $('#pTestNote').textContent = `Written before: “${String(p.tests).slice(0, 200)}” – pick the matching tests.`;
   }
   $('#pkgForm').onsubmit = async (e) => {
     e.preventDefault(); $('#pkgErr').textContent = '';
-    const body = { name: $('#pName').value, tests: $('#pTests').value, price: $('#pPrice').value, mrp: $('#pMrp').value, margin: $('#pMargin').value, target: $('#pTarget').value, prep: $('#pPrep').value, active: $('#pActive').checked, is_default: $('#pDefault').checked };
+    if (!pkPick.length && !confirm('No tests picked for this package. Save it anyway?')) return;
+    const body = { name: $('#pName').value, test_ids: pkPick, price: $('#pPrice').value, mrp: $('#pMrp').value, margin: $('#pMargin').value, target: $('#pTarget').value, prep: $('#pPrep').value, active: $('#pActive').checked, is_default: $('#pDefault').checked };
     $('#pkgSave').disabled = true;
     try {
       await post(pkgEditing ? `/api/admin/packages/${pkgEditing}` : '/api/admin/packages', body);
-      $('#pkgDlg').close(); toast(pkgEditing ? 'Test updated' : 'Test added');
-      await loadPkgs();
+      $('#pkgDlg').close(); toast(pkgEditing ? 'Package updated' : 'Package added');
+      await loadPkgs(); if (LT) loadLabTests(true).catch(() => {});
     } catch (err) { $('#pkgErr').textContent = err.message; }
     finally { $('#pkgSave').disabled = false; }
   };
   $('#pkgDel').onclick = async () => {
     const p = PKGS.find((x) => x.id === pkgEditing); if (!p) return;
     if (!confirm(`Delete "${p.name}"? This can't be undone.`)) return;
-    try { await api(`/api/admin/packages/${p.id}`, { method: 'DELETE' }); $('#pkgDlg').close(); toast('Test deleted'); await loadPkgs(); }
+    try { await api(`/api/admin/packages/${p.id}`, { method: 'DELETE' }); $('#pkgDlg').close(); toast('Package deleted'); await loadPkgs(); }
     catch (err) { $('#pkgErr').textContent = err.message; }
   };
 
