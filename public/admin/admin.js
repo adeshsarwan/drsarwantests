@@ -37,7 +37,7 @@
 
   const ST = {
     pending: { label: 'Awaiting payment', fg: '#8a5a00', bg: '#fff4d6', stripe: '#e9a23b', tag: 'Awaiting payment' },
-    payment_submitted: { label: 'Paid – verify', fg: '#a33a1f', bg: '#ffe3d9', stripe: '#e2603f', tag: 'Paid · verify' },
+    payment_submitted: { label: 'Paid – choose centre', fg: '#a33a1f', bg: '#ffe3d9', stripe: '#e2603f', tag: 'Paid · choose centre' },
     confirmed: { label: 'Confirmed', fg: '#17694a', bg: '#dff3ea', stripe: '#1f8a6a', tag: 'Confirmed' },
     collected: { label: 'Collected – report pending', fg: '#2a4a8a', bg: '#e6ecfb', stripe: '#4c6fd8', tag: 'Collected' },
     report_ready: { label: 'Report ready – send', fg: '#5b2d8a', bg: '#f1e8fb', stripe: '#8a55c9', tag: 'Report ready' },
@@ -219,11 +219,10 @@
     const btn = (act, label, cls, extra) => `<button type="button" class="btn ${cls || ''} sm" data-act="${act}" data-id="${b.id}"${extra || ''}>${label}</button>`;
     const accepted = b.centre_status === 'accepted' || !!sent.centre_ok;
     return [
-      { key: 'pay', label: 'Payment confirmed & centre assigned', done: paidLike && !!b.centre_id, at: b.paid_at, avail: true,
-        act: s === 'payment_submitted' || (unpaid && hasPaidProof(b))
-          ? btn('status', 'Confirm payment', '', ` data-st="confirmed"`) + (b.has_proof ? btn('shot', 'Screenshot', 'ghost') : '')
-          : unpaid ? `<button type="button" class="btn wa sm" data-act="wa" data-kind="pay" data-id="${b.id}">Payment reminder</button>`
-          : btn('assign-open', 'Assign centre'),
+      // payment is never confirmed by hand: online payments are checked with Instamojo, team bookings are already paid
+      { key: 'pay', label: 'Centre assigned', done: paidLike && !!b.centre_id, at: b.paid_at, avail: true,
+        act: unpaid && !hasPaidProof(b) ? `<button type="button" class="btn wa sm" data-act="wa" data-kind="pay" data-id="${b.id}">Payment reminder</button>`
+          : btn('assign-open', 'Assign centre') + (b.has_proof ? btn('shot', 'Screenshot', 'ghost') : ''),
         again: btn('assign-open', 'Change centre', 'ghost'),
         detail: b.centre_id && centreOf(b) ? `Centre: ${centreOf(b).name}` : b.centre_status === 'declined' ? 'The centre declined – assign another one' : b.centre_status === 'cancelled' ? 'Job cancelled at the centre – assign a centre' : '',
         autos: [['center', 'Job sent to the centre']] },
@@ -507,7 +506,8 @@ ${histHTML(b.id)}</div>`;
     if (b.status === 'confirmed' && !b.vial_reported) f.push(`<button class="btn warn" data-act="status" data-id="${b.id}" data-st="no_show">Reached – patient not available</button>`);
     if (b.status === 'cancelled' && hasPaidProof(b)) f.push(`<button class="btn ghost" data-act="status" data-id="${b.id}" data-st="confirmed">Restore &amp; confirm</button>`);
     if (CANCELLABLE.includes(b.status)) f.push(`<button class="btn warn" data-act="status" data-id="${b.id}" data-st="cancelled">Cancel &amp; free slot</button>`);
-    const payNote = b.status === 'payment_submitted' ? 'Payment submitted · check your Paytm app'
+    const payNote = b.pay_method === 'instamojo' && (b.status === 'payment_submitted' || PAID.includes(b.status)) ? `Paid online (Instamojo)${b.utr ? ' · payment ' + b.utr : ''}`
+      : b.status === 'payment_submitted' ? 'Paid · choose a centre to confirm'
       : ['pending', 'expired'].includes(b.status) ? (hasPaidProof(b) ? 'Screenshot uploaded · slot not held' : 'Not paid yet · slot not reserved')
       : PAID.includes(b.status) ? 'Payment verified' : '—';
     const t = testsOf(b);
@@ -527,7 +527,7 @@ ${histHTML(b.id)}</div>`;
 ${reschedBox(b)}
 ${b.status === 'no_show' ? `<div class="fee">Phlebotomist reached${b.missed_slot ? ` on ${fmtD(b.missed_slot.slice(0, 10))}, ${fmtT(slotMin(b.missed_slot.slice(11)))}` : ''} – patient not available. <b>${money(b.fee_due || CFG.visitFee)} visit fee</b> is due before rebooking.</div>` : ''}
 ${b.fee_paid_at ? `<div class="meta">Visit fee ${money(b.fee_due)} received ${when(b.fee_paid_at)} · rebooked</div>` : ''}
-<div class="pay"><div style="min-width:0;flex:1"><b>${money(b.amount)}</b><div class="meta">${payNote}${b.utr ? ` · UTR ${esc(b.utr)}` : ''}${t.some((x) => x.margin != null) ? ` · margin ${money(marginOf(b))}` : ''}</div></div>${b.has_proof ? `<button type="button" class="btn ghost sm" data-act="shot" data-id="${b.id}">Screenshot</button>` : ''}</div>
+<div class="pay"><div style="min-width:0;flex:1"><b>${money(b.amount)}</b><div class="meta">${payNote}${b.utr && b.pay_method !== 'instamojo' ? ` · UTR ${esc(b.utr)}` : ''}${t.some((x) => x.margin != null) ? ` · margin ${money(marginOf(b))}` : ''}</div></div>${PAID.includes(b.status) && b.token ? `<a class="btn ghost sm" href="/receipt/${encodeURIComponent(b.id)}?t=${encodeURIComponent(b.token)}" target="_blank" rel="noopener">Receipt</a>` : ''}${b.has_proof ? `<button type="button" class="btn ghost sm" data-act="shot" data-id="${b.id}">Screenshot</button>` : ''}</div>
 ${b.status !== 'blocked' ? `<div class="dt-sec"><div class="dt-k" style="display:flex;justify-content:space-between;align-items:center">Collection centre<button type="button" class="btn ghost sm" data-act="assign-open" data-id="${b.id}"${locked && b.centre_id ? ` disabled title="${lockTip}"` : ''}>${b.centre_id ? 'Change' : 'Choose'}</button></div><div style="margin-top:2px">${centreOf(b) ? `<b>${esc(centreOf(b).name)}</b>${centrePhone(b) ? ` <span class="meta">· ${esc(centrePhone(b))}</span>` : ''}` : '<span class="meta">Not chosen yet</span>'}</div></div>` : ''}
 ${stepsCompact(b) ? `<div class="dt-sec"><div class="dt-k">Steps</div>${stepsCompact(b)}</div>` : ''}
 <div class="dt-sec"><div class="dt-k" style="display:flex;justify-content:space-between;align-items:center">Reports (${reps.length})${AFTER_COLLECT.includes(b.status) ? `<button type="button" class="btn ghost sm" data-act="reports" data-id="${b.id}">${reps.length ? 'Manage / send' : 'Upload'}</button>` : ''}</div>
@@ -631,7 +631,7 @@ ${f.length ? `<div class="dt-f">${f.join('')}</div>` : ''}`;
 <td class="addr">${esc(b.address)}<small>PIN ${esc(b.pincode)} · <a href="${mapUrl(b)}" target="_blank" rel="noopener">Map</a></small></td>
 <td>${esc(b.city || '–')}</td>
 <td>${esc(b.state || '–')}</td>
-<td class="num"><b>${money(b.amount)}</b>${testsOf(b).some((x) => x.margin != null) ? `<small>margin ${money(marginOf(b))}</small>` : ''}${b.utr ? `<small>UTR ${esc(b.utr)}</small>` : ''}</td>
+<td class="num"><b>${money(b.amount)}</b>${testsOf(b).some((x) => x.margin != null) ? `<small>margin ${money(marginOf(b))}</small>` : ''}${b.utr ? `<small>${b.pay_method === 'instamojo' ? 'Payment' : 'UTR'} ${esc(b.utr)}</small>` : ''}</td>
 <td><div class="next"><span class="pill st-${b.status}" style="margin:0">${ST[b.status].label}</span>${nextBar(b)}</div></td>
 </tr>`;
     }).join('') : '<tr><td colspan="8" class="meta" style="padding:18px">No bookings in this period.</td></tr>';
@@ -726,7 +726,7 @@ ${f.length ? `<div class="dt-f">${f.join('')}</div>` : ''}`;
 <div class="rs"><b>${c('collected')}</b><span>Awaiting report</span></div>
 <div class="rs"><b>${c('report_ready')}</b><span>Report to send</span></div>
 ${isOp() ? '' : `<div class="rs-wide"><span class="meta">Revenue (paid)</span><b>${money(revenue(list))}</b></div>`}`;
-    const F = [['payment_submitted', 'Paid – verify'], ['pending', 'Awaiting payment'], ['confirmed', 'Confirmed'], ['collected', 'Collected'], ['report_ready', 'Report ready'], ['completed', 'Completed'], ['no_show', 'Not available'], ['cancelled', 'Cancelled / expired']];
+    const F = [['payment_submitted', 'Paid – choose centre'], ['pending', 'Awaiting payment'], ['confirmed', 'Confirmed'], ['collected', 'Collected'], ['report_ready', 'Report ready'], ['completed', 'Completed'], ['no_show', 'Not available'], ['cancelled', 'Cancelled / expired']];
     $('#filters').innerHTML = F.map(([k, l]) => `<label class="flt"><input type="checkbox" data-flt="${k}" ${cal.filters.has(k) ? 'checked' : ''}> ${l} <span>${k === 'cancelled' ? c('cancelled') + c('expired') : c(k)}</span></label>`).join('');
     $$('[data-flt]').forEach((x) => (x.onchange = () => { x.checked ? cal.filters.add(x.dataset.flt) : cal.filters.delete(x.dataset.flt); pref.set('filters2', [...cal.filters]); renderCal(); }));
   }
@@ -1190,7 +1190,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
 <td style="white-space:nowrap">${x.date ? fmtD(x.date) + '<br><span class="meta">' + esc(x.slotLabel) + '</span>' : '—'}</td>
 <td><span class="pill" style="margin:0;color:${fg};background:${bg}">${lbl}</span>${x.paid_later ? '<br><span class="meta" style="color:#17694a;font-weight:700">✓ paid later</span>' : ''}${x.method ? `<br><span class="meta">${esc(x.method)}</span>` : ''}</td>
 <td style="max-width:260px">${esc(x.reason || '')}${x.payment_id ? `<br><span class="meta">${esc(x.payment_id)}</span>` : ''}</td>
-<td style="white-space:nowrap">${x.status !== 'success' && x.request_id && !x.paid_later ? `<button type="button" class="btn ghost sm" data-act="pay-check" data-pid="${x.id}">Check again</button> ` : ''}${wa && x.status !== 'success' && !x.paid_later ? `<a class="btn wa sm" href="${wa}" target="_blank" rel="noopener">WhatsApp</a>` : ''}${x.status === 'success' || x.paid_later ? `<button type="button" class="btn ghost sm" data-act="open" data-id="${esc(x.booking_id)}">Open booking</button>` : ''}</td></tr>`;
+<td style="white-space:nowrap">${x.status !== 'success' && x.request_id && !x.paid_later ? `<button type="button" class="btn ghost sm" data-act="pay-check" data-pid="${x.id}">Check again</button> ` : ''}${wa && x.status !== 'success' && !x.paid_later ? `<a class="btn wa sm" href="${wa}" target="_blank" rel="noopener">WhatsApp</a>` : ''}${x.status === 'success' || x.paid_later ? `<button type="button" class="btn ghost sm" data-act="open" data-id="${esc(x.booking_id)}">Open booking</button>` : ''}${x.status === 'success' && x.token ? ` <a class="btn ghost sm" href="/receipt/${encodeURIComponent(x.booking_id)}?t=${encodeURIComponent(x.token)}" target="_blank" rel="noopener">Receipt</a>` : ''}</td></tr>`;
     }).join('') : `<tr><td colspan="8" class="meta" style="padding:18px">${f === 'problem' ? 'No failed or unfinished payments 🎉' : 'Nothing here.'}</td></tr>`;
   }
   $('#payFilter').onchange = renderPays;
@@ -1603,7 +1603,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   // Each open booking sits in the step someone in our team has to act on; "late" = waiting longer than usual.
   const OPS = [
     { key: 'resched', tag: 'Request', title: 'Reschedule requests', who: 'The patient asked · you decide' },
-    { key: 'pay', tag: 'Step 1', title: 'Confirm payment & assign centre', who: 'You' },
+    { key: 'pay', tag: 'Step 1', title: 'Assign centre', who: 'Paid bookings · you choose the centre' },
     { key: 'centre', tag: 'Step 2', title: 'Centre confirmation', who: 'Centre taps Accept · you chase if late' },
     { key: 'collect', tag: 'Step 3', title: 'Vial submitted to lab', who: 'You confirm after the visit' },
     { key: 'send', tag: 'Step 4', title: 'Upload & send report', who: 'You check before it goes' },
@@ -1633,8 +1633,8 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
       if (idx === 0) {
         const paidNow = PAID_LIKE.includes(b.status);
         const m = minsSince(paidNow ? (['declined', 'cancelled'].includes(b.centre_status) && b.centre_status_at ? b.centre_status_at : b.paid_at) : b.paid_at || b.updated_at || b.created_at);
-        const late = m > (paidNow ? LATE_MIN.assign : LATE_MIN.pay);
-        items.push({ ...base, stage: 'pay', since: m, late, note: paidNow ? (b.centre_status === 'declined' ? 'The centre declined – assign another' : b.centre_status === 'cancelled' ? 'Job cancelled at the centre – assign again' : 'Paid · assign a collection centre') : b.has_proof ? 'Payment screenshot sent' : b.utr ? `UPI ref ${b.utr} entered` : 'Payment to check', action: cur.act });
+        const late = m > LATE_MIN.assign;
+        items.push({ ...base, stage: 'pay', since: m, late, note: b.centre_status === 'declined' ? 'The centre declined – assign another' : b.centre_status === 'cancelled' ? 'Job cancelled at the centre – assign again' : `${b.pay_method === 'instamojo' ? 'Paid online' + (b.utr ? ' · ' + b.utr : '') : 'Paid'} · choose a collection centre`, action: cur.act });
       } else if (idx === 1) {
         const m = minsSince(sent.center || b.paid_at);
         items.push({ ...base, stage: 'centre', since: m, late: m > LATE_MIN.centre, note: `${centreOf(b) ? centreOf(b).name : 'Centre'} · ${sent.center ? 'job sent ' + when(sent.center) : 'job not sent yet'}`, action: cur.act });
