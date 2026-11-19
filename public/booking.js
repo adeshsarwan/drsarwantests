@@ -21,7 +21,7 @@
   async function api(path, opts = {}) {
     const r = await fetch(path, { headers: { 'content-type': 'application/json' }, ...opts });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw Object.assign(new Error(j.error || 'Something went wrong. Please call 9818028755.'), { status: r.status, code: j.code });
+    if (!r.ok) throw Object.assign(new Error(j.error || 'Something went wrong. Please call 8368143677.'), { status: r.status, code: j.code });
     return j;
   }
 
@@ -29,7 +29,7 @@
     try {
       state.cfg = await api('/api/config' + (PKG ? '?package=' + encodeURIComponent(PKG) : ''));
     } catch (e) {
-      $('#bk-dates').innerHTML = '<span class="bk-err">Online booking is unavailable right now. Please call <a href="tel:9818028755">9818028755</a>.</span>';
+      $('#bk-dates').innerHTML = '<span class="bk-err">Online booking is unavailable right now. Please call <a href="tel:8368143677">8368143677</a>.</span>';
       return;
     }
     root.querySelectorAll('.bk-amt').forEach((el) => (el.textContent = state.cfg.amount));
@@ -37,7 +37,7 @@
     if (state.cfg.mapsKey) initPlaces(state.cfg.mapsKey);
     const box = $('#bk-dates');
     box.innerHTML = '';
-    if (!state.cfg.dates.length) { box.innerHTML = '<span class="bk-muted">No dates open right now. Please call 9818028755.</span>'; return; }
+    if (!state.cfg.dates.length) { box.innerHTML = '<span class="bk-muted">No dates open right now. Please call 8368143677.</span>'; return; }
     state.cfg.dates.forEach((d, i) => {
       const b = document.createElement('button');
       b.type = 'button'; b.className = 'bk-chip'; b.dataset.date = d;
@@ -130,7 +130,7 @@
     $('#bk-ref').innerHTML = `Ref <strong>${b.id}</strong> · ${b.dateLabel} · ${b.slotLabel}`;
     const upiId = b.upiId;
     if (!upiId) {
-      $('#bk-qr').innerHTML = '<p class="bk-muted" style="padding:12px">UPI details coming soon. Please call 9818028755 to pay.</p>';
+      $('#bk-qr').innerHTML = '<p class="bk-muted" style="padding:12px">UPI details coming soon. Please call 8368143677 to pay.</p>';
     } else {
       const fixed = !!b.upiQr;
       const link = fixed ? b.upiQr : `upi://pay?pa=${upiId.replace(/[^A-Za-z0-9.@_-]/g, "")}&pn=${encodeURIComponent(b.upiName)}&am=${b.amount}.00&cu=INR&tn=${encodeURIComponent('Home test ' + b.id)}`;

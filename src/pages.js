@@ -106,7 +106,7 @@ export const HORMONE_PAGE = {
   },
   seo: {
     title: "Hormone & Fertility Panel at Home – 7 Tests @ Rs. 1899 | Dr. Sarwan Diagnostic Labs",
-    description: "Is it PCOS, thyroid, or something else? Check FSH, LH, Prolactin, AMH, T3, T4 and TSH with home sample collection and e-report. 7 tests for Rs. 1899. Call 9818028755.",
+    description: "Is it PCOS, thyroid, or something else? Check FSH, LH, Prolactin, AMH, T3, T4 and TSH with home sample collection and e-report. 7 tests for Rs. 1899. Call 8368143677.",
   },
   book: { sub: "Complete Hormone & Fertility Panel, 7 tests, collected at your doorstep.", meta: "Fasting · Home sample collection · E-report", bar: "Hormone & Fertility Panel · 7 tests" },
 };
@@ -130,7 +130,7 @@ export function defaultPageFor(pkg) {
       groups: tests.length ? [{ name: pkg.name, items: tests.map((t) => ({ code: t, name: "", desc: "" })) }] : [] },
     precautions: { nav: "Before the test", kicker: "Get accurate results", title: "Before your test", intro: "", items: [], note: "" },
     faq: { title: "Questions people ask us", items: [] },
-    seo: { title: `${pkg.name} at Home | Dr. Sarwan Diagnostic Labs`, description: `${pkg.name} with home sample collection and e-report. Call 9818028755.` },
+    seo: { title: `${pkg.name} at Home | Dr. Sarwan Diagnostic Labs`, description: `${pkg.name} with home sample collection and e-report. Call 8368143677.` },
     book: { sub: `${pkg.name}, collected at your doorstep.`, meta: "Home sample collection · E-report", bar: pkg.name },
   };
 }
@@ -186,7 +186,7 @@ ${h.subtitle ? `<p style="margin: 28px 0 0; font-size: clamp(19px, 2vw, 24px); l
 ${h.chips.length ? `<div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px">${h.chips.map((c) => `<span style="background: #ffffff; border-radius: 999px; padding: 7px 14px; font-weight: 600; font-size: 14px">${esc(c)}</span>`).join("")}</div>` : ""}
 <div style="display: flex; flex-wrap: wrap; gap: 14px; margin-top: 32px">
 <a href="#book" style="background: #1f6977; color: #ffffff; text-decoration: none; font-family: Archivo, sans-serif; font-weight: 800; font-size: 18px; padding: 16px 28px; border-radius: 999px; box-shadow: 0 6px 16px rgba(20,70,80,0.25)">${esc(h.cta || "Book Home Test")} · ${rs(pkg.price)}</a>
-<a href="tel:9818028755" style="background: #ffffff; color: #1b2a4e; text-decoration: none; font-family: Archivo, sans-serif; font-weight: 700; font-size: 18px; padding: 16px 26px; border-radius: 999px; border: 2px solid #1b2a4e">Call 9818028755</a>
+<a href="tel:8368143677" style="background: #ffffff; color: #1b2a4e; text-decoration: none; font-family: Archivo, sans-serif; font-weight: 700; font-size: 18px; padding: 16px 26px; border-radius: 999px; border: 2px solid #1b2a4e">Call 8368143677</a>
 </div>
 </div>
 <div style="flex: 1 1 340px; min-width: 0; position: relative; display: flex; justify-content: center; align-items: flex-end; min-height: 460px">
@@ -304,7 +304,7 @@ const HOW = (fasting) => `<section style="padding: 88px 24px">
 <div style="max-width: 1200px; margin: 0 auto">
 <h2 style="margin: 0 0 36px; ${H2}">How it works</h2>
 <ol style="margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 20px">
-${[["Book online or call", "Pick a time between 7 AM and 6 PM and pay online. Or call / WhatsApp 9818028755."],
+${[["Book online or call", "Pick a time between 7 AM and 6 PM and pay online. Or call 8368143677 / WhatsApp 9818028755."],
   [fasting ? "Fasting sample at home" : "Sample collected at home", fasting ? "A trained phlebotomist collects your sample at your doorstep after an overnight fast." : "A trained phlebotomist collects your sample at your doorstep."],
   ["Get your e-report", "Receive your report digitally on WhatsApp and take it to your doctor."]]
   .map(([t, d], i) => `<li style="border: 1px solid #dfe8ef; border-radius: 20px; padding: 26px"><span style="display: inline-flex; width: 44px; height: 44px; border-radius: 50%; background: #1f6977; color: #ffffff; align-items: center; justify-content: center; font-family: Archivo, sans-serif; font-weight: 800; font-size: 20px">${i + 1}</span><h3 style="margin: 16px 0 8px; font-family: Archivo, sans-serif; font-weight: 800; font-size: 20px">${t}</h3><p style="margin: 0; color: #3b4a68; font-size: 16px">${d}</p></li>`).join("\n")}
@@ -345,7 +345,7 @@ export async function renderPackagePage(env, req, pkg, page, opts = {}) {
   const body = [heroHTML(p, pkg), questionsHTML(p), storiesHTML(p), canHTML(p), testsHTML(p), precautionsHTML(p), HOW(fasting), faqHTML(p)].filter(Boolean).join("\n\n");
   const has = { "#questions": !!p.questions.items.length, "#tests": !!p.tests.groups.length, "#timing": !!(p.precautions.items.length || p.precautions.note), "#faq": !!p.faq.items.length };
   const title = p.seo.title || `${pkg.name} at Home – ${rs(pkg.price)} | Dr. Sarwan Diagnostic Labs`;
-  const desc = p.seo.description || `${pkg.name} with home sample collection and e-report. Call 9818028755.`;
+  const desc = p.seo.description || `${pkg.name} with home sample collection and e-report. Call 8368143677.`;
   const srcs = p.stories.sources;
   let inserted = false;
   const rw = new HTMLRewriter()
@@ -411,10 +411,10 @@ export const SECTION_SCHEMAS = {
     items: L(S({ big: T("very short big label, e.g. '10–12 hrs', 'Morning', 'Day 2–5'"), title: T("what it applies to"), body: T("the instruction and why, 1-2 sentences") }), "3 key precautions / timing rules"),
     note: T("one extra line for special cases (medicines, pregnancy, contraception…); wrap lead-ins in **double stars**") }),
   faq: S({ title: T(""), items: L(S({ q: T(""), a: T("2-4 sentences") }), "5-6 questions people really ask about these tests") }),
-  seo: S({ title: T("page title under 65 characters, include the package name and price"), description: T("meta description under 155 characters, include 'home sample collection' and 9818028755") }),
+  seo: S({ title: T("page title under 65 characters, include the package name and price"), description: T("meta description under 155 characters, include 'home sample collection' and 8368143677") }),
 };
 
-const RULES = `You write landing-page sections for Dr. Sarwan Diagnostic Labs (drsarwantests.com), a diagnostic lab in India offering home sample collection with e-reports on WhatsApp. Phone: 9818028755.
+const RULES = `You write landing-page sections for Dr. Sarwan Diagnostic Labs (drsarwantests.com), a diagnostic lab in India offering home sample collection with e-reports on WhatsApp. Phone (calls): 8368143677. WhatsApp: 9818028755.
 Rules:
 - Medically accurate and evidence-based. Never promise a diagnosis or cure, never scare people, never invent statistics, studies or prices.
 - Only say a test shows something if it really measures it. Be honest about limits.
