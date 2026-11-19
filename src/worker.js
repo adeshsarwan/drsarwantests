@@ -1530,6 +1530,18 @@ async function adminAiPackageTests(env, pid) {
     ...ids.map((tid, i) => env.DB.prepare("INSERT INTO package_tests (package_id, test_id, sort) VALUES (?1, ?2, ?3)").bind(pid, tid, i + 1))]);
   return json({ ok: true, added, linked: ids.length });
 }
+// "What it's for" for a test name typed in the form (nothing is saved – the form fills in and the team presses Save)
+async function adminAiDescribe(env, req) {
+  if (!aiKey(env)) return bad("Add the ANTHROPIC_API_KEY secret in Cloudflare first.");
+  const b = await req.json().catch(() => ({}));
+  const name = clean(b.name, 120), code = clean(b.code, 40);
+  if (name.length < 2) return bad("Type the test name first.");
+  const S = await getSettings(env);
+  let list;
+  try { list = await aiSplitPackage(env, S, { name: "single test", tests: name + (code ? ` (${code})` : "") }, []); } catch (e) { return bad(String(e.message || e), 502); }
+  const x = list[0] || {};
+  return json({ ok: true, purpose: clean(x.purpose, 1200), code: clean(x.code, 40), category: TEST_CATS.includes(x.category) ? x.category : "", sample: clean(x.sample, 60) });
+}
 // "What it's for" for one test, written again by the AI
 async function adminAiLabTest(env, id) {
   if (!aiKey(env)) return bad("Add the ANTHROPIC_API_KEY secret in Cloudflare first.");
@@ -4345,6 +4357,7 @@ export default {
           if (p.startsWith("/api/admin/labtests") && staff.role !== "admin") return bad("Only an admin can do this.", 403);
           if (p === "/api/admin/labtests" && req.method === "GET") return adminLabTests(env);
           if (p === "/api/admin/labtests" && req.method === "POST") return adminSaveLabTest(env, req, null);
+          if (p === "/api/admin/labtests/ai" && req.method === "POST") return adminAiDescribe(env, req);
           { const lm = p.match(/^\/api\/admin\/labtests\/(\d{1,9})(\/ai)?$/);
             if (lm && req.method === "POST") return lm[2] ? adminAiLabTest(env, Number(lm[1])) : adminSaveLabTest(env, req, Number(lm[1]));
             if (lm && !lm[2] && req.method === "DELETE") return adminDeleteLabTest(env, Number(lm[1])); }

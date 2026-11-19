@@ -1149,7 +1149,6 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     const sel = $('#ltCat'), cur = sel.value;
     sel.innerHTML = '<option value="">All categories</option>' + LT.cats.map((c) => `<option>${esc(c)}</option>`).join('');
     sel.value = cur;
-    $('#ltAiAll').hidden = !LT.ai;
     if (!quiet) renderLabTests();
     return LT;
   }
@@ -1189,7 +1188,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     $('#ltActive').checked = t ? !!t.active : true;
     const mine = t ? ltPkgsOf(t.id).map((p) => p.id) : [];
     $('#ltPkgs').innerHTML = LT.packages.map((p) => `<label><input type="checkbox" value="${p.id}"${mine.includes(p.id) ? ' checked' : ''}> ${esc(p.name)}</label>`).join('');
-    $('#ltAi').hidden = !LT.ai || !t; $('#ltDel').hidden = !t; $('#ltErr').textContent = '';
+    $('#ltAi').hidden = !LT.ai; $('#ltDel').hidden = !t; $('#ltErr').textContent = '';
     $('#ltDlg').showModal();
   }
   $('#ltForm').onsubmit = async (e) => {
@@ -1210,32 +1209,20 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     catch (err) { $('#ltErr').textContent = err.message; }
   };
   $('#ltAi').onclick = async () => {
-    const b = $('#ltAi'); b.disabled = true; b.textContent = 'Writing…';
-    try { const r = await post(`/api/admin/labtests/${ltEditing}/ai`); if (r.purpose) $('#ltPurpose').value = r.purpose; await loadLabTests(true); }
-    catch (err) { $('#ltErr').textContent = err.message; }
-    finally { b.disabled = false; b.textContent = '✨ Write with AI'; }
+    const b = $('#ltAi'), name = $('#ltName').value.trim();
+    if (name.length < 2) { $('#ltErr').textContent = 'Type the test name first.'; $('#ltName').focus(); return; }
+    if ($('#ltPurpose').value.trim() && !confirm('Replace what is written in “What it’s for”?')) return;
+    b.disabled = true; b.textContent = 'Getting…'; $('#ltErr').textContent = '';
+    try {
+      const r = await post('/api/admin/labtests/ai', { name, code: $('#ltCode').value });
+      if (r.purpose) $('#ltPurpose').value = r.purpose;
+      // fill the other fields only where they are still empty
+      if (r.code && !$('#ltCode').value.trim()) $('#ltCode').value = r.code;
+      if (r.category && !$('#ltCatSel').value) $('#ltCatSel').value = r.category;
+      if (r.sample && (!$('#ltSample').value.trim() || (!ltEditing && $('#ltSample').value === 'Blood'))) $('#ltSample').value = r.sample;
+    } catch (err) { $('#ltErr').textContent = err.message; }
+    finally { b.disabled = false; b.textContent = '✨ Get with AI'; }
   };
-  // AI: every package that has no linked tests yet → split its list into single tests, explain them, link them
-  let ltBusy = false;
-  async function ltBuildAll() {
-    if (ltBusy) return;
-    if (!LT) await loadLabTests(true);
-    const linked = new Set(LT.links.map((l) => l.package_id));
-    const todo = LT.packages.filter((p) => String(p.tests || '').trim() && !linked.has(p.id));
-    if (!todo.length) { toast('Every package already has its tests linked. Use ✨ Redo with AI on a package to do it again.'); return; }
-    if (!confirm(`List the tests of ${todo.length} package(s) with AI, explain each test and link them?\n\nPackages that already have linked tests are left as they are. This takes about half a minute per package.`)) return;
-    ltBusy = true; const note = $('#ltProgress'); note.hidden = false;
-    let added = 0, fails = [];
-    for (const [i, p] of todo.entries()) {
-      note.textContent = `✨ ${i + 1} of ${todo.length}: ${p.name}… (${added} new tests so far)`;
-      try { const r = await post(`/api/admin/labtests/package/${p.id}/ai`); added += r.added || 0; }
-      catch (err) { fails.push(`${p.name}: ${err.message}`); }
-      await loadLabTests();
-    }
-    note.textContent = `Done: ${added} new tests from ${todo.length - fails.length} package(s).${fails.length ? ' Not done – ' + fails.join(' · ') : ''}`;
-    ltBusy = false; if (PKGS.length) loadPkgs().catch(() => {});
-  }
-
   // ---------- hover form on Packages → 🧪: the package's tests, add / remove ----------
   const pop = $('#ptPop');
   let popPid = null, popPinned = false, popTimer = null;
@@ -2339,7 +2326,6 @@ ${t.meta !== false ? `<button type="button" class="btn ghost sm" data-act="wa-su
     else if (a === 'assign-open') openAssign(id);
     else if (a === 'lt-add') openLabTest(null);
     else if (a === 'lt-edit') openLabTest(Number(el.dataset.tid));
-    else if (a === 'lt-ai-all') ltBuildAll().catch((err) => toast(err.message));
     else if (a === 'del-booking') {
       const b = findB(id);
       if (!confirm(`Delete ${id}${b ? ' (' + b.name + ')' : ''} permanently?\n\nThe booking, its payments, receipt, messages and reports are removed for good. This can't be undone. For a real booking, use Cancel instead.`)) return;
