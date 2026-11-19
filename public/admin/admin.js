@@ -1160,16 +1160,19 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     const rows = LT.tests.filter((t) => (!cat || t.category === cat) && (!q || [t.name, t.code, t.also_called, t.purpose].join(' ').toLowerCase().includes(q)));
     $('#ltBody').innerHTML = rows.length ? rows.map((t) => {
       const pk = ltPkgsOf(t.id);
-      return `<tr class="${t.active ? '' : 'off'}"><td class="lt-n"><b>${esc(t.name)}</b>${t.code || t.also_called ? `<small>${esc([t.code, t.also_called].filter(Boolean).join(' · '))}</small>` : ''}</td>
-<td class="lt-p">${t.purpose ? esc(t.purpose) : '<span class="meta">—</span>'}</td><td>${esc(t.category || '—')}</td><td>${esc(t.sample || '—')}</td>
+      return `<tr class="${t.active ? '' : 'off'} lt-row" data-tid="${t.id}"><td class="lt-n"><b>${esc(t.name)}</b>${t.purpose
+        ? ` <button type="button" class="lt-i" data-tip="${esc(t.purpose)}" data-tip-title="What it's for" aria-label="What it's for: ${esc(t.purpose)}">i</button>`
+        : ` <button type="button" class="lt-i none" data-tip="Not written yet – open the test to add it" aria-label="What it's for: not written yet">i</button>`}</td>
+<td>${esc(t.category || '—')}</td><td>${esc(t.sample || '—')}</td>
 <td>${pk.length ? pk.map((p) => `<span class="lt-chip">${esc(p.name)}</span>`).join('') : '<span class="meta">Not in a package</span>'}</td>
 <td class="num">${t.price != null ? money(t.price) : '<span class="meta">—</span>'}</td><td class="num">${t.margin != null ? money(t.margin) : '<span class="meta">—</span>'}</td>
 <td><span class="badge ${t.active ? 'on' : 'off'}">${t.active ? 'Active' : 'Hidden'}</span></td>
 <td><button type="button" class="btn ghost sm" data-act="lt-edit" data-tid="${t.id}">Edit</button></td></tr>`;
-    }).join('') : `<tr><td colspan="9" class="meta" style="padding:18px">${LT.tests.length ? 'No tests match.' : 'No tests yet. Press <b>✨ Build from packages with AI</b> to list every test from your packages, explain each one and link them – or add tests by hand.'}</td></tr>`;
+    }).join('') : `<tr><td colspan="8" class="meta" style="padding:18px">${LT.tests.length ? 'No tests match.' : 'No tests yet. Press <b>✨ Build from packages with AI</b> to list every test from your packages, explain each one and link them – or add tests by hand.'}</td></tr>`;
     $('#ltCount').textContent = `${LT.tests.length} tests · ${new Set(LT.links.map((l) => l.package_id)).size} of ${LT.packages.length} packages linked`;
   }
   $('#ltSearch').oninput = renderLabTests;
+  $('#ltBody').addEventListener('click', (e) => { const tr = e.target.closest('tr.lt-row'); if (tr && !e.target.closest('button:not(.lt-i),a')) openLabTest(Number(tr.dataset.tid)); });
   $('#ltCat').onchange = renderLabTests;
 
   let ltEditing = null;

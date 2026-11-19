@@ -729,3 +729,6 @@ button.stat:hover{border-color:var(--teal);box-shadow:0 0 0 2px #d8ecef}
 .pt-pop .pt-sug button{display:block;width:100%;text-align:left;border:0;background:none;padding:8px 10px;font-size:13.5px;cursor:pointer}.pt-pop .pt-sug button:hover,.pt-pop .pt-sug button:focus{background:#eef7f6}
 .pt-pop .pt-f{padding:8px 14px 12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .pt-pop .pt-add .inp{width:100%;box-sizing:border-box}
+.lt-t .lt-row{cursor:pointer}.lt-t .lt-row:hover td{background:#f7fafb}
+.lt-i{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;border:1.5px solid #1f6977;color:#1f6977;background:#fff;font:italic 700 11px Georgia,serif;cursor:help;vertical-align:1px;margin-left:4px;padding:0}
+.lt-i:hover,.lt-i:focus-visible{background:#1f6977;color:#fff}.lt-i.none{border-color:#c9d3df;color:#9aa6b6}
