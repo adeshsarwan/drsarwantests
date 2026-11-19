@@ -102,7 +102,7 @@
   }
   $('#logout').onclick = logout;
   // admin sees everything; an operator gets Operations, Bookings, Calendar and Inbox (no money, settings or sending by hand)
-  const ADMIN_TABS = ['bookings', 'tests', 'payments', 'page', 'centres', 'users', 'inbox', 'wa']; // not shown to operators
+  const ADMIN_TABS = ['bookings', 'tests', 'labtests', 'payments', 'page', 'centres', 'users', 'inbox', 'wa']; // not shown to operators
   function applyRole() {
     document.body.classList.toggle('is-op', isOp());
     $$('.tab').forEach((t) => (t.hidden = isOp() && ADMIN_TABS.includes(t.dataset.tab)));
@@ -141,6 +141,7 @@
     $('#view-bookings').hidden = name !== 'bookings';
     $('#view-calendar').hidden = name !== 'calendar';
     $('#view-tests').hidden = name !== 'tests';
+    $('#view-labtests').hidden = name !== 'labtests';
     $('#view-centres').hidden = name !== 'centres';
     $('#view-users').hidden = name !== 'users';
     $('#view-wa').hidden = name !== 'wa';
@@ -155,6 +156,7 @@
     if (name === 'inbox') loadChats().catch((e) => toast(e.message));
     if (name === 'calendar') loadCal().catch((e) => toast(e.message));
     if (name === 'tests') loadPkgs().catch((e) => toast(e.message));
+    if (name === 'labtests') loadLabTests().catch((e) => toast(e.message));
     if (name === 'centres') loadCentres().catch((e) => toast(e.message));
     if (name === 'users') loadUsers().catch((e) => toast(e.message));
     if (name === 'wa') loadWa().catch((e) => toast(e.message));
@@ -1110,13 +1112,13 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     return parts.length > 1 ? parts : [s];
   }
   function testsTip(p) {
-    const l = testList(p.tests);
-    if (!l.length) return `<button type="button" class="prep-i none" data-tip="No tests listed yet. Click to add them." data-act="pkg-edit" data-pid="${p.id}" aria-label="No tests listed – add them">⚠</button>`;
-    // count: "85 tests: …" at the start wins, else the sum of "(N Tests)" groups, else one per listed test
-    const txt = String(p.tests || ''), lead = /^\s*(\d+)\s*tests?\b/i.exec(txt);
+    const linked = p.linked || [];
+    if (!linked.length && !testList(p.tests).length) return `<button type="button" class="prep-i none tests-i" data-pt="${p.id}" aria-label="No tests yet – add them">⚠</button>`;
+    // count: linked tests; else "85 tests: …" at the start, the sum of "(N Tests)" groups, or one per listed test
+    const txt = String(p.tests || ''), lead = /^\s*(\d+)\s*tests?\b/i.exec(txt), l = testList(txt);
     const groups = [...txt.matchAll(/\((\d+)\s*tests?\)/gi)].reduce((a, m) => a + Number(m[1]), 0);
-    const n = lead ? lead[1] : groups || (l.length > 1 ? l.length : '');
-    return `<button type="button" class="prep-i tests-i" data-tip="${esc(l.join('\n'))}" data-tip-title="Tests${n ? ' (' + n + ')' : ''}" data-act="pkg-edit" data-pid="${p.id}" aria-label="Tests: ${esc(l.join(', '))}">🧪${n ? `<small>${n}</small>` : ''}</button>`;
+    const n = linked.length || (lead ? lead[1] : groups || (l.length > 1 ? l.length : ''));
+    return `<button type="button" class="prep-i tests-i${linked.length ? ' linked' : ''}" data-pt="${p.id}" aria-label="Tests in ${esc(p.name)} – add or remove">🧪${n ? `<small>${n}</small>` : ''}</button>`;
   }
   function renderPkgs() {
     const q = ($('#pkgSearch').value || '').trim().toLowerCase();
@@ -1139,6 +1141,190 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     $('#pkgCount').textContent = `${PKGS.filter((p) => p.active).length} active · ${PKGS.filter((p) => !p.active).length} hidden`;
   }
   $('#pkgSearch').oninput = renderPkgs;
+
+  // ================= TESTS (single lab tests; packages link to them) =================
+  let LT = null;
+  async function loadLabTests(quiet) {
+    LT = await api('/api/admin/labtests');
+    const sel = $('#ltCat'), cur = sel.value;
+    sel.innerHTML = '<option value="">All categories</option>' + LT.cats.map((c) => `<option>${esc(c)}</option>`).join('');
+    sel.value = cur;
+    $('#ltAiAll').hidden = !LT.ai;
+    if (!quiet) renderLabTests();
+    return LT;
+  }
+  const ltPkgsOf = (tid) => LT.links.filter((l) => l.test_id === tid).map((l) => LT.packages.find((p) => p.id === l.package_id)).filter(Boolean);
+  function renderLabTests() {
+    if (!LT) return;
+    const q = ($('#ltSearch').value || '').trim().toLowerCase(), cat = $('#ltCat').value;
+    const rows = LT.tests.filter((t) => (!cat || t.category === cat) && (!q || [t.name, t.code, t.also_called, t.purpose].join(' ').toLowerCase().includes(q)));
+    $('#ltBody').innerHTML = rows.length ? rows.map((t) => {
+      const pk = ltPkgsOf(t.id);
+      return `<tr class="${t.active ? '' : 'off'}"><td class="lt-n"><b>${esc(t.name)}</b>${t.code || t.also_called ? `<small>${esc([t.code, t.also_called].filter(Boolean).join(' · '))}</small>` : ''}</td>
+<td class="lt-p">${t.purpose ? esc(t.purpose) : '<span class="meta">—</span>'}</td><td>${esc(t.category || '—')}</td><td>${esc(t.sample || '—')}</td>
+<td>${pk.length ? pk.map((p) => `<span class="lt-chip">${esc(p.name)}</span>`).join('') : '<span class="meta">Not in a package</span>'}</td>
+<td class="num">${t.price != null ? money(t.price) : '<span class="meta">—</span>'}</td><td class="num">${t.margin != null ? money(t.margin) : '<span class="meta">—</span>'}</td>
+<td><span class="badge ${t.active ? 'on' : 'off'}">${t.active ? 'Active' : 'Hidden'}</span></td>
+<td><button type="button" class="btn ghost sm" data-act="lt-edit" data-tid="${t.id}">Edit</button></td></tr>`;
+    }).join('') : `<tr><td colspan="9" class="meta" style="padding:18px">${LT.tests.length ? 'No tests match.' : 'No tests yet. Press <b>✨ Build from packages with AI</b> to list every test from your packages, explain each one and link them – or add tests by hand.'}</td></tr>`;
+    $('#ltCount').textContent = `${LT.tests.length} tests · ${new Set(LT.links.map((l) => l.package_id)).size} of ${LT.packages.length} packages linked`;
+  }
+  $('#ltSearch').oninput = renderLabTests;
+  $('#ltCat').onchange = renderLabTests;
+
+  let ltEditing = null;
+  function openLabTest(id, preset) {
+    const t = id ? LT.tests.find((x) => x.id === id) : null;
+    ltEditing = t ? t.id : null;
+    $('#ltTitle').textContent = t ? `Edit ${t.name}` : 'Add test';
+    $('#ltName').value = t ? t.name : (preset || ''); $('#ltCode').value = t ? t.code || '' : '';
+    $('#ltCatSel').innerHTML = '<option value="">—</option>' + LT.cats.map((c) => `<option>${esc(c)}</option>`).join('');
+    $('#ltCatSel').value = t ? t.category || '' : '';
+    $('#ltSample').value = t ? t.sample || '' : 'Blood'; $('#ltAlso').value = t ? t.also_called || '' : '';
+    $('#ltPurpose').value = t ? t.purpose || '' : '';
+    $('#ltPrice').value = t && t.price != null ? t.price : ''; $('#ltMargin').value = t && t.margin != null ? t.margin : '';
+    $('#ltActive').checked = t ? !!t.active : true;
+    const mine = t ? ltPkgsOf(t.id).map((p) => p.id) : [];
+    $('#ltPkgs').innerHTML = LT.packages.map((p) => `<label><input type="checkbox" value="${p.id}"${mine.includes(p.id) ? ' checked' : ''}> ${esc(p.name)}</label>`).join('');
+    $('#ltAi').hidden = !LT.ai || !t; $('#ltDel').hidden = !t; $('#ltErr').textContent = '';
+    $('#ltDlg').showModal();
+  }
+  $('#ltForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const body = { name: $('#ltName').value, code: $('#ltCode').value, category: $('#ltCatSel').value, sample: $('#ltSample').value, also_called: $('#ltAlso').value,
+      purpose: $('#ltPurpose').value, price: $('#ltPrice').value, margin: $('#ltMargin').value, active: $('#ltActive').checked,
+      package_ids: [...$('#ltPkgs').querySelectorAll('input:checked')].map((x) => Number(x.value)) };
+    $('#ltSave').disabled = true;
+    try { await post(ltEditing ? `/api/admin/labtests/${ltEditing}` : '/api/admin/labtests', body); $('#ltDlg').close(); toast('Test saved'); await loadLabTests(); if (PKGS.length) loadPkgs().catch(() => {}); }
+    catch (err) { $('#ltErr').textContent = err.message; }
+    finally { $('#ltSave').disabled = false; }
+  };
+  $('#ltDel').onclick = async () => {
+    const t = LT.tests.find((x) => x.id === ltEditing); if (!t) return;
+    const pk = ltPkgsOf(t.id);
+    if (!confirm(`Delete ${t.name}?${pk.length ? `\n\nIt is taken out of ${pk.length} package(s): ${pk.map((p) => p.name).join(', ')}.` : ''}`)) return;
+    try { await api(`/api/admin/labtests/${t.id}`, { method: 'DELETE' }); $('#ltDlg').close(); toast('Test deleted'); await loadLabTests(); if (PKGS.length) loadPkgs().catch(() => {}); }
+    catch (err) { $('#ltErr').textContent = err.message; }
+  };
+  $('#ltAi').onclick = async () => {
+    const b = $('#ltAi'); b.disabled = true; b.textContent = 'Writing…';
+    try { const r = await post(`/api/admin/labtests/${ltEditing}/ai`); if (r.purpose) $('#ltPurpose').value = r.purpose; await loadLabTests(true); }
+    catch (err) { $('#ltErr').textContent = err.message; }
+    finally { b.disabled = false; b.textContent = '✨ Write with AI'; }
+  };
+  // AI: every package that has no linked tests yet → split its list into single tests, explain them, link them
+  let ltBusy = false;
+  async function ltBuildAll() {
+    if (ltBusy) return;
+    if (!LT) await loadLabTests(true);
+    const linked = new Set(LT.links.map((l) => l.package_id));
+    const todo = LT.packages.filter((p) => String(p.tests || '').trim() && !linked.has(p.id));
+    if (!todo.length) { toast('Every package already has its tests linked. Use ✨ Redo with AI on a package to do it again.'); return; }
+    if (!confirm(`List the tests of ${todo.length} package(s) with AI, explain each test and link them?\n\nPackages that already have linked tests are left as they are. This takes about half a minute per package.`)) return;
+    ltBusy = true; const note = $('#ltProgress'); note.hidden = false;
+    let added = 0, fails = [];
+    for (const [i, p] of todo.entries()) {
+      note.textContent = `✨ ${i + 1} of ${todo.length}: ${p.name}… (${added} new tests so far)`;
+      try { const r = await post(`/api/admin/labtests/package/${p.id}/ai`); added += r.added || 0; }
+      catch (err) { fails.push(`${p.name}: ${err.message}`); }
+      await loadLabTests();
+    }
+    note.textContent = `Done: ${added} new tests from ${todo.length - fails.length} package(s).${fails.length ? ' Not done – ' + fails.join(' · ') : ''}`;
+    ltBusy = false; if (PKGS.length) loadPkgs().catch(() => {});
+  }
+
+  // ---------- hover form on Packages → 🧪: the package's tests, add / remove ----------
+  const pop = $('#ptPop');
+  let popPid = null, popPinned = false, popTimer = null;
+  const popPkg = () => PKGS.find((x) => x.id === popPid);
+  function placePop(anchor) {
+    const r = anchor.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
+    let left = r.right + 10, top = Math.max(8, Math.min(window.innerHeight - h - 8, r.top - 20));
+    if (left + w > window.innerWidth - 8) left = Math.max(8, r.left - w - 10);
+    pop.style.left = left + 'px'; pop.style.top = top + 'px';
+  }
+  async function openPop(pid, anchor, pin) {
+    clearTimeout(popTimer);
+    if (popPid === pid && !pop.hidden) { if (pin) popPinned = true; return; }
+    popPid = pid; popPinned = !!pin;
+    if (!LT) { pop.innerHTML = '<div class="pt-h"><b>Loading…</b></div>'; pop.hidden = false; placePop(anchor); try { await loadLabTests(true); } catch (e) { toast(e.message); } }
+    renderPop(); pop.hidden = false; placePop(anchor);
+  }
+  function closePop() { pop.hidden = true; popPid = null; popPinned = false; }
+  function renderPop(keepQuery) {
+    const p = popPkg(); if (!p) return closePop();
+    const ids = (p.linked || []).map((x) => x.id);
+    const rows = ids.map((id) => LT.tests.find((t) => t.id === id)).filter(Boolean);
+    const q = keepQuery || '';
+    pop.innerHTML = `<div class="pt-h"><div><b>${esc(p.name)}</b><div class="meta">${rows.length ? `${rows.length} test${rows.length === 1 ? '' : 's'} linked` : 'No tests linked yet'}</div></div><button type="button" class="pt-x" data-pop="close" aria-label="Close">×</button></div>
+<div class="pt-l">${rows.length ? rows.map((t) => `<div class="pt-r"><div class="pt-t"><b>${esc(t.name)}</b>${t.purpose ? `<small>${esc(t.purpose)}</small>` : ''}</div><button type="button" class="pt-rm" data-pop="rm" data-tid="${t.id}" aria-label="Remove ${esc(t.name)}" title="Remove from this package">×</button></div>`).join('')
+  : `<p class="meta" style="margin:8px 6px">${p.tests ? `Written in the package: <i>${esc(String(p.tests).slice(0, 400))}</i>` : 'Add the tests below.'}</p>`}</div>
+<div class="pt-add"><input class="inp" id="ptQ" placeholder="Add a test – type to search…" autocomplete="off" value="${esc(q)}"><div class="pt-sug" id="ptSug" hidden></div></div>
+<div class="pt-f">${LT.ai && p.tests ? `<button type="button" class="btn ghost sm" data-pop="ai">✨ ${rows.length ? 'Redo' : 'Link tests'} with AI</button>` : ''}${rows.length ? `<button type="button" class="btn ghost sm" data-pop="summary" title="Rewrite the package's “Tests included” text from this list">Use as “Tests included”</button>` : ''}<span class="meta" id="ptMsg"></span></div>`;
+    if (q) { const i = $('#ptQ'); i.focus(); i.setSelectionRange(q.length, q.length); suggest(); }
+  }
+  function suggest() {
+    const p = popPkg(), q = $('#ptQ').value.trim().toLowerCase(), box = $('#ptSug');
+    if (!q) { box.hidden = true; return; }
+    const have = new Set((p.linked || []).map((x) => x.id));
+    const hits = LT.tests.filter((t) => !have.has(t.id) && [t.name, t.code, t.also_called].join(' ').toLowerCase().includes(q)).slice(0, 12);
+    const exact = LT.tests.some((t) => t.name.toLowerCase() === q);
+    box.innerHTML = hits.map((t) => `<button type="button" data-pop="add" data-tid="${t.id}">${esc(t.name)}${t.code ? ` <span class="meta">${esc(t.code)}</span>` : ''}</button>`).join('')
+      + (exact ? '' : `<button type="button" data-pop="new"><b>+ Create “${esc($('#ptQ').value.trim())}”</b> <span class="meta">as a new test</span></button>`);
+    box.hidden = false;
+  }
+  async function savePop(ids, msg, summary) {
+    const p = popPkg(); if (!p) return;
+    $('#ptMsg').textContent = 'Saving…';
+    await post(`/api/admin/labtests/package/${p.id}`, { test_ids: ids, summary: !!summary });
+    await Promise.all([loadPkgs(), loadLabTests(true)]);
+    if (!pop.hidden) { renderPop(); $('#ptMsg').textContent = msg; }
+  }
+  pop.addEventListener('mouseenter', () => clearTimeout(popTimer));
+  pop.addEventListener('mouseleave', () => { if (!popPinned) popTimer = setTimeout(closePop, 350); });
+  pop.addEventListener('focusin', () => { popPinned = true; });
+  pop.addEventListener('input', (e) => { if (e.target.id === 'ptQ') { popPinned = true; suggest(); } });
+  pop.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') return closePop();
+    if (e.key === 'Enter' && e.target.id === 'ptQ') { e.preventDefault(); const b = $('#ptSug button'); if (b) b.click(); }
+  });
+  pop.addEventListener('click', async (e) => {
+    popPinned = true;
+    const b = e.target.closest('[data-pop]'); if (!b) return;
+    const p = popPkg(), ids = (p.linked || []).map((x) => x.id), act = b.dataset.pop;
+    try {
+      if (act === 'close') closePop();
+      else if (act === 'rm') await savePop(ids.filter((x) => x !== Number(b.dataset.tid)), 'Removed ✓');
+      else if (act === 'add') await savePop([...ids, Number(b.dataset.tid)], 'Added ✓');
+      else if (act === 'new') {
+        const name = $('#ptQ').value.trim();
+        const r = await post('/api/admin/labtests', { name, sample: 'Blood' });
+        await savePop([...ids, r.id], 'New test added ✓ – describe it in the Tests tab');
+      } else if (act === 'summary') { await savePop(ids, '“Tests included” updated ✓', true); }
+      else if (act === 'ai') {
+        if (ids.length && !confirm(`Replace the ${ids.length} linked tests with what the AI reads from “${p.tests.slice(0, 120)}…”?`)) return;
+        b.disabled = true; $('#ptMsg').textContent = '✨ Reading the package… (about half a minute)';
+        const r = await post(`/api/admin/labtests/package/${p.id}/ai`);
+        await Promise.all([loadPkgs(), loadLabTests(true)]);
+        if (!pop.hidden) { renderPop(); $('#ptMsg').textContent = `${r.linked} tests linked${r.added ? `, ${r.added} new` : ''} ✓`; }
+      }
+    } catch (err) { if ($('#ptMsg')) $('#ptMsg').textContent = err.message; else toast(err.message); }
+  });
+  document.addEventListener('mouseover', (e) => {
+    const b = e.target.closest && e.target.closest('.tests-i[data-pt]');
+    if (b) { clearTimeout(popTimer); const pid = Number(b.dataset.pt); popTimer = setTimeout(() => openPop(pid, b, false), 220); }
+  });
+  document.addEventListener('mouseout', (e) => {
+    const b = e.target.closest && e.target.closest('.tests-i[data-pt]');
+    if (b && !b.contains(e.relatedTarget) && !pop.contains(e.relatedTarget) && !popPinned) { clearTimeout(popTimer); popTimer = setTimeout(closePop, 350); }
+  });
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('.tests-i[data-pt]');
+    if (b) { e.stopPropagation(); openPop(Number(b.dataset.pt), b, true); return; }
+    if (!pop.hidden && !pop.contains(e.target) && !e.target.closest('dialog')) closePop();
+  }, true);
+  window.addEventListener('scroll', () => { if (!pop.hidden && !popPinned) closePop(); }, { passive: true });
+
   let pkgEditing = null;
   function openPkg(id) {
     const p = id ? PKGS.find((x) => x.id === id) : null;
@@ -2148,6 +2334,9 @@ ${t.meta !== false ? `<button type="button" class="btn ghost sm" data-act="wa-su
     else if (a.startsWith('wa-')) waAct(a, el);
     else if (a === 'pkg-add') openPkg(null);
     else if (a === 'assign-open') openAssign(id);
+    else if (a === 'lt-add') openLabTest(null);
+    else if (a === 'lt-edit') openLabTest(Number(el.dataset.tid));
+    else if (a === 'lt-ai-all') ltBuildAll().catch((err) => toast(err.message));
     else if (a === 'del-booking') {
       const b = findB(id);
       if (!confirm(`Delete ${id}${b ? ' (' + b.name + ')' : ''} permanently?\n\nThe booking, its payments, receipt, messages and reports are removed for good. This can't be undone. For a real booking, use Cancel instead.`)) return;

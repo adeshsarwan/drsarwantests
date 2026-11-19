@@ -710,3 +710,21 @@ button.stat:hover{border-color:var(--teal);box-shadow:0 0 0 2px #d8ecef}
 .ibtn.del{color:var(--coral)}
 .pe-prev{width:min(98vw,1400px);max-width:none;padding:0}
 @media (max-width:900px){.pe-wrap{grid-template-columns:1fr}.pe-nav{position:static;flex-direction:row;flex-wrap:wrap}.pe-nav .pe-url{flex-basis:100%}}
+
+/* ---- Tests tab ---- */
+.lt-t td{vertical-align:top}.lt-t .lt-p{max-width:360px;color:var(--ink);font-size:13.5px;line-height:1.45}.lt-t .lt-n small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
+.lt-chip{display:inline-block;font-size:11.5px;font-weight:700;border-radius:999px;padding:2px 8px;margin:2px 4px 2px 0;background:#eef7f6;color:#1f6977;white-space:nowrap}
+.lt-pkgs{display:flex;flex-wrap:wrap;gap:6px 14px;max-height:200px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:10px}
+.lt-pkgs label{display:flex;gap:6px;align-items:center;font-size:13.5px;font-weight:600}
+/* ---- hover form: tests in a package ---- */
+.pt-pop{position:fixed;z-index:1100;width:min(440px,94vw);max-height:min(560px,80vh);display:flex;flex-direction:column;background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 18px 44px rgba(20,40,70,.25);color:var(--ink)}
+.pt-pop .pt-h{padding:12px 14px 8px;border-bottom:1px solid var(--line2);display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
+.pt-pop .pt-h b{font-size:15px}.pt-pop .pt-x{border:0;background:none;font-size:20px;line-height:1;cursor:pointer;color:var(--muted)}
+.pt-pop .pt-l{overflow:auto;padding:6px 8px;flex:1}
+.pt-pop .pt-r{display:flex;align-items:flex-start;gap:8px;padding:6px;border-radius:8px}.pt-pop .pt-r:hover{background:#f4f8fa}
+.pt-pop .pt-r .pt-t{flex:1;font-size:13.5px}.pt-pop .pt-r .pt-t small{display:block;color:var(--muted);font-size:12px;line-height:1.35}
+.pt-pop .pt-rm{border:1px solid var(--line);background:#fff;border-radius:8px;width:28px;height:28px;cursor:pointer;color:#a33a1f;flex:none}
+.pt-pop .pt-add{padding:10px 14px;border-top:1px solid var(--line2);position:relative}
+.pt-pop .pt-sug{position:absolute;left:14px;right:14px;bottom:100%;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 24px rgba(20,40,70,.18);max-height:220px;overflow:auto}
+.pt-pop .pt-sug button{display:block;width:100%;text-align:left;border:0;background:none;padding:8px 10px;font-size:13.5px;cursor:pointer}.pt-pop .pt-sug button:hover,.pt-pop .pt-sug button:focus{background:#eef7f6}
+.pt-pop .pt-f{padding:8px 14px 12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
