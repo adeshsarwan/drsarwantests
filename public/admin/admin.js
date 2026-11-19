@@ -1102,11 +1102,25 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     PKGS = r.packages;
     renderPkgs();
   }
+  // the tests in a package, one per line, for the hover list ("FSH, LH, PRL" → three lines; long free text stays as written)
+  function testList(t) {
+    const s = String(t || '').trim();
+    if (!s) return [];
+    const parts = s.split(/\s*(?:\n|,|•|;)\s*/).map((x) => x.trim()).filter(Boolean);
+    return parts.length > 1 ? parts : [s];
+  }
+  function testsTip(p) {
+    const l = testList(p.tests);
+    if (!l.length) return `<button type="button" class="prep-i none" data-tip="No tests listed yet. Click to add them." data-act="pkg-edit" data-pid="${p.id}" aria-label="No tests listed – add them">⚠</button>`;
+    const n = l.length > 1 ? l.length : (/(\d+)\s*tests?/i.exec(l[0]) || [])[1] || '';
+    return `<button type="button" class="prep-i tests-i" data-tip="${esc(l.join('\n'))}" data-tip-title="Tests${n ? ' (' + n + ')' : ''}" data-act="pkg-edit" data-pid="${p.id}" aria-label="Tests: ${esc(l.join(', '))}">🧪${n ? `<small>${n}</small>` : ''}</button>`;
+  }
   function renderPkgs() {
     const q = ($('#pkgSearch').value || '').trim().toLowerCase();
     const rows = PKGS.filter((p) => !q || (p.name + ' ' + (p.tests || '')).toLowerCase().includes(q));
     $('#pkgBody').innerHTML = rows.length ? rows.map((p) => `<tr class="${p.active ? '' : 'off'}">
-<td><b>${esc(p.name)}</b><span class="tests">${esc(p.tests || '—')}</span></td>
+<td><b>${esc(p.name)}</b></td>
+<td style="text-align:center">${testsTip(p)}</td>
 <td style="text-align:center">${p.prep
   ? `<button type="button" class="prep-i" data-tip="${esc(p.prep)}" data-tip-title="Before the test" data-act="pkg-edit" data-pid="${p.id}" aria-label="Before the test: ${esc(p.prep).replace(/\n/g, ' ')}">📋</button>`
   : `<button type="button" class="prep-i none" data-tip="No “before the test” instructions yet. Click to add them." data-act="pkg-edit" data-pid="${p.id}" aria-label="No before-the-test instructions – add them">⚠</button>`}</td>
@@ -1118,7 +1132,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
 <td>${p.is_default ? '<span class="badge web">Website test</span>' : ''}<span class="badge ${p.active ? 'on' : 'off'}">${p.active ? 'Active' : 'Hidden'}</span></td>
 <td class="pg-cell">${p.page_live && p.active ? `<a class="pg-live" href="/package/${esc(p.slug)}" target="_blank" rel="noopener" title="Open the live page">● Live page</a>` : p.has_page ? '<span class="pg-draft">Draft page</span>' : '<span class="pg-none">No page yet</span>'}<a class="pg-edit" href="#page/${p.id}">Edit page →</a></td>
 <td><button type="button" class="btn ghost sm" data-act="pkg-edit" data-pid="${p.id}">Edit</button></td></tr>`).join('')
-      : '<tr><td colspan="10" class="meta" style="padding:18px">No tests match.</td></tr>';
+      : '<tr><td colspan="11" class="meta" style="padding:18px">No tests match.</td></tr>';
     $('#pkgCount').textContent = `${PKGS.filter((p) => p.active).length} active · ${PKGS.filter((p) => !p.active).length} hidden`;
   }
   $('#pkgSearch').oninput = renderPkgs;
@@ -2088,6 +2102,8 @@ ${t.meta !== false ? `<button type="button" class="btn ghost sm" data-act="wa-su
   const tipEl = $('#tip');
   function showTip(el) {
     tipEl.innerHTML = (el.dataset.tipTitle ? `<b>${esc(el.dataset.tipTitle)}</b>` : '') + esc(el.dataset.tip).split('\n').map((l) => `<div>${l}</div>`).join('');
+    const nl = String(el.dataset.tip || '').split('\n').length; // long lists (e.g. a package's tests) spread over columns
+    tipEl.classList.toggle('cols', nl > 12); tipEl.classList.toggle('c3', nl > 30);
     tipEl.hidden = false;
     const r = el.getBoundingClientRect(), w = tipEl.offsetWidth, h = tipEl.offsetHeight;
     const left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left + r.width / 2 - w / 2));
