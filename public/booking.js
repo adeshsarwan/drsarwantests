@@ -21,7 +21,7 @@
   async function api(path, opts = {}) {
     const r = await fetch(path, { headers: { 'content-type': 'application/json' }, ...opts });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw Object.assign(new Error(j.error || 'Something went wrong. Please call 8368143677.'), { status: r.status, code: j.code });
+    if (!r.ok) throw Object.assign(new Error(j.error || 'Something went wrong. Please call 9818028755.'), { status: r.status, code: j.code });
     return j;
   }
 
@@ -29,7 +29,7 @@
     try {
       state.cfg = await api('/api/config' + (PKG ? '?package=' + encodeURIComponent(PKG) : ''));
     } catch (e) {
-      $('#bk-dates').innerHTML = '<span class="bk-err">Online booking is unavailable right now. Please call <a href="tel:8368143677">8368143677</a>.</span>';
+      $('#bk-dates').innerHTML = '<span class="bk-err">Online booking is unavailable right now. Please call <a href="tel:9818028755">9818028755</a>.</span>';
       return;
     }
     root.querySelectorAll('.bk-amt').forEach((el) => (el.textContent = state.cfg.amount));
@@ -37,7 +37,7 @@
     if (state.cfg.mapsKey) initPlaces(state.cfg.mapsKey);
     const box = $('#bk-dates');
     box.innerHTML = '';
-    if (!state.cfg.dates.length) { box.innerHTML = '<span class="bk-muted">No dates open right now. Please call 8368143677.</span>'; return; }
+    if (!state.cfg.dates.length) { box.innerHTML = '<span class="bk-muted">No dates open right now. Please call 9818028755.</span>'; return; }
     state.cfg.dates.forEach((d, i) => {
       const b = document.createElement('button');
       b.type = 'button'; b.className = 'bk-chip'; b.dataset.date = d;
@@ -130,7 +130,7 @@
     $('#bk-ref').innerHTML = `Ref <strong>${b.id}</strong> · ${b.dateLabel} · ${b.slotLabel}`;
     const upiId = b.upiId;
     if (!upiId) {
-      $('#bk-qr').innerHTML = '<p class="bk-muted" style="padding:12px">UPI details coming soon. Please call 8368143677 to pay.</p>';
+      $('#bk-qr').innerHTML = '<p class="bk-muted" style="padding:12px">UPI details coming soon. Please call 9818028755 to pay.</p>';
     } else {
       const fixed = !!b.upiQr;
       const link = fixed ? b.upiQr : `upi://pay?pa=${upiId.replace(/[^A-Za-z0-9.@_-]/g, "")}&pn=${encodeURIComponent(b.upiName)}&am=${b.amount}.00&cu=INR&tn=${encodeURIComponent('Home test ' + b.id)}`;
@@ -206,8 +206,18 @@
       $('#bk-done-ref').textContent = b.id;
       if (paidOnline) {
         $('#bk-done-h').textContent = 'Payment received – you\'re booked!';
-        $('#bk-done-wa-h').textContent = 'Want updates on WhatsApp? Say hi to us';
-        $('#bk-done-wa-p').textContent = 'We\'ll send your confirmation and collector details on WhatsApp. You can also message us any time with your booking ref.';
+        if (r.waAuto) {
+          // confirmation already went out from our WhatsApp number – nothing for the patient to send
+          $('#bk-done-wa-h').textContent = '✅ Confirmation sent on WhatsApp';
+          $('#bk-done-wa-p').textContent = `We've sent your booking details to ${(state.form && state.form.phone) || r.phone || 'your number'} on WhatsApp from +91 98180 28755. Your collector's name and number will follow there. Questions? Just reply in that chat.`;
+          $('#bk-done-wa').lastChild.textContent = 'Open WhatsApp chat';
+          const note = root.querySelector('[data-pk="done-note"]');
+          if (note) note.textContent = note.textContent.replace("We'll confirm your slot on WhatsApp and send you how to prepare.", 'How to prepare is in your WhatsApp message.')
+            .replace("We'll verify your payment and confirm your slot on WhatsApp. ", '').replace("We'll confirm your slot on WhatsApp. ", '');
+        } else {
+          $('#bk-done-wa-h').textContent = 'Want updates on WhatsApp? Say hi to us';
+          $('#bk-done-wa-p').textContent = 'We\'ll send your confirmation and collector details on WhatsApp. You can also message us any time with your booking ref.';
+        }
       }
       $('#bk-done-slot').textContent = `${r.dateLabel || b.dateLabel} · ${r.slotLabel || b.slotLabel}`;
       const f = state.form || {};
@@ -221,7 +231,8 @@
         `Amount paid: Rs. ${b.amount}`,
         paidOnline ? (utr ? `Payment ID: ${utr}` : null) : state.shot ? 'Payment screenshot uploaded on the website.' : `UPI UTR: ${utr}`,
       ].filter((x) => x !== null).join('\n');
-      $('#bk-done-wa').href = 'https://wa.me/918368143677?text=' + encodeURIComponent(msg);
+      const waMsg = paidOnline && r.waAuto ? `Hi, my booking ref is ${b.id}.` : msg;
+      $('#bk-done-wa').href = 'https://wa.me/919818028755?text=' + encodeURIComponent(waMsg);
       if (window.gtag) gtag('event', 'purchase', { transaction_id: b.id, value: b.amount, currency: 'INR' });
       show(4);
   }
