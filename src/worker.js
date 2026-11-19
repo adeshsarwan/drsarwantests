@@ -1,7 +1,7 @@
 // Dr. Sarwan Diagnostic Labs – booking backend
 // Cloudflare Worker + D1. Static site is served from ./public via the ASSETS binding.
 import "../public/shared/msgs.js"; // WhatsApp message texts, shared with the admin page
-import { imConfigured, imIsTest, imCreateRequest, imGetRequest, imGetPayment, imPaymentOk, imMacOk } from "./instamojo.js";
+import { imConfigured, imApi, imIsTest, imCreateRequest, imGetRequest, imGetPayment, imPaymentOk, imMacOk } from "./instamojo.js";
 import { renderHome, homeFromBody, HOME_DEFAULT } from "./home.js";
 import { renderPackagePage, pageFromBody, defaultPageFor, slugify, aiGeneratePage, PAGE_SECTIONS, HORMONE_PAGE } from "./pages.js";
 const M = globalThis.DSLMsg;
@@ -662,7 +662,7 @@ async function settleRequest(env, pay, via, payId = "") {
   try {
     if (!payId) {
       const rq = await imGetRequest(env, pay.request_id);
-      const list = (rq.payments || []).map((u) => (/([A-Za-z0-9]{8,})\/?$/.exec(String(u)) || [])[1]).filter(Boolean);
+      const list = rq.payments || [];
       payId = list[list.length - 1] || "";
       if (!payId) {
         const old = Date.now() - Date.parse(pay.created_at) > PAY_ABANDON_MIN * 60000;
@@ -672,7 +672,7 @@ async function settleRequest(env, pay, via, payId = "") {
         return { ok: false, pending: !old, reason: old ? "The payment wasn't completed." : "Payment not received yet." };
       }
     }
-    const p = await imGetPayment(env, payId);
+    const p = await imGetPayment(env, payId, pay.request_id);
     const v = imPaymentOk(p, pay.request_id, pay.amount);
     if (!v.ok) {
       await env.DB.prepare("UPDATE payments SET status='failed', payment_id=?1, reason=?2, method=?3, checked_at=?4, updated_at=?4 WHERE id=?5 AND status!='success'")
@@ -706,7 +706,7 @@ async function adminPayments(env, url) {
   const { results } = await env.DB.prepare(`SELECT p.*, b.name, b.phone, b.date, b.slot, b.city, b.status AS booking_status, b.package_name, b.created_at AS booked_at
     FROM payments p LEFT JOIN bookings b ON b.id = p.booking_id WHERE p.created_at >= ?1 ORDER BY p.id DESC LIMIT 500`).bind(since).all();
   return json({ payments: results.map((r) => ({ ...r, slotLabel: r.slot ? slotLabel(r.slot) : "", paid_later: r.status !== "success" && HOLDING.includes(r.booking_status) })),
-    gateway: { on: imConfigured(env), test: imIsTest(env), salt: !!env.INSTAMOJO_SALT, webhook: `${url.origin}/api/pay/instamojo` } });
+    gateway: { on: imConfigured(env), api: imApi(env), test: imIsTest(env), salt: !!env.INSTAMOJO_SALT, webhook: `${url.origin}/api/pay/instamojo` } });
 }
 async function adminPaymentCheck(env, id) {
   const pay = await env.DB.prepare("SELECT * FROM payments WHERE id=?1").bind(id).first();
