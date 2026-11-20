@@ -711,6 +711,7 @@ async function settleRequest(env, pay, via, payId = "") {
       // the operator chooses the collection centre (Operations → Step 1 "Assign centre"); the team gets an alert
       // automatic WhatsApp: confirmation to the patient now; the job goes to the centre once it's chosen
       await waEvent(env, "paid_online", pay.booking_id).catch((e) => console.log("paid_online wa", String(e)));
+      await gaPurchase(env, pay.booking_id).catch((e) => console.log("ga purchase", String(e)));
     }
     return { ok: true };
   } catch (e) {
@@ -718,6 +719,35 @@ async function settleRequest(env, pay, via, payId = "") {
     await env.DB.prepare("UPDATE payments SET checked_at=?1 WHERE id=?2").bind(now, pay.id).run();
     return { ok: false, pending: true, reason: "We couldn't check your payment just now." };
   }
+}
+
+// Google Analytics 4: one "purchase" event per booking, sent from here (Measurement Protocol) once Instamojo has confirmed
+// the money – so it also counts patients who close the tab after paying. Google Ads imports it as the conversion.
+// Needs the plain var GA4_ID (G-…) and the secret GA4_API_SECRET (Analytics → Data streams → the stream → Measurement Protocol API secrets).
+// No name / phone / DOB is sent – only booking ref, amount and a neutral package id.
+async function gaPurchase(env, id) {
+  if (!env.GA4_ID || !env.GA4_API_SECRET) return;
+  const b = await env.DB.prepare("SELECT id, amount, source, package_id, created_at FROM bookings WHERE id=?1").bind(id).first();
+  if (!b || b.source === "admin") return;
+  const src = new URLSearchParams(b.source || "");
+  // the visitor's Analytics id ties the sale to their ad click; without it (tag blocked) we still count the sale
+  const cid = src.get("ga_cid") || `${parseInt(b.id.replace(/\W/g, ""), 36) % 2147483647}.${Math.floor(Date.parse(b.created_at || Date.now()) / 1000)}`;
+  const sid = parseInt(src.get("ga_sid") || "", 10);
+  const params = { transaction_id: b.id, value: Number(b.amount) || 0, currency: "INR", engagement_time_msec: 1,
+    items: [{ item_id: `pkg_${b.package_id || 0}`, price: Number(b.amount) || 0, quantity: 1 }] };
+  if (sid) params.session_id = sid;
+  const u = `${env.GA4_URL || "https://www.google-analytics.com"}/mp/collect?measurement_id=${encodeURIComponent(env.GA4_ID)}&api_secret=${encodeURIComponent(env.GA4_API_SECRET)}`;
+  const r = await fetch(u, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ client_id: cid, events: [{ name: "purchase", params }] }) });
+  await logAct(env, id, "Google Analytics", "system", r.ok ? `Sale sent to Analytics (₹${b.amount}${src.get("gclid") ? ", from a Google ad" : ""}).` : `Sending the sale to Analytics failed (${r.status}).`);
+}
+
+// Google tag on the public pages ("/" and /package/<slug>) when GA4_ID is set
+function withGtag(env, res) {
+  const id = String(env.GA4_ID || "");
+  if (!/^G-[A-Z0-9]{4,20}$/.test(id) || !res || !(res.headers.get("content-type") || "").includes("text/html")) return res;
+  const tag = `<script async src="https://www.googletagmanager.com/gtag/js?id=${id}"></script>
+<script>window.GA4_ID="${id}";window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag("js",new Date());gtag("config","${id}");</script>`;
+  return new HTMLRewriter().on("head", { element(el) { el.prepend(tag, { html: true }); } }).transform(res);
 }
 
 // cron: look up payment pages nobody came back from (closed the tab, network dropped)
@@ -4504,10 +4534,10 @@ export default {
       if ((tm || p === "/" || p === "/sitemap.xml") && req.method === "GET" && env.DB) {
         try {
           await ensureSchema(env);
-          if (p === "/") return await homePage(env, await homeContent(env), false);
+          if (p === "/") return withGtag(env, await homePage(env, await homeContent(env), false));
           if (p === "/sitemap.xml") return await sitemap(env);
           const res = await sitePage(env, req, url, tm[1]);
-          if (res) return res;
+          if (res) return withGtag(env, res);
         } catch (e) { console.log("site page", p, String(e && e.stack || e)); }
         if (tm) return Response.redirect(new URL("/#packages", req.url).toString(), 302);
       }

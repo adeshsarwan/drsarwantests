@@ -8,8 +8,21 @@
   const PREVIEW = root.dataset.preview === '1';
   const online = () => state.cfg && state.cfg.gateway === 'instamojo';
   const params = new URLSearchParams(location.search);
-  const source = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'gclid']
-    .filter((k) => params.get(k)).map((k) => `${k}=${params.get(k)}`).join('&').slice(0, 300);
+  // where the visitor came from (ad click id + UTMs, remembered for 30 days so a later visit still counts) and the
+  // Google Analytics visitor/session ids – the server sends the "purchase" to Analytics with these once Instamojo confirms the payment
+  const AD_KEYS = ['gclid', 'gbraid', 'wbraid', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term'];
+  let adSrc = AD_KEYS.filter((k) => params.get(k)).map((k) => `${k}=${encodeURIComponent(params.get(k).slice(0, 120))}`).join('&');
+  try {
+    if (adSrc) localStorage.setItem('dsl_src', JSON.stringify({ v: adSrc, t: Date.now() }));
+    else { const o = JSON.parse(localStorage.getItem('dsl_src') || 'null'); if (o && Date.now() - o.t < 30 * 864e5) adSrc = o.v; }
+  } catch (e) { /* storage blocked */ }
+  const ga = {};
+  if (window.gtag && window.GA4_ID) {
+    gtag('get', window.GA4_ID, 'client_id', (v) => { ga.cid = v; });
+    gtag('get', window.GA4_ID, 'session_id', (v) => { ga.sid = v; });
+  }
+  const source = () => [adSrc, ga.cid && `ga_cid=${encodeURIComponent(ga.cid)}`, ga.sid && `ga_sid=${encodeURIComponent(ga.sid)}`]
+    .filter(Boolean).join('&').slice(0, 300);
 
   function show(step) {
     root.querySelectorAll('[data-step]').forEach((el) => { el.hidden = el.dataset.step !== String(step); });
@@ -25,6 +38,7 @@
     return j;
   }
 
+  if (PKG && !PREVIEW && window.gtag) gtag('event', 'view_item', { item_id: 'pkg_' + PKG });
   async function init() {
     try {
       state.cfg = await api('/api/config' + (PKG ? '?package=' + encodeURIComponent(PKG) : ''));
@@ -116,7 +130,7 @@
     btn.disabled = true; btn.dataset.t = btn.textContent; btn.textContent = 'Reserving your slot…';
     try {
       state.form = data;
-      state.booking = await api('/api/bookings', { method: 'POST', body: JSON.stringify({ ...data, date: state.date, slot: state.slot, source }) });
+      state.booking = await api('/api/bookings', { method: 'POST', body: JSON.stringify({ ...data, date: state.date, slot: state.slot, source: source() }) });
       if (window.gtag) gtag('event', 'begin_checkout', { value: state.booking.amount, currency: 'INR' });
       if (online()) goPay(); else startPayment();
     } catch (e) {
@@ -236,7 +250,7 @@
       // our receipt for this payment (opens a printable page)
       const old = $('#bk-done-rcpt'); if (old) old.remove();
       if (r.receipt) $('#bk-done-ref').parentNode.insertAdjacentHTML('afterend', `<p id="bk-done-rcpt" style="margin:8px 0 0"><a href="${r.receipt}" target="_blank" rel="noopener" style="color:#1f6977;font-weight:700">🧾 View / download your receipt</a></p>`);
-      if (window.gtag) gtag('event', 'purchase', { transaction_id: b.id, value: b.amount, currency: 'INR' });
+      // the 'purchase' event is sent by the server (it also counts patients who never come back to this page)
       show(4);
   }
 
