@@ -37,6 +37,7 @@
   //   INSTAMOJO_API_KEY, INSTAMOJO_AUTH_TOKEN – Instamojo "Private API Key" / "Private Auth Token" (dashboard → API & Plugins); turns on online payment
   //     (OAuth app keys INSTAMOJO_CLIENT_ID + INSTAMOJO_CLIENT_SECRET work instead)
   //   INSTAMOJO_SALT  – Instamojo "Private salt" (checks webhook calls). Add a plain variable INSTAMOJO_ENV = "test" to use the sandbox.
+  //   GA4_API_SECRET  – Google Analytics Measurement Protocol API secret (with the plain var GA4_ID); the server sends "purchase" after a verified payment
   //   ANTHROPIC_API_KEY – Claude API key for the AI check of report PDFs (name/age/IDs on every page). Without it reports are checked by hand.
   // 7 PM IST: WhatsApp visit reminders for tomorrow (automatic mode only). Every minute: AI check of new reports + confirm screens for centres
   "triggers": { "crons": ["30 13 * * *", "* * * * *"] },
