@@ -1250,7 +1250,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
 <div class="pt-l">${rows.length ? rows.map((t) => `<div class="pt-r"><div class="pt-t"><b>${esc(t.name)}</b>${t.purpose ? `<small>${esc(t.purpose)}</small>` : ''}</div><button type="button" class="pt-rm" data-pop="rm" data-tid="${t.id}" aria-label="Remove ${esc(t.name)}" title="Remove from this package">×</button></div>`).join('')
   : `<p class="meta" style="margin:8px 6px">${p.tests ? `Written in the package: <i>${esc(String(p.tests).slice(0, 400))}</i>` : 'Add the tests below.'}</p>`}</div>
 <div class="pt-add"><input class="inp" id="ptQ" placeholder="Add a test – type to search…" autocomplete="off" value="${esc(q)}"><div class="pt-sug" id="ptSug" hidden></div></div>
-<div class="pt-f">${LT.ai && p.tests ? `<button type="button" class="btn ghost sm" data-pop="ai">✨ ${rows.length ? 'Redo' : 'Link tests'} with AI</button>` : ''}${rows.length ? `<button type="button" class="btn ghost sm" data-pop="summary" title="Rewrite the package's “Tests included” text from this list">Use as “Tests included”</button>` : ''}<span class="meta" id="ptMsg"></span></div>`;
+<div class="pt-f"><span class="meta" id="ptMsg"></span></div>`;
     if (q) { const i = $('#ptQ'); i.focus(); i.setSelectionRange(q.length, q.length); suggest(); }
   }
   function suggest() {
@@ -1266,7 +1266,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   async function savePop(ids, msg, summary) {
     const p = popPkg(); if (!p) return;
     $('#ptMsg').textContent = 'Saving…';
-    await post(`/api/admin/labtests/package/${p.id}`, { test_ids: ids, summary: !!summary });
+    await post(`/api/admin/labtests/package/${p.id}`, { test_ids: ids, summary: true }); // "Tests included" always follows the linked tests
     await Promise.all([loadPkgs(), loadLabTests(true)]);
     if (!pop.hidden) { renderPop(); $('#ptMsg').textContent = msg; }
   }
@@ -1290,13 +1290,6 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
         const name = $('#ptQ').value.trim();
         const r = await post('/api/admin/labtests', { name, sample: 'Blood' });
         await savePop([...ids, r.id], 'New test added ✓ – describe it in the Tests tab');
-      } else if (act === 'summary') { await savePop(ids, '“Tests included” updated ✓', true); }
-      else if (act === 'ai') {
-        if (ids.length && !confirm(`Replace the ${ids.length} linked tests with what the AI reads from “${p.tests.slice(0, 120)}…”?`)) return;
-        b.disabled = true; $('#ptMsg').textContent = '✨ Reading the package… (about half a minute)';
-        const r = await post(`/api/admin/labtests/package/${p.id}/ai`);
-        await Promise.all([loadPkgs(), loadLabTests(true)]);
-        if (!pop.hidden) { renderPop(); $('#ptMsg').textContent = `${r.linked} tests linked${r.added ? `, ${r.added} new` : ''} ✓`; }
       }
     } catch (err) { if ($('#ptMsg')) $('#ptMsg').textContent = err.message; else toast(err.message); }
   });
