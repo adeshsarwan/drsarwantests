@@ -20,6 +20,8 @@
   ],
   "vars": {
     "PRICE_INR": "1899",
+    // Google Analytics 4 property "drsarwantests.com" (565234608), web stream 16378843090. Server purchase also needs secret GA4_API_SECRET.
+    "GA4_ID": "G-HZTEVFE2BJ",
     // Paytm merchant UPI ID, shown to customers for copy/paste
     "UPI_ID": "paytmqr28100505010115zcn7xuztuf@paytm",
     // Exact payment string from the Paytm QR (signed by Paytm, so it is used as-is; customers enter the amount)
