@@ -736,6 +736,7 @@ async function gaPurchase(env, id) {
   const params = { transaction_id: b.id, value: Number(b.amount) || 0, currency: "INR", engagement_time_msec: 1,
     items: [{ item_id: `pkg_${b.package_id || 0}`, price: Number(b.amount) || 0, quantity: 1 }] };
   if (sid) params.session_id = sid;
+  if (src.get("gclid")) params.click_id = src.get("gclid").slice(0, 100); // Google Ads click id – custom dimension "Google click ID" in GA4
   const u = `${env.GA4_URL || "https://www.google-analytics.com"}/mp/collect?measurement_id=${encodeURIComponent(env.GA4_ID)}&api_secret=${encodeURIComponent(env.GA4_API_SECRET)}`;
   const r = await fetch(u, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ client_id: cid, events: [{ name: "purchase", params }] }) });
   await logAct(env, id, "Google Analytics", "system", r.ok ? `Sale sent to Analytics (₹${b.amount}${src.get("gclid") ? ", from a Google ad" : ""}).` : `Sending the sale to Analytics failed (${r.status}).`);
@@ -746,7 +747,7 @@ function withGtag(env, res) {
   const id = String(env.GA4_ID || "");
   if (!/^G-[A-Z0-9]{4,20}$/.test(id) || !res || !(res.headers.get("content-type") || "").includes("text/html")) return res;
   const tag = `<script async src="https://www.googletagmanager.com/gtag/js?id=${id}"></script>
-<script>window.GA4_ID="${id}";window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag("js",new Date());gtag("config","${id}");</script>`;
+<script>window.GA4_ID="${id}";window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag("js",new Date());(function(){var c="";try{c=new URLSearchParams(location.search).get("gclid")||"";if(!c){var o=JSON.parse(localStorage.getItem("dsl_src")||"null");if(o&&Date.now()-o.t<2592e6)c=new URLSearchParams(o.v).get("gclid")||"";}}catch(e){}if(c)gtag("set",{click_id:c.slice(0,100)});})();gtag("config","${id}");</script>`;
   return new HTMLRewriter().on("head", { element(el) { el.prepend(tag, { html: true }); } }).transform(res);
 }
 
