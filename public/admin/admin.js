@@ -1132,12 +1132,11 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
 <td class="num">${p.mrp ? money(p.mrp) : '—'}</td>
 <td class="num"><b>${money(p.price)}</b></td>
 <td class="num">${p.margin != null ? money(p.margin) : '—'}</td>
-<td class="tg-cell">${p.card_headline ? `<b>${esc(p.card_headline)}</b>` : ''}${p.target ? `<small>${esc(p.target)}</small>` : ''}${!p.card_headline && !p.target ? '<span class="meta">—</span>' : ''}</td>
 <td class="num">${p.bookings || 0}</td>
 <td>${p.is_default ? '<span class="badge web">Website test</span>' : ''}<span class="badge ${p.active ? 'on' : 'off'}">${p.active ? 'Active' : 'Hidden'}</span></td>
 <td class="pg-cell">${p.page_live && p.active ? `<a class="pg-live" href="/package/${esc(p.slug)}" target="_blank" rel="noopener" title="Open the live page">● Live page</a>` : p.has_page ? '<span class="pg-draft">Draft page</span>' : '<span class="pg-none">No page yet</span>'}<a class="pg-edit" href="#page/${p.id}">Edit page →</a></td>
 <td><button type="button" class="btn ghost sm" data-act="pkg-edit" data-pid="${p.id}">Edit</button></td></tr>`).join('')
-      : '<tr><td colspan="11" class="meta" style="padding:18px">No tests match.</td></tr>';
+      : '<tr><td colspan="10" class="meta" style="padding:18px">No tests match.</td></tr>';
     $('#pkgCount').textContent = `${PKGS.filter((p) => p.active).length} active · ${PKGS.filter((p) => !p.active).length} hidden`;
   }
   $('#pkgSearch').oninput = renderPkgs;
