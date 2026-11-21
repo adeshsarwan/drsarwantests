@@ -523,9 +523,41 @@ ${instructions ? `\nExtra instructions from our team: ${String(instructions).sli
     }
     throw new Error("The AI didn't return the page content. Please try again.");
   };
-  let out;
-  try { out = await run(research); }
-  catch (e) { if (research && e.status === 400) out = await run(false); else throw e; } // web search not enabled for this key → write without it
-  const clean = pageFromBody(out);
-  return Object.fromEntries(secs.map((s) => [s, clean[s]]));
+  // the AI sometimes sends a section as a JSON string, unwrapped, or with other key names – bring it to our shape
+  const unwrap = (v) => { if (typeof v === "string") { try { return JSON.parse(v); } catch { return v; } } return v; };
+  const ALIAS = { q: ["question", "title", "heading"], a: ["answer", "body", "text"], title: ["heading", "question", "headline"], body: ["answer", "text", "description"] };
+  const fixItem = (x) => { x = unwrap(x); if (!x || typeof x !== "object" || Array.isArray(x)) return x;
+    const o = { ...x }; for (const [k, al] of Object.entries(ALIAS)) if (o[k] == null) { const f = al.find((n) => typeof o[n] === "string"); if (f) o[k] = o[f]; } return o; };
+  const normalize = (out) => {
+    out = unwrap(out); if (!out || typeof out !== "object") return {};
+    if (secs.length === 1 && out[secs[0]] == null) out = { [secs[0]]: out }; // the section's fields came back at the top level
+    const o = {};
+    for (const s of secs) {
+      let v = unwrap(out[s]);
+      if (Array.isArray(v)) v = { items: v }; // e.g. faq: [ {q, a}, … ]
+      if (v && typeof v === "object") { v = { ...v };
+        for (const k of ["items", "groups", "sources", "questions"]) if (v[k] != null) v[k] = (Array.isArray(unwrap(v[k])) ? unwrap(v[k]) : []).map(fixItem);
+        if (s === "faq" && !v.items && Array.isArray(v.questions)) v.items = v.questions; }
+      o[s] = v;
+    }
+    return o;
+  };
+  // a section counts as written when its list has entries (or, for text-only sections, any text)
+  const written = (s, v) => { if (!v) return false; const lists = ["items", "groups", "can"].filter((k) => Array.isArray(v[k]));
+    if (lists.length && s !== "seo" && s !== "hero") return lists.some((k) => v[k].length);
+    return Object.values(v).some((x) => (typeof x === "string" ? x.trim() : Array.isArray(x) ? x.length : false)); };
+  const once = async () => {
+    let out;
+    try { out = await run(research); }
+    catch (e) { if (research && e.status === 400) out = await run(false); else throw e; } // web search not enabled for this key → write without it
+    return pageFromBody(normalize(out));
+  };
+  let clean = await once();
+  if (!secs.every((s) => written(s, clean[s]))) {
+    const again = await once(); // one more try before telling the team
+    for (const s of secs) if (!written(s, clean[s]) && written(s, again[s])) clean[s] = again[s];
+  }
+  const empty = secs.filter((s) => !written(s, clean[s]));
+  if (empty.length === secs.length) throw new Error("The AI came back without usable text for this section. Please try again, or add a short instruction.");
+  return Object.fromEntries(secs.filter((s) => !empty.includes(s)).map((s) => [s, clean[s]]));
 }
