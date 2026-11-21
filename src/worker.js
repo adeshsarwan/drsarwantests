@@ -301,7 +301,9 @@ async function seedPackages(env) {
   const cols = await env.DB.prepare("PRAGMA table_info(packages)").all();
   if (!(cols.results || []).some((c) => c.name === "prep")) await env.DB.prepare("ALTER TABLE packages ADD COLUMN prep TEXT").run();
   // website page per package: slug (/package/<slug>), page = JSON of the sections, page_live = 1 when published
-  for (const [c, t] of [["slug", "TEXT"], ["page", "TEXT"], ["page_live", "INTEGER NOT NULL DEFAULT 0"], ["page_at", "TEXT"]])
+  // card_*: the package's card on the home page – headline (the patient's question), sub-text, questions it answers (one per line)
+  for (const [c, t] of [["slug", "TEXT"], ["page", "TEXT"], ["page_live", "INTEGER NOT NULL DEFAULT 0"], ["page_at", "TEXT"],
+    ["card_headline", "TEXT"], ["card_text", "TEXT"], ["card_points", "TEXT"]])
     if (!(cols.results || []).some((x) => x.name === c)) {
       try { await env.DB.prepare(`ALTER TABLE packages ADD COLUMN ${c} ${t}`).run(); } catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
     }
@@ -1282,7 +1284,7 @@ async function homeContent(env) {
   const r = await env.DB.prepare("SELECT v FROM settings WHERE k='home_page'").first();
   try { return homeOrDefault(r && r.v ? JSON.parse(r.v) : null); } catch { return HOME_DEFAULT; }
 }
-const livePackages = (env) => env.DB.prepare("SELECT name, slug, price, mrp, tests, page FROM packages WHERE active=1 AND page_live=1 AND page IS NOT NULL AND slug IS NOT NULL ORDER BY is_default DESC, sort, id").all().then((r) => r.results);
+const livePackages = (env) => env.DB.prepare("SELECT name, slug, price, mrp, tests, page, target, card_headline, card_text, card_points FROM packages WHERE active=1 AND page_live=1 AND page IS NOT NULL AND slug IS NOT NULL ORDER BY is_default DESC, sort, id").all().then((r) => r.results);
 async function homePage(env, home, preview) {
   return new Response(renderHome(home, await livePackages(env), { preview }), {
     headers: { "content-type": "text/html; charset=utf-8", "cache-control": preview ? "no-store" : "public, max-age=60" } });
@@ -1355,7 +1357,11 @@ function readPackage(b) {
   if (price === null || !Number.isFinite(price) || price <= 0) return { err: "Enter the price shown to patients." };
   for (const v of [mrp, margin]) if (v !== null && (!Number.isFinite(v) || v < 0)) return { err: "MRP and margin must be numbers." };
   const prep = b.prep === undefined ? null : String(b.prep).replace(/\r/g, "").replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, " ").split("\n").map((l) => l.trim()).join("\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, 1500);
-  return { name, tests: clean(b.tests, 4000), price, mrp, margin, target: clean(b.target, 120), prep,
+  const lines = (v, n, max) => String(v ?? "").replace(/\r/g, "").split("\n").map((l) => clean(l.replace(/^[•\-*\s]+/, ""), max)).filter(Boolean).slice(0, n).join("\n");
+  return { name, tests: clean(b.tests, 4000), price, mrp, margin, target: clean(b.target, 160), prep,
+    // card fields left out of the request (older forms) keep what's saved
+    card_headline: b.card_headline === undefined ? null : clean(b.card_headline, 120), card_text: b.card_text === undefined ? null : clean(b.card_text, 300),
+    card_points: b.card_points === undefined ? null : lines(b.card_points, 4, 120),
     active: b.active === false || b.active === 0 || b.active === "0" ? 0 : 1, is_default: b.is_default ? 1 : 0 };
 }
 async function adminSavePackage(env, req, id) {
@@ -1385,15 +1391,16 @@ async function adminSavePackage(env, req, id) {
     const cur = await env.DB.prepare("SELECT * FROM packages WHERE id=?1").bind(id).first();
     if (!cur) return bad("Test not found", 404);
     if (cur.is_default && !p.is_default) return bad("Pick another test as the website test instead of unticking this one.");
-    stmts.push(env.DB.prepare("UPDATE packages SET name=?1, tests=?2, mrp=?3, price=?4, margin=?5, target=?6, active=?7, is_default=?8, updated_at=?9, prep=COALESCE(?11, prep) WHERE id=?10")
-      .bind(p.name, p.tests, p.mrp, p.price, p.margin, p.target, p.active, p.is_default, now, id, p.prep));
+    stmts.push(env.DB.prepare("UPDATE packages SET name=?1, tests=?2, mrp=?3, price=?4, margin=?5, target=?6, active=?7, is_default=?8, updated_at=?9, prep=COALESCE(?11, prep),
+      card_headline=COALESCE(?12, card_headline), card_text=COALESCE(?13, card_text), card_points=COALESCE(?14, card_points) WHERE id=?10")
+      .bind(p.name, p.tests, p.mrp, p.price, p.margin, p.target, p.active, p.is_default, now, id, p.prep, p.card_headline, p.card_text, p.card_points));
     await env.DB.batch(stmts);
     await linkTests(id);
     return json({ ok: true, id });
   }
   const mx = await env.DB.prepare("SELECT COALESCE(MAX(sort), 0) AS m FROM packages").first();
-  stmts.push(env.DB.prepare("INSERT INTO packages (name, tests, mrp, price, margin, target, active, is_default, sort, created_at, updated_at, prep) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11)")
-    .bind(p.name, p.tests, p.mrp, p.price, p.margin, p.target, p.active, p.is_default, (mx ? mx.m : 0) + 10, now, p.prep));
+  stmts.push(env.DB.prepare("INSERT INTO packages (name, tests, mrp, price, margin, target, active, is_default, sort, created_at, updated_at, prep, card_headline, card_text, card_points) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11, ?12, ?13, ?14)")
+    .bind(p.name, p.tests, p.mrp, p.price, p.margin, p.target, p.active, p.is_default, (mx ? mx.m : 0) + 10, now, p.prep, p.card_headline, p.card_text, p.card_points));
   await env.DB.batch(stmts);
   const row = await env.DB.prepare("SELECT id FROM packages WHERE name=?1").bind(p.name).first();
   if (row) await linkTests(row.id);
@@ -1578,6 +1585,42 @@ async function adminAiPackageTests(env, pid) {
   return json({ ok: true, added, linked: ids.length });
 }
 // "What it's for" for a test name typed in the form (nothing is saved – the form fills in and the team presses Save)
+// Home-page card copy for a package (Admin → Packages → Edit → Website card → ✨ Write with AI): headline, sub-text, questions it answers
+async function adminAiPackageCard(env, req) {
+  if (!aiKey(env)) return bad("Add the ANTHROPIC_API_KEY secret in Cloudflare first.");
+  const b = await req.json().catch(() => ({}));
+  const name = clean(b.name, 120), target = clean(b.target, 160), ins = clean(b.instructions, 400);
+  const ids = (Array.isArray(b.test_ids) ? b.test_ids : []).map(Number).filter((x) => x > 0).slice(0, 150);
+  const { results: tt } = ids.length ? await env.DB.prepare(`SELECT name, purpose FROM lab_tests WHERE id IN (${ids.map((_, i) => "?" + (i + 1)).join(",")})`).bind(...ids).all() : { results: [] };
+  if (name.length < 2 || !tt.length) return bad("Add the package name and pick its tests first.");
+  const prompt = `You write the card for one health package on the home page of drsarwantests.com (Dr. Sarwan Diagnostic Labs, NABL & CGHS approved, home sample collection in India).
+
+Package: ${name}
+${target ? `Who it's for: ${target}\n` : ""}Tests in it:
+${tt.map((t) => `- ${t.name}${t.purpose ? ": " + String(t.purpose).slice(0, 200) : ""}`).join("\n")}
+${ins ? `\nExtra instructions from the team: ${ins}\n` : ""}
+Write in plain, warm Indian English, in the patient's own words – the everyday worry that makes someone look for these tests
+(e.g. "Dieting and going to the gym but still gaining weight?"). Rules:
+- headline: the patient's question, max 70 characters, ends with "?"
+- text: one sentence (max 160 characters) saying what this package checks, from one home sample. No price, no test count.
+- questions: 3 short questions (max 70 characters each) this package helps answer, each tied to tests actually in the list above.
+- Never diagnose or promise a cure; no invented claims; no medical jargon without a plain explanation.
+Reply with JSON only: {"headline": "...", "text": "...", "questions": ["...", "...", "..."]}`;
+  const S = await getSettings(env);
+  try {
+    const r = await fetch(`${env.ANTHROPIC_URL || "https://api.anthropic.com"}/v1/messages`, {
+      method: "POST", headers: { "x-api-key": aiKey(env), "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model: S.ai_model || AI_MODEL_DEFAULT, max_tokens: 1200, messages: [{ role: "user", content: prompt }] }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.type === "error") throw new Error((j.error && j.error.message) || `AI request failed (${r.status})`);
+    const txt = (j.content || []).filter((c) => c.type === "text").map((c) => c.text).join("");
+    const m = /\{[\s\S]*\}/.exec(txt); if (!m) throw new Error("The AI didn't return the card. Please try again.");
+    const o = JSON.parse(m[0]);
+    return json({ ok: true, card_headline: clean(o.headline, 120), card_text: clean(o.text, 300),
+      card_points: (Array.isArray(o.questions) ? o.questions : []).map((q) => clean(q, 120)).filter(Boolean).slice(0, 4).join("\n") });
+  } catch (e) { return bad("The AI couldn't write the card: " + String(e.message || e).slice(0, 200), 502); }
+}
 async function adminAiDescribe(env, req) {
   if (!aiKey(env)) return bad("Add the ANTHROPIC_API_KEY secret in Cloudflare first.");
   const b = await req.json().catch(() => ({}));
@@ -4405,6 +4448,7 @@ export default {
           if (p === "/api/admin/labtests" && req.method === "GET") return adminLabTests(env);
           if (p === "/api/admin/labtests" && req.method === "POST") return adminSaveLabTest(env, req, null);
           if (p === "/api/admin/labtests/ai" && req.method === "POST") return adminAiDescribe(env, req);
+          if (p === "/api/admin/packages/card-ai" && req.method === "POST") return adminAiPackageCard(env, req);
           { const lm = p.match(/^\/api\/admin\/labtests\/(\d{1,9})(\/ai)?$/);
             if (lm && req.method === "POST") return lm[2] ? adminAiLabTest(env, Number(lm[1])) : adminSaveLabTest(env, req, Number(lm[1]));
             if (lm && !lm[2] && req.method === "DELETE") return adminDeleteLabTest(env, Number(lm[1])); }

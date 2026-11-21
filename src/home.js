@@ -158,7 +158,7 @@ const LEAD = 'margin: 10px 0 0; color: #3b4a68; font-size: 17px; line-height: 1.
 const WRAP = 'max-width: 1180px; margin: 0 auto; padding: 72px 24px';
 const head = (k, t, i, id) => `<div style="max-width: 720px">${k ? `<span style="${KICK}">${esc(k)}</span>` : ""}<h2 ${id ? `id="${id}" ` : ""}style="${H2}">${esc(t)}</h2>${i ? `<p style="${LEAD}">${esc(i)}</p>` : ""}</div>`;
 
-// pkgs: [{ name, slug, price, mrp, tests, page }] – only packages with a published page
+// pkgs: [{ name, slug, price, mrp, tests, page, target, card_headline, card_text, card_points }] – only packages with a published page
 export function renderHome(home, pkgs, opts = {}) {
   const h = homeFromBody(home);
   const title = h.seo.title || "Dr. Sarwan Diagnostic Labs";
@@ -166,12 +166,17 @@ export function renderHome(home, pkgs, opts = {}) {
   const cards = pkgs.map((p) => {
     let pg = {}; try { pg = JSON.parse(p.page || "{}"); } catch {}
     const hero = pg.hero || {}, n = testCount(p.tests);
-    const line = hero.subtitle || p.tests || "";
-    const tag = hero.kicker ? String(hero.kicker).split("·")[0].trim() : "Home collection";
+    // card copy from Admin → Packages → Edit → Website card, falling back to the package page's hero
+    const line = p.card_text || hero.subtitle || p.tests || "";
+    const tag = p.target || (hero.kicker ? String(hero.kicker).split("·")[0].trim() : "Home collection");
+    const headline = p.card_headline || String(hero.headline || p.name).replace(/\[|\]/g, "");
+    const points = String(p.card_points || "").split("\n").map((x) => x.trim()).filter(Boolean).slice(0, 4);
     return `<article style="background: #ffffff; border: 1px solid #e1e8ee; border-radius: 18px; padding: 24px; display: flex; flex-direction: column; gap: 12px">
 <span style="align-self: flex-start; font-size: 12.5px; font-weight: 800; color: #1f6977; background: #e6f3f1; border-radius: 999px; padding: 3px 10px">${esc(tag)}</span>
-<h3 style="margin: 0; font-family: Archivo, sans-serif; font-weight: 800; font-size: 21px; line-height: 1.2">${esc(String(hero.headline || p.name).replace(/\[|\]/g, ""))}</h3>
+<h3 style="margin: 0; font-family: Archivo, sans-serif; font-weight: 800; font-size: 21px; line-height: 1.2">${esc(headline)}</h3>
 <p style="margin: 0; color: #3b4a68; line-height: 1.5; font-size: 15px">${esc(line)}</p>
+${points.length ? `<div style="background: #f4f7fa; border-radius: 12px; padding: 12px 14px"><span style="display: block; font-size: 12.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #5a6880; margin-bottom: 6px">This package helps answer</span>
+<ul style="list-style: none; margin: 0; padding: 0; display: grid; gap: 6px">${points.map((q) => `<li style="display: flex; gap: 8px; font-size: 14.5px; line-height: 1.4"><span aria-hidden="true" style="color: #16a34a; font-weight: 800">✓</span><span>${esc(q)}</span></li>`).join("")}</ul></div>` : ""}
 <div style="display: flex; align-items: baseline; gap: 10px; margin-top: auto; flex-wrap: wrap"><b style="font-family: Archivo, sans-serif; font-size: 26px">${rs(p.price)}</b>${p.mrp && p.mrp > p.price ? `<s style="color: #8492a6; font-size: 15px">${rs(p.mrp)}</s>` : ""}<span style="color: #5a6880; font-size: 14px">${esc(p.name)}${n > 1 ? ` · ${n} tests` : ""}</span></div>
 <span style="color: #5a6880; font-size: 13.5px">Home collection included · E-report on WhatsApp</span>
 <a href="/package/${esc(p.slug)}" style="min-height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; background: #c2410c; color: #ffffff; text-decoration: none; font-weight: 700">See what it shows &amp; book</a>
