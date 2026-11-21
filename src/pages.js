@@ -490,8 +490,17 @@ export async function aiGeneratePage(cfg, pkg, section, instructions, current) {
   const cur = current && typeof current === "object" ? JSON.stringify(Object.fromEntries(secs.map((s) => [s, current[s]])
     // a section with an empty list (e.g. an FAQ heading and no questions) isn't shown as "what the page says now" – the AI kept echoing it back empty
     .filter(([, v]) => v && !(["items", "groups", "can"].some((k) => Array.isArray(v[k])) && !["items", "groups", "can"].some((k) => Array.isArray(v[k]) && v[k].length))))) : "";
+  // writing one section: the sections above it that are already written, so it builds on them (an FAQ that doesn't repeat the page, etc.)
+  const hasText = (v) => typeof v === "string" ? !!v.trim() : Array.isArray(v) ? v.some(hasText) : v && typeof v === "object" ? Object.values(v).some(hasText) : false;
+  const above = section !== "all" && current && typeof current === "object"
+    ? PAGE_SECTIONS.slice(0, PAGE_SECTIONS.indexOf(section)).filter((k) => k !== "seo" && hasText(current[k]))
+      .map((k) => [k, k === "stories" && current[k] ? { ...current[k], sources: undefined } : current[k]]) : [];
+  const context = above.length ? JSON.stringify(Object.fromEntries(above)).slice(0, 9000) : "";
   const prompt = `${facts}
-
+${context ? `\nThe sections above this one on the page, already written (${above.map(([k]) => k).join(", ")}). Build on them and stay consistent with them – same facts, same tone –
+but don't repeat them word for word.${section === "faq" ? " For the FAQ, answer the practical questions a visitor still has after reading them (fasting, timing, how long results take, what to do with them next), not ones the page already answers." : ""}
+${context}
+` : ""}
 Write the ${secs.length > 1 ? "sections " + secs.join(", ") : `"${section}" section`} of this package's landing page.
 Style example – the same sections written for our Hormone & Fertility Panel (match the tone, length and structure, NOT the content):
 ${example.slice(0, 9000)}
