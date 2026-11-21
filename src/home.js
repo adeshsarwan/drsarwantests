@@ -48,12 +48,9 @@ export const HOME_DEFAULT = {
     title: "Your sample's journey, from your door to your report",
     intro: "You're kept informed on WhatsApp at every step, so you always know where your sample is.",
     items: [
-      { title: "Book & pay", text: "Choose a package and slot. Pay securely by UPI, card or net banking." },
-      { title: "Collector assigned", text: "Your nearest centre confirms the visit and sends the collector's name and timing." },
-      { title: "Sample at home", text: "Collected with a sealed kit. Each vial is labelled with its own number." },
-      { title: "Tested at the lab", text: "Processed in an NABL-accredited lab under quality control." },
-      { title: "Report verified", text: "Checked against your name and booking before release." },
-      { title: "Report on WhatsApp", text: "Delivered on WhatsApp and kept safe in My reports." },
+      { title: "Book & pay", text: "Choose a package and a slot between 7 AM and 6 PM. Pay securely by UPI, card or net banking – your slot is confirmed at once." },
+      { title: "Sample at home", text: "A trained collector, whose name and timing you get on WhatsApp, collects your sample at home with a sealed, single-use kit." },
+      { title: "Report on WhatsApp", text: "Tested in our NABL-accredited lab and checked against your booking, your report comes to WhatsApp and stays in My reports." },
     ],
   },
   report: {
@@ -127,8 +124,13 @@ export function homeFromBody(b) {
 }
 
 // Stored content from before version 2 (old journey layout) falls back to the new default.
+const OLD_SIX_STEPS = "Book & pay|Collector assigned|Sample at home|Tested at the lab|Report verified|Report on WhatsApp";
 export function homeOrDefault(stored) {
-  return stored && stored.v === HOME_VERSION ? stored : HOME_DEFAULT;
+  if (!(stored && stored.v === HOME_VERSION)) return HOME_DEFAULT;
+  // the first six-step "How it works" (unchanged by hand) becomes the short three-step version
+  const st = stored.steps || {};
+  if (Array.isArray(st.items) && st.items.map((x) => x && x.title).join("|") === OLD_SIX_STEPS) return { ...stored, steps: { ...st, items: HOME_DEFAULT.steps.items } };
+  return stored;
 }
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -227,10 +229,10 @@ summary::-webkit-details-marker{display:none}summary::after{content:"+";color:#1
 .pk-dots{display:flex;gap:6px}.pk-dots i{width:8px;height:8px;border-radius:999px;background:#c9d5dd;transition:all .2s}.pk-dots i.on{width:22px;background:#1f6977}
 @media (max-width:980px){.pk-card{flex-basis:calc((100% - 18px) / 2)}}
 @media (max-width:640px){.pk-card{flex-basis:86%}}
-@media (max-width:980px){.g4{grid-template-columns:repeat(2,minmax(0,1fr))}.g6{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:980px){.g4{grid-template-columns:repeat(2,minmax(0,1fr))}.g6{grid-template-columns:repeat(3,minmax(0,1fr)) !important}}
 @media (max-width:760px){.navlink{display:none !important}.hero-h{font-size:36px !important}.g2,.g3{grid-template-columns:1fr}.stats{grid-template-columns:1fr 1fr}
 .stats>div:nth-child(3){border-left:0}.stats>div:nth-child(n+3){border-top:1px solid rgba(255,255,255,.2)}h2{font-size:28px !important}}
-@media (max-width:560px){.g4,.g6{grid-template-columns:1fr}.navbook{display:none !important}
+@media (max-width:560px){.g4{grid-template-columns:1fr}.g6{grid-template-columns:1fr !important}.navbook{display:none !important}
 .mbar{display:grid;grid-template-columns:1fr 1fr;gap:10px;position:fixed;left:0;right:0;bottom:0;z-index:30;background:#fff;border-top:1px solid #e1e8ee;padding:10px}body{padding-bottom:70px}}
 </style>
 ${ldTag(ld)}
@@ -296,7 +298,7 @@ ${x.tag ? `<span style="${KICK}; font-size: 12px">${esc(x.tag)}</span>` : ""}
 ${h.steps.items.length ? `<section aria-labelledby="how-h" style="background: #f4f7fa">
 <div style="${WRAP}; display: flex; flex-direction: column; gap: 36px">
 ${head(h.steps.kicker, h.steps.title, h.steps.intro, "how-h")}
-<ol class="g6">
+<ol class="g6" style="grid-template-columns: repeat(${Math.min(h.steps.items.length, 6)}, minmax(0, 1fr))">
 ${h.steps.items.map((x) => `<li style="background: #ffffff; border: 1px solid #e1e8ee; border-radius: 16px; padding: 20px 16px"><b style="display: block; font-size: 16px; margin-bottom: 6px">${esc(x.title)}</b><span style="font-size: 14px; color: #3b4a68; line-height: 1.5">${esc(x.text)}</span></li>`).join("\n")}
 </ol>
 </div>
