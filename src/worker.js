@@ -1391,8 +1391,7 @@ async function adminSavePackage(env, req, id) {
     const cur = await env.DB.prepare("SELECT * FROM packages WHERE id=?1").bind(id).first();
     if (!cur) return bad("Test not found", 404);
     if (cur.is_default && !p.is_default) return bad("Pick another test as the website test instead of unticking this one.");
-    stmts.push(env.DB.prepare("UPDATE packages SET name=?1, tests=?2, mrp=?3, price=?4, margin=?5, target=?6, active=?7, is_default=?8, updated_at=?9, prep=COALESCE(?11, prep),
-      card_headline=COALESCE(?12, card_headline), card_text=COALESCE(?13, card_text), card_points=COALESCE(?14, card_points) WHERE id=?10")
+    stmts.push(env.DB.prepare("UPDATE packages SET name=?1, tests=?2, mrp=?3, price=?4, margin=?5, target=?6, active=?7, is_default=?8, updated_at=?9, prep=COALESCE(?11, prep), card_headline=COALESCE(?12, card_headline), card_text=COALESCE(?13, card_text), card_points=COALESCE(?14, card_points) WHERE id=?10")
       .bind(p.name, p.tests, p.mrp, p.price, p.margin, p.target, p.active, p.is_default, now, id, p.prep, p.card_headline, p.card_text, p.card_points));
     await env.DB.batch(stmts);
     await linkTests(id);
