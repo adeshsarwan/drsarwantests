@@ -487,7 +487,9 @@ export async function aiGeneratePage(cfg, pkg, section, instructions, current) {
   const facts = [`Package: ${pkg.name}`, `Tests included: ${pkg.tests || pkg.name}`, `Price: Rs. ${pkg.price}${pkg.mrp ? ` (MRP Rs. ${pkg.mrp})` : ""}`,
     pkg.target ? `Who it's for: ${pkg.target}` : "", pkg.prep ? `Preparation we tell patients:\n${pkg.prep}` : "", `Home collection hours: 7 AM to 6 PM.`].filter(Boolean).join("\n");
   const example = JSON.stringify(Object.fromEntries(secs.map((s) => [s, HORMONE_PAGE[s]])));
-  const cur = current && typeof current === "object" ? JSON.stringify(Object.fromEntries(secs.map((s) => [s, current[s]]).filter(([, v]) => v))) : "";
+  const cur = current && typeof current === "object" ? JSON.stringify(Object.fromEntries(secs.map((s) => [s, current[s]])
+    // a section with an empty list (e.g. an FAQ heading and no questions) isn't shown as "what the page says now" – the AI kept echoing it back empty
+    .filter(([, v]) => v && !(["items", "groups", "can"].some((k) => Array.isArray(v[k])) && !["items", "groups", "can"].some((k) => Array.isArray(v[k]) && v[k].length))))) : "";
   const prompt = `${facts}
 
 Write the ${secs.length > 1 ? "sections " + secs.join(", ") : `"${section}" section`} of this package's landing page.
@@ -546,18 +548,38 @@ ${instructions ? `\nExtra instructions from our team: ${String(instructions).sli
   const written = (s, v) => { if (!v) return false; const lists = ["items", "groups", "can"].filter((k) => Array.isArray(v[k]));
     if (lists.length && s !== "seo" && s !== "hero") return lists.some((k) => v[k].length);
     return Object.values(v).some((x) => (typeof x === "string" ? x.trim() : Array.isArray(x) ? x.length : false)); };
+  let lastRaw = "";
   const once = async () => {
     let out;
     try { out = await run(research); }
     catch (e) { if (research && e.status === 400) out = await run(false); else throw e; } // web search not enabled for this key → write without it
+    lastRaw = JSON.stringify(out || null).slice(0, 1500);
     return pageFromBody(normalize(out));
+  };
+  // second way: no tool, plain JSON in the same shape as the example (what the package-card AI uses)
+  const asJson = async () => {
+    const r = await fetch(`${cfg.url}/v1/messages`, {
+      method: "POST", headers: { "x-api-key": cfg.key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model: cfg.model, max_tokens: 6000, system: RULES.replace(/- Answer only by calling the page_content tool[^\n]*/, "- Answer with JSON only."),
+        messages: [{ role: "user", content: prompt + `\n\nReply with JSON only, no other text, exactly in this shape (same keys, your own content): ${example.slice(0, 4000)}` }] }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.type === "error") throw new Error((j.error && j.error.message) || `AI request failed (${r.status})`);
+    const txt = (j.content || []).filter((c) => c.type === "text").map((c) => c.text).join("");
+    lastRaw = txt.slice(0, 1500);
+    const m = /\{[\s\S]*\}/.exec(txt); if (!m) return pageFromBody({});
+    try { return pageFromBody(normalize(JSON.parse(m[0]))); } catch { return pageFromBody({}); }
   };
   let clean = await once();
   if (!secs.every((s) => written(s, clean[s]))) {
-    const again = await once(); // one more try before telling the team
+    console.log("ai page: empty after tool answer", pkg.name, secs.join(","), lastRaw);
+    let again; try { again = await asJson(); } catch (e) { console.log("ai page json", String(e)); again = await once(); }
     for (const s of secs) if (!written(s, clean[s]) && written(s, again[s])) clean[s] = again[s];
   }
   const empty = secs.filter((s) => !written(s, clean[s]));
-  if (empty.length === secs.length) throw new Error("The AI came back without usable text for this section. Please try again, or add a short instruction.");
+  if (empty.length === secs.length) {
+    console.log("ai page: still empty", pkg.name, secs.join(","), lastRaw);
+    throw new Error("The AI came back without usable text for this section. Please try again, or add a short instruction.");
+  }
   return Object.fromEntries(secs.filter((s) => !empty.includes(s)).map((s) => [s, clean[s]]));
 }
