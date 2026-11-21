@@ -257,12 +257,65 @@ ${box("It can't", "#ffc6b8", c.cant)}
 </section>`;
 }
 
-function testsHTML(p) {
-  const t = p.tests;
+// ---------------- "What's included": every package looks like the Female Fertility page ----------------
+// Tests with no full name / description get them from Admin → Tests (linked tests), and a package written as one plain
+// list is grouped by the tests' categories. Every test gets an icon: the drawn PNGs where we have one, else a line icon by category.
+const nt = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+const PNG = { amh: "/assets/icon4.png", fsh: "/assets/icon1.png", lh: "/assets/icon2.png", prl: "/assets/icon3.png", prolactin: "/assets/icon3.png",
+  t3: "/assets/icon5.png", t4: "/assets/icon6.png", tsh: "/assets/icon7.png" };
+const ICON_PATHS = {
+  hormone: '<circle cx="12" cy="12" r="4"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4M5 5l2.8 2.8M16.2 16.2L19 19M5 19l2.8-2.8M16.2 7.8L19 5"/>',
+  thyroid: '<path d="M7 5c-2.5 1-3.5 4-3 7s2 6 4.5 6 3-2.5 3.5-5h0c.5 2.5 1 5 3.5 5S19.5 15 20 12s-.5-6-3-7c-2-.8-3.5 1-5 3-1.5-2-3-3.8-5-3z"/>',
+  sugar: '<path d="M12 3s6 6.5 6 11a6 6 0 01-12 0c0-4.5 6-11 6-11z"/><path d="M9 14h6M12 11v6"/>',
+  liver: '<path d="M3 9c0-3 3-5 8-5 6 0 10 2 10 5 0 4-4 9-9 9-2 0-3-1-4-2-3-1-5-3-5-7z"/><path d="M11 4v8"/>',
+  kidney: '<path d="M9 3C5 3 3 7 3 11s2 9 6 9c3 0 3-3 2-5-1-1.5-1-3.5 0-5 1-2 1-7-2-7z"/><path d="M15 6c2 0 6 2 6 6s-4 6-6 6"/>',
+  heart: '<path d="M12 20s-8-4.6-8-10.5A4.5 4.5 0 0112 7a4.5 4.5 0 018 2.5C20 15.4 12 20 12 20z"/><path d="M4 12h4l2-3 3 6 2-3h5"/>',
+  vitamin: '<rect x="3" y="9" width="18" height="6" rx="3" transform="rotate(-35 12 12)"/><path d="M10.3 7.7l6 6"/>',
+  blood: '<path d="M12 3s6 6.5 6 11a6 6 0 01-12 0c0-4.5 6-11 6-11z"/><path d="M9.5 15a2.5 2.5 0 002.5 2.5"/>',
+  infection: '<circle cx="12" cy="12" r="5"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5M5 5l3.5 3.5M15.5 15.5L19 19M5 19l3.5-3.5M15.5 8.5L19 5"/>',
+  marker: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5M11 8v6M8 11h6"/>',
+  pregnancy: '<circle cx="12" cy="5" r="2.5"/><path d="M10 9c-1.5 2-1.5 5 0 7v5M14 9c3 1 4 4 2.5 6.5-1 1.5-2.5 2-4.5 1.5"/>',
+  urine: '<path d="M8 3h8M9 3v4l-3 4v8a2 2 0 002 2h8a2 2 0 002-2v-8l-3-4V3"/><path d="M6 14h12"/>',
+  allergy: '<path d="M12 3c3 3 3 6 0 9s-3 6 0 9M7 6c2 2 2 4 0 6M17 12c2 2 2 4 0 6"/>',
+  lab: '<path d="M9 3h6M10 3v6L5 18a2 2 0 002 3h10a2 2 0 002-3l-5-9V3"/><path d="M7.5 14h9"/>',
+};
+const iconKey = (cat, label) => {
+  const t = (String(cat || "") + " " + String(label || "")).toLowerCase();
+  return /thyro|tsh|\bt3\b|\bt4\b/.test(t) ? "thyroid" : /fertil|hormone|estro|estra|progest|testost|cortisol|lh\b|fsh|amh|prolactin/.test(t) ? "hormone"
+    : /diabet|glucose|sugar|hba1c|insulin/.test(t) ? "sugar" : /liver|lft|bilirubin|sgot|sgpt|alt\b|ast\b/.test(t) ? "liver"
+    : /kidney|renal|creatinine|urea|kft|uric/.test(t) ? "kidney" : /heart|lipid|cholest|cardiac|triglycer|crp|apo/.test(t) ? "heart"
+    : /vitamin|mineral|iron|calcium|ferritin|b12|\bd3\b/.test(t) ? "vitamin" : /blood count|cbc|haemo|hemo|platelet|esr|blood group/.test(t) ? "blood"
+    : /infect|hiv|hbsag|hcv|vdrl|viral|dengue|typhoid/.test(t) ? "infection" : /cancer|psa|cea|ca 1|ca-1|ca 12|marker/.test(t) ? "marker"
+    : /pregnan|antenatal|beta hcg|nipt|double|triple/.test(t) ? "pregnancy" : /urine/.test(t) ? "urine" : /allerg|ige/.test(t) ? "allergy" : "lab";
+};
+function enrichTests(t, linked, pkg) {
+  if (!t.groups.length || !linked || !linked.length) return t;
+  const find = (x) => { const a = nt(x.code), b = nt(x.name);
+    return linked.find((l) => [l.code, l.name, ...String(l.also_called || "").split(/[,;/]/)].map(nt).filter(Boolean).some((v) => v === a || v === b))
+      || linked.find((l) => a && a.length > 2 && nt(l.name).includes(a)); };
+  const short = (s) => { s = String(s || "").replace(/\s+/g, " ").trim(); const m = /^(.{20,110}?[.;])(\s|$)/.exec(s); s = m ? m[1] : s;
+    if (s.length > 90) s = s.slice(0, 88).replace(/\s+\S*$/, "") + "…"; return s.replace(/[.;]$/, ""); };
+  const fill = (x) => { const l = find(x); if (!l) return { ...x };
+    const code = x.code || l.code || "", full = String(l.name || "").replace(new RegExp(`\\s*\\(${String(code).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\)\\s*`, "i"), " ").trim();
+    return { ...x, code: code || full, name: x.name || (nt(full) !== nt(code) ? full : ""), desc: x.desc || short(l.purpose), cat: l.category || "" }; };
+  let groups = t.groups.map((g) => ({ ...g, items: g.items.map(fill) }));
+  // one plain group named after the package (an auto-made page): split it by the tests' categories
+  if (groups.length === 1 && nt(groups[0].name) === nt(pkg.name)) {
+    const by = new Map();
+    for (const x of groups[0].items) { const k = x.cat || "Tests"; if (!by.has(k)) by.set(k, []); by.get(k).push(x); }
+    if (by.size > 1 && by.size <= 6) groups = [...by].map(([name, items]) => ({ name, items }));
+    else groups = [{ name: by.size === 1 && [...by.keys()][0] !== "Tests" ? [...by.keys()][0] : groups[0].name, items: groups[0].items }];
+  }
+  return { ...t, groups };
+}
+
+function testsHTML(p, linked, pkg) {
+  const t = enrichTests(p.tests, linked, pkg || {});
   if (!t.groups.length) return "";
   const colors = [["#f3f9fd", "#1f6977"], ["#fdf2ee", "#b23f28"]];
-  const icon = (x, c) => (x.icon ? `<img src="${esc(x.icon)}" alt="" style="width: 52px; height: 40px; object-fit: contain; flex: none">`
-    : `<span aria-hidden="true" style="flex: none; width: 46px; height: 46px; border-radius: 50%; background: #ffffff; color: ${c}; display: inline-flex; align-items: center; justify-content: center; font-family: Archivo, sans-serif; font-weight: 800; font-size: ${String(x.code || x.name).length > 4 ? 12 : 15}px; border: 2px solid ${c}">${esc(String(x.code || x.name).slice(0, 5))}</span>`);
+  const icon = (x, c, g) => { const png = x.icon || PNG[nt(x.code)] || PNG[nt(x.name)];
+    return png ? `<img src="${esc(png)}" alt="" style="width: 52px; height: 40px; object-fit: contain; flex: none">`
+      : `<svg aria-hidden="true" viewBox="0 0 24 24" style="width: 52px; height: 40px; flex: none" fill="none" stroke="${c}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${ICON_PATHS[iconKey(x.cat || g.name, (x.code || "") + " " + (x.name || ""))]}</svg>`; };
   return `<section id="tests" style="padding: 88px 24px">
 <div style="max-width: 1200px; margin: 0 auto">
 ${kicker(t.kicker)}
@@ -271,7 +324,7 @@ ${kicker(t.kicker)}
 ${t.groups.map((g, i) => { const [bg, c] = colors[i % 2]; return `<div style="background: ${bg}; border-radius: 22px; padding: 28px">
 ${g.name ? `<h3 style="margin: 0 0 18px; font-family: Archivo, sans-serif; font-weight: 800; font-size: 20px; letter-spacing: 0.5px; text-transform: uppercase; color: ${c}">${esc(g.name)}</h3>` : ""}
 <div style="display: flex; flex-direction: column; gap: 16px">
-${g.items.map((x) => `<div style="display: flex; align-items: center; gap: 14px">${icon(x, c)}<div><strong style="font-family: Archivo, sans-serif; font-size: 18px">${esc(x.code || x.name)}</strong>${x.code && x.name ? " · " + esc(x.name) : ""}${x.desc ? `<br><span style="color: #3b4a68; font-size: 15px">${esc(x.desc)}</span>` : ""}</div></div>`).join("\n")}
+${g.items.map((x) => `<div style="display: flex; align-items: center; gap: 14px">${icon(x, c, g)}<div><strong style="font-family: Archivo, sans-serif; font-size: 18px">${esc(x.code || x.name)}</strong>${x.code && x.name ? " · " + esc(x.name) : ""}${x.desc ? `<br><span style="color: #3b4a68; font-size: 15px">${esc(x.desc)}</span>` : ""}</div></div>`).join("\n")}
 </div>
 </div>`; }).join("\n")}
 </div>
@@ -342,7 +395,7 @@ export async function renderPackagePage(env, req, pkg, page, opts = {}) {
   const base = await env.ASSETS.fetch(new Request(new URL("/", req.url), { method: "GET" }));
   if (!base.ok) return base;
   const fasting = isFasting(pkg, p);
-  const body = [heroHTML(p, pkg), questionsHTML(p), storiesHTML(p), canHTML(p), testsHTML(p), precautionsHTML(p), HOW(fasting), faqHTML(p)].filter(Boolean).join("\n\n");
+  const body = [heroHTML(p, pkg), questionsHTML(p), storiesHTML(p), canHTML(p), testsHTML(p, opts.linked, pkg), precautionsHTML(p), HOW(fasting), faqHTML(p)].filter(Boolean).join("\n\n");
   const has = { "#questions": !!p.questions.items.length, "#tests": !!p.tests.groups.length, "#timing": !!(p.precautions.items.length || p.precautions.note), "#faq": !!p.faq.items.length };
   const title = p.seo.title || `${pkg.name} at Home – ${rs(pkg.price)} | Dr. Sarwan Diagnostic Labs`;
   const desc = p.seo.description || `${pkg.name} with home sample collection and e-report. Call 8368143677.`;

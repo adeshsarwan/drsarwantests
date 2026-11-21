@@ -1274,11 +1274,14 @@ async function adminPackages(env, staff) {
 }
 
 // ---- website: "/" = trust-first home page + package cards; /package/<slug> = a package page (Admin → Packages → "Edit page") ----
+// the package's linked tests from Admin → Tests – they fill in names, descriptions and groups in "What's included"
+const linkedTests = (env, pid) => env.DB.prepare("SELECT t.name, t.code, t.also_called, t.category, t.purpose FROM package_tests pt JOIN lab_tests t ON t.id = pt.test_id WHERE pt.package_id=?1 ORDER BY pt.sort")
+  .bind(pid).all().then((r) => r.results).catch(() => []);
 async function sitePage(env, req, url, slug) {
   const pkg = await env.DB.prepare("SELECT * FROM packages WHERE slug=?1 AND active=1 AND page_live=1 AND page IS NOT NULL").bind(slug).first();
   if (!pkg) return null;
   let page; try { page = JSON.parse(pkg.page); } catch { return null; }
-  return renderPackagePage(env, req, pkg, page, { canonical: `https://drsarwantests.com/package/${pkg.slug}`, formPrice: testPrice(env, pkg).price });
+  return renderPackagePage(env, req, pkg, page, { canonical: `https://drsarwantests.com/package/${pkg.slug}`, formPrice: testPrice(env, pkg).price, linked: await linkedTests(env, pkg.id) });
 }
 async function homeContent(env) {
   const r = await env.DB.prepare("SELECT v FROM settings WHERE k='home_page'").first();
@@ -1329,7 +1332,7 @@ async function adminPreviewPage(env, req, id) {
   const b = await req.json().catch(() => ({}));
   const pkg = await env.DB.prepare("SELECT * FROM packages WHERE id=?1").bind(id).first();
   if (!pkg) return bad("Package not found", 404);
-  const res = await renderPackagePage(env, req, pkg, b.page || {}, { preview: true, canonical: `https://drsarwantests.com/package/${pkg.slug || slugify(pkg.name)}` });
+  const res = await renderPackagePage(env, req, pkg, b.page || {}, { preview: true, canonical: `https://drsarwantests.com/package/${pkg.slug || slugify(pkg.name)}`, linked: await linkedTests(env, pkg.id) });
   return new Response(await res.text(), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
 }
 async function adminAiPage(env, req, id) {
