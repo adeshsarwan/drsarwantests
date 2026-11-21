@@ -1423,11 +1423,17 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
 <td style="white-space:nowrap">${x.date ? fmtD(x.date) + '<br><span class="meta">' + esc(x.slotLabel) + '</span>' : '—'}</td>
 <td><span class="pill" style="margin:0;color:${fg};background:${bg}">${lbl}</span>${x.paid_later ? '<br><span class="meta" style="color:#17694a;font-weight:700">✓ paid later</span>' : ''}${x.method ? `<br><span class="meta">${esc(x.method)}</span>` : ''}</td>
 <td style="max-width:260px">${esc(x.reason || '')}${x.payment_id ? `<br><span class="meta">${esc(x.payment_id)}</span>` : ''}</td>
-<td style="white-space:nowrap">${x.status !== 'success' && x.request_id && !x.paid_later ? `<button type="button" class="btn ghost sm" data-act="pay-check" data-pid="${x.id}">Check again</button> ` : ''}${wa && x.status !== 'success' && !x.paid_later ? `<a class="btn wa sm" href="${wa}" target="_blank" rel="noopener">WhatsApp</a>` : ''}${x.status === 'success' || x.paid_later ? `<button type="button" class="btn ghost sm" data-act="open" data-id="${esc(x.booking_id)}">Open booking</button>` : ''}${x.status === 'success' && x.token ? ` <a class="btn ghost sm" href="/receipt/${encodeURIComponent(x.booking_id)}?t=${encodeURIComponent(x.token)}" target="_blank" rel="noopener">Receipt</a>` : ''}</td></tr>`;
+<td style="white-space:nowrap">${x.status !== 'success' && x.request_id && !x.paid_later ? `<button type="button" class="btn ghost sm" data-act="pay-check" data-pid="${x.id}">Check again</button> ` : ''}${wa && x.status !== 'success' && !x.paid_later ? `<a class="btn wa sm" href="${wa}" target="_blank" rel="noopener">WhatsApp</a>` : ''}${x.status === 'success' || x.paid_later ? `<button type="button" class="btn ghost sm" data-act="open" data-id="${esc(x.booking_id)}">Open booking</button>` : ''}${x.status === 'success' && x.token ? ` <a class="btn ghost sm" href="/receipt/${encodeURIComponent(x.booking_id)}?t=${encodeURIComponent(x.token)}" target="_blank" rel="noopener">Receipt</a>` : ''}${ME && ME.role === 'admin' && x.status !== 'success' && !x.paid_later ? ` <button type="button" class="btn ghost sm warn-t" data-act="pay-del" data-pid="${x.id}" title="Remove this unpaid attempt (e.g. a test)">Remove</button>` : ''}</td></tr>`;
     }).join('') : `<tr><td colspan="8" class="meta" style="padding:18px">${f === 'problem' ? 'No failed or unfinished payments 🎉' : 'Nothing here.'}</td></tr>`;
   }
   $('#payFilter').onchange = renderPays;
   $('#payDays').onchange = () => loadPays().catch((e) => toast(e.message));
+  async function payDel(id) {
+    const x = PAYS && PAYS.payments.find((y) => y.id === id); if (!x) return;
+    if (!confirm(`Remove this unpaid attempt${x.name ? ` by ${x.name}` : ''}${x.booking_id ? ` (${x.booking_id})` : ''}? Its unpaid booking is removed too. This can't be undone.`)) return;
+    try { await api(`/api/admin/payments/${id}`, { method: 'DELETE' }); toast('Payment attempt removed'); await loadPays(); }
+    catch (e) { toast(e.message); }
+  }
   async function payCheck(id, btn) {
     btn.disabled = true; btn.textContent = 'Checking…';
     try {
@@ -2381,6 +2387,7 @@ ${t.meta !== false ? `<button type="button" class="btn ghost sm" data-act="wa-su
     else if (a === 'user-genpw') { $('#uPw').value = genPw(); }
     else if (a === 'pkg-edit') openPkg(Number(el.dataset.pid));
     else if (a === 'pay-check') payCheck(Number(el.dataset.pid), el);
+    else if (a === 'pay-del') payDel(Number(el.dataset.pid));
     else if (a === 'move') { const b = findB(id); if (b) openForm('move', b); }
     else if (a === 'add') openForm('add', { date: el.dataset.date || (tab === 'calendar' ? cal.anchor : ist()), slot: el.dataset.slot });
     else if (a === 'block') block(el.dataset.date, el.dataset.slot, true);

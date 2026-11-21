@@ -867,6 +867,20 @@ ${adj ? `<tr><td>${adj < 0 ? "Discount" : "Adjustment"}</td><td class="n">${adj 
 
 // Admin only: remove a booking for good (test or fake data) – with its tests, payments, receipt, messages, reports and
 // history. Its patient login goes too if the patient has no other booking. Real bookings should be cancelled instead.
+// Admin → Payments → Remove: an unpaid attempt (test / mistake). Its booking goes too when nothing was ever paid on it.
+async function adminDeletePayment(env, req, pid) {
+  const st = STAFF.get(req);
+  if (st && st.role !== "admin") return bad("Only an admin can remove a payment attempt.", 403);
+  const p = await env.DB.prepare("SELECT p.id, p.status, p.booking_id, b.status AS booking_status FROM payments p LEFT JOIN bookings b ON b.id = p.booking_id WHERE p.id=?1").bind(pid).first();
+  if (!p) return bad("Payment attempt not found", 404);
+  if (p.status === "success" || HOLDING.includes(p.booking_status)) return bad("This booking was paid – it can't be removed from here. Use the booking's Delete instead.", 409);
+  const paidElsewhere = await env.DB.prepare("SELECT 1 FROM payments WHERE booking_id=?1 AND id!=?2 AND status='success' LIMIT 1").bind(p.booking_id, pid).first();
+  await env.DB.prepare("DELETE FROM payments WHERE id=?1").bind(pid).run();
+  if (p.booking_status && !paidElsewhere && !(await env.DB.prepare("SELECT 1 FROM payments WHERE booking_id=?1 LIMIT 1").bind(p.booking_id).first()))
+    await adminDeleteBooking(env, req, p.booking_id);
+  console.log("payment attempt removed", pid, p.booking_id, st ? st.name : "admin");
+  return json({ ok: true });
+}
 async function adminDeleteBooking(env, req, id) {
   const st = STAFF.get(req);
   if (st && st.role !== "admin") return bad("Only an admin can delete a booking.", 403);
@@ -4499,6 +4513,7 @@ export default {
           m = p.match(/^\/api\/admin\/bookings\/(DSL-[A-Z0-9]{6})\/cancel-centre$/);
           if (m && req.method === "POST") return adminCancelCentre(env, req, m[1]);
           if (p === "/api/admin/payments" && req.method === "GET") return adminPayments(env, url);
+          { const dp = p.match(/^\/api\/admin\/payments\/(\d{1,9})$/); if (dp && req.method === "DELETE") return adminDeletePayment(env, req, Number(dp[1])); }
           m = p.match(/^\/api\/admin\/payments\/(\d{1,9})\/check$/);
           if (m && req.method === "POST") return adminPaymentCheck(env, Number(m[1]));
           if (p === "/api/admin/review" && req.method === "GET") return adminReview(env);
