@@ -169,9 +169,9 @@ export function renderHome(home, pkgs, opts = {}) {
     // card copy from Admin → Packages → Edit → Website card, falling back to the package page's hero
     const line = p.card_text || hero.subtitle || p.tests || "";
     const tag = p.target || (hero.kicker ? String(hero.kicker).split("·")[0].trim() : "Home collection");
-    const headline = p.card_headline || String(hero.headline || p.name).replace(/\[|\]/g, "");
-    const points = String(p.card_points || "").split("\n").map((x) => x.trim()).filter(Boolean).slice(0, 4);
-    return `<article style="background: #ffffff; border: 1px solid #e1e8ee; border-radius: 18px; padding: 24px; display: flex; flex-direction: column; gap: 12px">
+    const headline = String(p.card_headline || String(hero.headline || p.name).replace(/\[|\]/g, "")).replace(/^[\s•\-*·]+/, "");
+    const points = String(p.card_points || "").split("\n").map((x) => x.replace(/^[\s•\-*·]+/, "").trim()).filter(Boolean).slice(0, 4);
+    return `<article class="pk-card" style="background: #ffffff; border: 1px solid #e1e8ee; border-radius: 18px; padding: 24px; display: flex; flex-direction: column; gap: 12px">
 <span style="align-self: flex-start; font-size: 12.5px; font-weight: 800; color: #1f6977; background: #e6f3f1; border-radius: 999px; padding: 3px 10px">${esc(tag)}</span>
 <h3 style="margin: 0; font-family: Archivo, sans-serif; font-weight: 800; font-size: 21px; line-height: 1.2">${esc(headline)}</h3>
 <p style="margin: 0; color: #3b4a68; line-height: 1.5; font-size: 15px">${esc(line)}</p>
@@ -218,6 +218,15 @@ a{color:#1f6977}a:hover{color:#164e59}
 details{border-bottom:1px solid #e1e8ee;padding:18px 0}summary{cursor:pointer;font-weight:700;font-size:17px;list-style:none;display:flex;justify-content:space-between;gap:16px}
 summary::-webkit-details-marker{display:none}summary::after{content:"+";color:#1f6977;font-size:22px;line-height:1}details[open] summary::after{content:"–"}
 .mbar{display:none}
+.pk-track{display:flex;gap:18px;overflow-x:auto;scroll-snap-type:x mandatory;scroll-behavior:smooth;padding:4px 2px 8px;scrollbar-width:none;outline:none}
+.pk-track::-webkit-scrollbar{display:none}
+.pk-card{flex:0 0 calc((100% - 36px) / 3);scroll-snap-align:start;min-width:0}
+.pk-nav{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:18px}
+.pk-btn{width:44px;height:44px;border-radius:50%;border:1.5px solid #1f6977;background:#fff;color:#1f6977;font-size:26px;line-height:1;cursor:pointer;display:grid;place-items:center;padding:0 0 3px}
+.pk-btn:disabled{opacity:.3;cursor:default}.pk-btn:not(:disabled):hover{background:#1f6977;color:#fff}
+.pk-dots{display:flex;gap:6px}.pk-dots i{width:8px;height:8px;border-radius:999px;background:#c9d5dd;transition:all .2s}.pk-dots i.on{width:22px;background:#1f6977}
+@media (max-width:980px){.pk-card{flex-basis:calc((100% - 18px) / 2)}}
+@media (max-width:640px){.pk-card{flex-basis:86%}}
 @media (max-width:980px){.g4{grid-template-columns:repeat(2,minmax(0,1fr))}.g6{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media (max-width:760px){.navlink{display:none !important}.hero-h{font-size:36px !important}.g2,.g3{grid-template-columns:1fr}.stats{grid-template-columns:1fr 1fr}
 .stats>div:nth-child(3){border-left:0}.stats>div:nth-child(n+3){border-top:1px solid rgba(255,255,255,.2)}h2{font-size:28px !important}}
@@ -313,7 +322,10 @@ ${reportDemo.map(([n, v, pos, out]) => `<div style="display: grid; grid-template
 <section id="packages" aria-labelledby="pk-h" style="background: #f4f7fa">
 <div style="${WRAP}; display: flex; flex-direction: column; gap: 28px">
 ${head("Health packages", h.packages.title || "Health packages", h.packages.intro, "pk-h")}
-${cards ? `<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 18px">\n${cards}\n</div>`
+${cards ? `<div class="pk-car" data-n="${pkgs.length}">
+<div class="pk-track" id="pkTrack" tabindex="0" aria-label="Health packages – scroll for more">\n${cards}\n</div>
+<div class="pk-nav"><button type="button" class="pk-btn" data-dir="-1" aria-label="Previous packages">‹</button><div class="pk-dots" aria-hidden="true"></div><button type="button" class="pk-btn" data-dir="1" aria-label="More packages">›</button></div>
+</div>`
   : '<p style="margin: 0; color: #3b4a68">Our packages are being updated. Please call <a href="tel:8368143677">8368143677</a> to book.</p>'}
 </div>
 </section>
@@ -382,6 +394,18 @@ ${h.faq.items.map((x) => `<details><summary>${esc(x.q)}</summary><p style="margi
 <a href="#packages" style="min-height: 46px; display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; background: #c2410c; color: #ffffff; text-decoration: none; font-weight: 700">Book test</a>
 </div>
 </div>
+<script>
+(function(){var t=document.getElementById("pkTrack");if(!t)return;var car=t.parentNode,dots=car.querySelector(".pk-dots"),bs=car.querySelectorAll(".pk-btn");
+function per(){var c=t.querySelector(".pk-card");return c?Math.max(1,Math.round(t.clientWidth/(c.getBoundingClientRect().width+18))):1}
+function pages(){return Math.max(1,Math.ceil(t.children.length/per()))}
+function step(){var c=t.querySelector(".pk-card");return c?(c.getBoundingClientRect().width+18)*per():t.clientWidth}
+function upd(){var n=pages(),i=Math.round(t.scrollLeft/step());if(dots.children.length!==n){dots.innerHTML=new Array(n+1).join("<i></i>")}
+for(var k=0;k<dots.children.length;k++)dots.children[k].className=k===Math.min(i,n-1)?"on":"";
+bs[0].disabled=t.scrollLeft<4;bs[1].disabled=t.scrollLeft+t.clientWidth>=t.scrollWidth-4;car.querySelector(".pk-nav").style.display=n>1?"":"none"}
+bs.forEach(function(b){b.addEventListener("click",function(){t.scrollBy({left:step()*Number(b.dataset.dir),behavior:"smooth"})})});
+t.addEventListener("keydown",function(e){if(e.key==="ArrowRight"||e.key==="ArrowLeft"){e.preventDefault();t.scrollBy({left:step()*(e.key==="ArrowRight"?1:-1),behavior:"smooth"})}});
+var r;t.addEventListener("scroll",function(){cancelAnimationFrame(r);r=requestAnimationFrame(upd)},{passive:true});window.addEventListener("resize",upd);upd()})();
+</script>
 </body>
 </html>`;
 }
