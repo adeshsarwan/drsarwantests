@@ -296,7 +296,9 @@ function enrichTests(t, linked, pkg) {
   const short = (s) => { s = String(s || "").replace(/\s+/g, " ").trim(); const m = /^(.{20,110}?[.;])(\s|$)/.exec(s); s = m ? m[1] : s;
     if (s.length > 90) s = s.slice(0, 88).replace(/\s+\S*$/, "") + "…"; return s.replace(/[.;]$/, ""); };
   const fill = (x) => { const l = find(x); if (!l) return { ...x };
-    const code = x.code || l.code || "", full = String(l.name || "").replace(new RegExp(`\\s*\\(${String(code).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\)\\s*`, "i"), " ").trim();
+    // auto-made items (only a short name): show the catalogue's code, e.g. "PRL · Prolactin"; hand-written items keep their code
+    const code = (!x.name && l.code) || x.code || l.code || "";
+    const full = String(l.name || "").replace(/\s*\(([^)]*)\)\s*/g, (m, inner) => ([nt(code), nt(x.code)].includes(nt(inner)) ? " " : m)).trim();
     return { ...x, code: code || full, name: x.name || (nt(full) !== nt(code) ? full : ""), desc: x.desc || short(l.purpose), cat: l.category || "" }; };
   let groups = t.groups.map((g) => ({ ...g, items: g.items.map(fill) }));
   // one plain group named after the package (an auto-made page): split it by the tests' categories
