@@ -37,7 +37,9 @@ Unpaid bookings never block a slot and are marked expired after 2 hours.
   OAuth app keys also work instead of the first two: `INSTAMOJO_CLIENT_ID`, `INSTAMOJO_CLIENT_SECRET`. Optional plain variable `INSTAMOJO_ENV=test` for the sandbox (test.instamojo.com) – remove it to go live.
 
 ## Package pages
-- The home page (`/`) tells our story (timeline since 2015, NABL / CGHS) and then shows a card for every package with a published page.
+- The home page (`/`) is a trust-first brand page: NABL / CGHS / ISO card (with certificate links), numbers strip, "Why DSL" promises
+  (accredited, accurate, hygienic, safety, doorstep pickup, coverage, fast, affordable), the sample journey, smart report, a card for every package
+  with a published page, coverage, promises and FAQ.
   Edit it in **Admin → Packages → Edit home page**.
 - Every package has a web page at `drsarwantests.com/package/<slug>` (old `/test/<slug>` links redirect there) with the same layout as the home page. **Admin → Packages → Edit page**
   opens a separate editor: hero (main question, button, price from the package), *Which question brought you here*, stories (current conversations,

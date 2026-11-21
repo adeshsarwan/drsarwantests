@@ -2,7 +2,7 @@
 // Cloudflare Worker + D1. Static site is served from ./public via the ASSETS binding.
 import "../public/shared/msgs.js"; // WhatsApp message texts, shared with the admin page
 import { imConfigured, imApi, imIsTest, imCreateRequest, imGetRequest, imGetPayment, imPaymentOk, imMacOk } from "./instamojo.js";
-import { renderHome, homeFromBody, HOME_DEFAULT } from "./home.js";
+import { renderHome, homeFromBody, homeOrDefault, HOME_DEFAULT } from "./home.js";
 import { renderPackagePage, pageFromBody, defaultPageFor, slugify, aiGeneratePage, PAGE_SECTIONS, HORMONE_PAGE } from "./pages.js";
 const M = globalThis.DSLMsg;
 
@@ -1271,7 +1271,7 @@ async function adminPackages(env, staff) {
   return json({ packages: results });
 }
 
-// ---- website: "/" = our story + package cards; /package/<slug> = a package page (Admin → Packages → "Edit page") ----
+// ---- website: "/" = trust-first home page + package cards; /package/<slug> = a package page (Admin → Packages → "Edit page") ----
 async function sitePage(env, req, url, slug) {
   const pkg = await env.DB.prepare("SELECT * FROM packages WHERE slug=?1 AND active=1 AND page_live=1 AND page IS NOT NULL").bind(slug).first();
   if (!pkg) return null;
@@ -1280,7 +1280,7 @@ async function sitePage(env, req, url, slug) {
 }
 async function homeContent(env) {
   const r = await env.DB.prepare("SELECT v FROM settings WHERE k='home_page'").first();
-  try { return r && r.v ? JSON.parse(r.v) : HOME_DEFAULT; } catch { return HOME_DEFAULT; }
+  try { return homeOrDefault(r && r.v ? JSON.parse(r.v) : null); } catch { return HOME_DEFAULT; }
 }
 const livePackages = (env) => env.DB.prepare("SELECT name, slug, price, mrp, tests, page FROM packages WHERE active=1 AND page_live=1 AND page IS NOT NULL AND slug IS NOT NULL ORDER BY is_default DESC, sort, id").all().then((r) => r.results);
 async function homePage(env, home, preview) {
@@ -4526,7 +4526,7 @@ export default {
         }
         return bad("Not found", 404);
       }
-      // website: "/" = our story + packages, /package/<slug> = a published package page (old /package/<slug> links move there)
+      // website: "/" = trust-first home page + packages, /package/<slug> = a published package page (old /package/<slug> links move there)
       const old = p.match(/^\/test\/([a-z0-9-]{1,80})\/?$/);
       if (old) return Response.redirect(new URL(`/package/${old[1]}${url.search}`, req.url).toString(), 301);
       const rc = p.match(/^\/receipt\/(DSL-[A-Za-z0-9]{1,20})\/?$/);
