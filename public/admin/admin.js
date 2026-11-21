@@ -1132,7 +1132,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
 <td class="num">${p.mrp ? money(p.mrp) : '—'}</td>
 <td class="num"><b>${money(p.price)}</b></td>
 <td class="num">${p.margin != null ? money(p.margin) : '—'}</td>
-<td>${esc(p.target || '—')}</td>
+<td class="tg-cell">${p.card_headline ? `<b>${esc(p.card_headline)}</b>` : ''}${p.target ? `<small>${esc(p.target)}</small>` : ''}${!p.card_headline && !p.target ? '<span class="meta">—</span>' : ''}</td>
 <td class="num">${p.bookings || 0}</td>
 <td>${p.is_default ? '<span class="badge web">Website test</span>' : ''}<span class="badge ${p.active ? 'on' : 'off'}">${p.active ? 'Active' : 'Hidden'}</span></td>
 <td class="pg-cell">${p.page_live && p.active ? `<a class="pg-live" href="/package/${esc(p.slug)}" target="_blank" rel="noopener" title="Open the live page">● Live page</a>` : p.has_page ? '<span class="pg-draft">Draft page</span>' : '<span class="pg-none">No page yet</span>'}<a class="pg-edit" href="#page/${p.id}">Edit page →</a></td>
@@ -1346,6 +1346,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     $('#pName').value = p ? p.name : '';
     $('#pPrice').value = p ? p.price : ''; $('#pMrp').value = p && p.mrp != null ? p.mrp : '';
     $('#pMargin').value = p && p.margin != null ? p.margin : ''; $('#pTarget').value = p ? p.target || '' : '';
+    $('#pCardH').value = p ? p.card_headline || '' : ''; $('#pCardT').value = p ? p.card_text || '' : ''; $('#pCardP').value = p ? p.card_points || '' : ''; $('#pCardIns').value = '';
     $('#pPrep').value = p ? p.prep || '' : '• Our phlebotomist will call you before arriving';
     $('#pActive').checked = p ? !!p.active : true; $('#pDefault').checked = p ? !!p.is_default : false;
     $('#pkgDel').hidden = !p;
@@ -1360,7 +1361,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
   $('#pkgForm').onsubmit = async (e) => {
     e.preventDefault(); $('#pkgErr').textContent = '';
     if (!pkPick.length && !confirm('No tests picked for this package. Save it anyway?')) return;
-    const body = { name: $('#pName').value, test_ids: pkPick, price: $('#pPrice').value, mrp: $('#pMrp').value, margin: $('#pMargin').value, target: $('#pTarget').value, prep: $('#pPrep').value, active: $('#pActive').checked, is_default: $('#pDefault').checked };
+    const body = { name: $('#pName').value, test_ids: pkPick, price: $('#pPrice').value, mrp: $('#pMrp').value, margin: $('#pMargin').value, target: $('#pTarget').value, card_headline: $('#pCardH').value, card_text: $('#pCardT').value, card_points: $('#pCardP').value, prep: $('#pPrep').value, active: $('#pActive').checked, is_default: $('#pDefault').checked };
     $('#pkgSave').disabled = true;
     try {
       await post(pkgEditing ? `/api/admin/packages/${pkgEditing}` : '/api/admin/packages', body);
@@ -1368,6 +1369,17 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
       await loadPkgs(); if (LT) loadLabTests(true).catch(() => {});
     } catch (err) { $('#pkgErr').textContent = err.message; }
     finally { $('#pkgSave').disabled = false; }
+  };
+  $('#pCardAi').onclick = async () => {
+    const btn = $('#pCardAi'); $('#pkgErr').textContent = '';
+    if (($('#pCardH').value || $('#pCardT').value) && !confirm('Replace the headline, sub-text and questions with a new AI draft?')) return;
+    btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Writing…';
+    try {
+      const r = await post('/api/admin/packages/card-ai', { name: $('#pName').value, target: $('#pTarget').value, test_ids: pkPick, instructions: $('#pCardIns').value });
+      $('#pCardH').value = r.card_headline || ''; $('#pCardT').value = r.card_text || ''; $('#pCardP').value = r.card_points || '';
+      toast('Draft written – check it, then Save package');
+    } catch (err) { $('#pkgErr').textContent = err.message; }
+    finally { btn.disabled = false; btn.textContent = '✨ Write with AI'; }
   };
   $('#pkgDel').onclick = async () => {
     const p = PKGS.find((x) => x.id === pkgEditing); if (!p) return;

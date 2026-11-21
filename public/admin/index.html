@@ -86,7 +86,7 @@
 <div style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn ghost sm" href="#home" style="align-self:center">Edit home page</a><input id="pkgSearch" class="inp" type="search" placeholder="Search packages…" aria-label="Search packages"><button class="btn sm" data-act="pkg-add">+ Add package</button></div>
 </div>
 <div class="tbl-wrap"><table class="tbl pkg-t">
-<thead><tr><th>Test / package</th><th style="text-align:center">Tests</th><th style="text-align:center">Before test</th><th class="num">MRP</th><th class="num">Price</th><th class="num">Margin</th><th>Target</th><th class="num">Active bookings</th><th>Status</th><th>Web page</th><th></th></tr></thead>
+<thead><tr><th>Test / package</th><th style="text-align:center">Tests</th><th style="text-align:center">Before test</th><th class="num">MRP</th><th class="num">Price</th><th class="num">Margin</th><th>Target / website card</th><th class="num">Active bookings</th><th>Status</th><th>Web page</th><th></th></tr></thead>
 <tbody id="pkgBody"></tbody>
 </table></div>
 <p class="meta" id="pkgCount" style="margin:10px 0 0"></p>
@@ -362,7 +362,14 @@
 <div class="fld"><label for="pMrp">MRP (₹, optional)</label><input id="pMrp" name="mrp" class="inp" inputmode="numeric" autocomplete="off"></div>
 <div class="fld"><label for="pMargin">Margin (₹, private)</label><input id="pMargin" name="margin" class="inp" inputmode="numeric" autocomplete="off"></div>
 <div class="fld wide"><label for="pPrep">Before the test <span class="meta">(sent in the WhatsApp confirmation &amp; reminder)</span></label><textarea id="pPrep" name="prep" class="inp ta" rows="4" placeholder="• Fast for 10–12 hours overnight (water is fine)&#10;• Our phlebotomist will call you before arriving"></textarea><span class="meta">One instruction per line. Leave empty to send none.</span></div>
-<div class="fld"><label for="pTarget">Target (optional)</label><input id="pTarget" name="target" class="inp" autocomplete="off" placeholder="e.g. 50 / month"></div>
+<fieldset class="fld wide pk-card"><legend>Website card <span class="meta">– how this package appears on the home page</span></legend>
+<div class="fld wide"><label for="pTarget">Target – who it's for</label><input id="pTarget" name="target" class="inp" autocomplete="off" placeholder="e.g. Women 20–40 with irregular periods or trying to conceive"><span class="meta">Shown as the small label on the card, and given to the AI.</span></div>
+<div class="fld wide"><label for="pCardH">Headline – the patient's question</label><input id="pCardH" name="card_headline" class="inp" autocomplete="off" maxlength="120" placeholder="e.g. Dieting and gym, but still gaining weight?"></div>
+<div class="fld wide"><label for="pCardT">Sub-text</label><textarea id="pCardT" name="card_text" class="inp ta" rows="2" maxlength="300" placeholder="One line on what this package checks, from one home sample"></textarea></div>
+<div class="fld wide"><label for="pCardP">Questions it answers <span class="meta">(one per line, up to 4)</span></label><textarea id="pCardP" name="card_points" class="inp ta" rows="3" placeholder="Is my thyroid slowing my metabolism?&#10;Could it be insulin resistance?"></textarea></div>
+<div class="pk-ai"><input id="pCardIns" class="inp" autocomplete="off" placeholder="Tell the AI something (optional)" aria-label="Instructions for the AI"><button type="button" class="btn sm ai" id="pCardAi">✨ Write with AI</button></div>
+<span class="meta">Empty fields fall back to the package page's headline. Cards show for packages with a published page.</span>
+</fieldset>
 <label class="fld wide chk"><span><input type="checkbox" id="pActive" name="active" checked> <b>Active</b> – can be booked</span></label>
 <label class="fld wide chk"><span><input type="checkbox" id="pDefault" name="is_default"> <b>Website package</b> – the package sold on the booking page</span></label>
 </div>
