@@ -1,5 +1,5 @@
 // Admin → Packages → "Edit page": the web page of one package (/package/<slug>), section by section, with AI writing.
-// Also "Edit home page" (address #home): our story timeline, numbers and texts of drsarwantests.com.
+// Also "Edit home page" (address #home): accreditations, promises, steps, FAQ and texts of drsarwantests.com.
 // Its own screen (address #page/<id> or #home) so it doesn't mix with the booking admin.
 (function () {
   'use strict';
@@ -42,16 +42,30 @@
   const AI_SECTIONS = SEC.map((x) => x.key);
   const HOME_SEC = [
     { key: 'hero', title: 'Top of the home page', help: 'The first thing visitors see on drsarwantests.com.',
-      fields: [['badge', 'Small label', 'text', 'e.g. Since 2015'], ['title', 'Main heading', 'ta'], ['text', 'Text under the heading', 'ta'], ['cta', 'Button text', 'text', 'Scrolls to the packages']] },
-    { key: 'stats', title: 'Numbers / badges', help: 'The boxes beside the heading (NABL, CGHS, years, centres…). Only write numbers you can stand behind.',
-      fields: [], list: { path: 'stats', label: 'Box', fields: [['big', 'Big text', 'text', 'e.g. NABL, 25+, 2015'], ['small', 'Small text', 'text']] } },
-    { key: 'story', title: 'Our journey – timeline', help: 'Milestones from 2015 to today, left to right. Leave the year empty to show a dot instead.',
-      fields: [['title', 'Heading', 'text'], ['intro', 'Intro line', 'ta']],
-      list: { key: 'items', label: 'Milestone', fields: [['year', 'Year', 'text', 'e.g. 2015, 2019, Today'], ['title', 'Title', 'text'], ['text', 'Text', 'ta']] } },
+      fields: [['badge', 'Small label', 'text', 'e.g. NABL accredited · CGHS approved · Since 2015'], ['title', 'Main heading', 'ta'], ['text', 'Text under the heading', 'ta'], ['cta', 'Button text', 'text', 'Scrolls to the packages'],
+        ['chips', 'Small chips', 'csv', 'Comma separated, e.g. Home sample collection, Reports on WhatsApp']] },
+    { key: 'creds', title: 'Accreditations – NABL, CGHS, ISO', help: 'The card beside the heading. Add the certificate link so visitors can check it – the strongest trust signal on the page.',
+      fields: [['title', 'Card heading', 'text']],
+      list: { key: 'items', label: 'Accreditation', fields: [['name', 'Badge text', 'text', 'e.g. NABL (max 8 letters)'], ['title', 'Title', 'text'], ['text', 'Line under it', 'text'], ['url', 'Certificate link', 'text', 'e.g. /assets/nabl.pdf – leave empty to hide']] } },
+    { key: 'stats', title: 'Numbers strip', help: 'The coloured strip under the top. Only write numbers you can stand behind.',
+      fields: [], list: { path: 'stats', label: 'Box', fields: [['big', 'Big text', 'text', 'e.g. Since 2015, 50,000+'], ['small', 'Small text', 'text']] } },
+    { key: 'pillars', title: 'Why DSL – our promises', help: 'Cards such as Accredited, Accurate, Hygienic, Safety, Doorstep pickup, Wide coverage, Fast, Affordable. The icon is picked from the tag.',
+      fields: [['kicker', 'Small label', 'text'], ['title', 'Heading', 'text'], ['intro', 'Intro line', 'ta']],
+      list: { key: 'items', label: 'Promise', fields: [['tag', 'Tag', 'text', 'e.g. Hygienic'], ['title', 'Title', 'text'], ['text', 'Text', 'ta']] } },
+    { key: 'steps', title: 'How it works – sample journey', help: 'Numbered steps from booking to report.',
+      fields: [['kicker', 'Small label', 'text'], ['title', 'Heading', 'text'], ['intro', 'Intro line', 'ta']],
+      list: { key: 'items', label: 'Step', fields: [['title', 'Title', 'text'], ['text', 'Text', 'ta']] } },
+    { key: 'report', title: 'Smart report', help: 'How reports look and how patients open them. A sample report picture is shown beside it.',
+      fields: [['kicker', 'Small label', 'text'], ['title', 'Heading', 'text'], ['text', 'Text', 'ta']],
+      list: { key: 'points', label: 'Point', fields: [['title', 'Title', 'text'], ['text', 'Text', 'ta']] } },
     { key: 'packages', title: 'Packages section', help: 'The cards come by themselves from every package with a published page (Packages → Edit page → Publish).',
       fields: [['title', 'Heading', 'text'], ['intro', 'Intro line', 'ta']] },
-    { key: 'features', title: 'Why us – three points', help: 'Short points under the packages.',
-      fields: [], list: { path: 'features', label: 'Point', fields: [['title', 'Title', 'text'], ['text', 'Text', 'ta']] } },
+    { key: 'coverage', title: 'Coverage – cities', help: 'Where you collect samples. Only list cities you really serve.',
+      fields: [['kicker', 'Small label', 'text'], ['title', 'Heading', 'text'], ['text', 'Text', 'ta'], ['cities', 'Cities', 'csv', 'Comma separated']] },
+    { key: 'promises', title: 'Money, privacy & changes', help: 'Short honest promises; links to the refund, privacy and terms pages are added below them.',
+      fields: [['title', 'Heading', 'text']], list: { key: 'items', label: 'Promise', fields: [['title', 'Title', 'text'], ['text', 'Text', 'ta']] } },
+    { key: 'faq', title: 'FAQ', help: 'Questions people ask before booking. Also shown to Google as FAQ results.',
+      fields: [['title', 'Heading', 'text']], list: { key: 'items', label: 'Question', fields: [['q', 'Question', 'text'], ['a', 'Answer', 'ta']] } },
     { key: 'seo', title: 'Google', help: 'Title and description Google shows for the home page.',
       fields: [['title', 'Page title (Google)', 'text', 'Under 65 characters'], ['description', 'Description (Google)', 'ta', 'Under 155 characters']] },
   ];
@@ -93,14 +107,14 @@ ${x.after ? `<div class="pe-grid">${x.after.map((f) => field(x.key, f)).join('')
 ${x.list2 ? listHTML(`${x.key}.${x.list2.key}`, x.list2) : ''}
 </section>`;
   }
-  const filled = (k) => { const v = S.page[k] || {}; if (Array.isArray(v)) return !!v.length; if (S.home) return k === 'story' ? !!(v.items || []).length : !!(v.title || v.badge); return k === 'hero' ? !!v.headline : k === 'seo' ? !!v.title : k === 'canCant' ? !!(v.can || []).length : k === 'tests' ? !!(v.groups || []).length : !!(v.items || []).length; };
+  const filled = (k) => { const v = S.page[k] || {}; if (Array.isArray(v)) return !!v.length; if (S.home) return Array.isArray(v.items) ? !!v.items.length : !!(v.title || v.badge); return k === 'hero' ? !!v.headline : k === 'seo' ? !!v.title : k === 'canCant' ? !!(v.can || []).length : k === 'tests' ? !!(v.groups || []).length : !!(v.items || []).length; };
 
   function render() {
     const y = window.scrollY;
     if (S.home) {
       root.innerHTML = `<div class="pe-bar"><div class="pe-bar-in">
 <button type="button" class="btn ghost sm" data-pe="back">← Packages</button>
-<div class="pe-t"><b>Home page</b><span class="meta">drsarwantests.com – our story, then the packages</span></div>
+<div class="pe-t"><b>Home page</b><span class="meta">drsarwantests.com – trust, how it works, then the packages</span></div>
 <span class="pe-st live">● Live${S.dirty ? ' · unsaved changes' : ''}</span>
 <span class="pe-acts"><button type="button" class="btn ghost sm" data-pe="preview">Preview</button><button type="button" class="btn sm" data-pe="publish">Save &amp; update home page</button></span></div></div>
 <div class="pe-wrap"><nav class="pe-nav" aria-label="Page sections">
