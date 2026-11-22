@@ -17,9 +17,9 @@ export const HOME_DEFAULT = {
   creds: {
     title: "Independently assessed, so you don't have to take our word for it",
     items: [
-      { name: "NABL", title: "NABL accredited lab", text: "Assessed against national quality standards for medical testing labs", url: "" },
+      { name: "NABL", title: "NABL accredited lab", text: "Assessed against national quality standards for medical testing labs · Certificate MC-6975", url: "" },
       { name: "CGHS", title: "CGHS approved centre", text: "Approved to serve Central Government Health Scheme members", url: "" },
-      { name: "ISO", title: "ISO certified", text: "Quality-managed processes from booking to report", url: "" },
+      { name: "ISO", title: "ISO 9001:2015 certified lab", text: "Quality-managed processes from booking to report", url: "" },
     ],
   },
   stats: [
@@ -136,6 +136,13 @@ export function homeOrDefault(stored) {
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const rs = (n) => `₹${Number(n || 0).toLocaleString("en-IN")}`;
 const testCount = (t) => { const m = /(\d+)\s*tests?/i.exec(String(t || "")); if (m) return Number(m[1]); const n = String(t || "").split(/[,+;\n]/).filter((x) => x.trim()).length; return n; };
+// official marks for the accreditation card and footer, matched by the item's name or title (works with saved content too)
+const CRED_LOGOS = [
+  [/nabl/i, "/assets/accreditation/nabl.png", "NABL accreditation mark, certificate MC-6975"],
+  [/cghs/i, "/assets/accreditation/cghs.png", "CGHS (Central Government Health Scheme) emblem"],
+  [/\biso\b|9001/i, "/assets/accreditation/iso.png", "ISO 9001:2015 certification mark"],
+];
+const credLogo = (x) => { const k = `${x.name || ""} ${x.title || ""}`; const m = CRED_LOGOS.find(([re]) => re.test(k)); return m ? { src: m[1], alt: m[2] } : null; };
 const PHONE_SVG = '<svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8z"></path></svg>';
 // icons for the promise cards, picked by the card's tag (falls back to a tick)
 const ICONS = {
@@ -270,7 +277,7 @@ ${h.hero.chips.length ? `<div style="display: flex; flex-wrap: wrap; gap: 8px">$
 ${h.creds.items.length ? `<aside aria-label="Accreditations" style="background: #ffffff; border: 1px solid #e1e8ee; border-radius: 20px; box-shadow: 0 8px 28px rgba(27,42,78,.08); padding: 26px">
 ${h.creds.title ? `<p style="margin: 0 0 14px; color: #5a6880; font-weight: 600; font-size: 15px">${esc(h.creds.title)}</p>` : ""}
 ${h.creds.items.map((x, i) => `<div style="display: flex; gap: 14px; align-items: center; padding: 14px 0; ${i ? "border-top: 1px solid #e1e8ee" : ""}">
-<span aria-hidden="true" style="flex: none; width: 58px; height: 58px; border-radius: 50%; border: 3px solid #1f6977; display: grid; place-items: center; font-family: Archivo, sans-serif; font-weight: 800; font-size: 13px; color: #1f6977">${esc(x.name || "✓")}</span>
+${credLogo(x) ? `<span style="flex: none; width: 76px; height: 76px; border-radius: 16px; background: #ffffff; border: 1px solid #e1e8ee; box-shadow: 0 2px 8px rgba(27,42,78,.06); display: grid; place-items: center; padding: 8px; box-sizing: border-box"><img src="${credLogo(x).src}" alt="${esc(credLogo(x).alt)}" width="60" height="60" loading="eager" style="width: 60px; height: 60px; object-fit: contain; display: block"></span>` : `<span aria-hidden="true" style="flex: none; width: 76px; height: 76px; border-radius: 50%; border: 3px solid #1f6977; display: grid; place-items: center; font-family: Archivo, sans-serif; font-weight: 800; font-size: 14px; color: #1f6977; box-sizing: border-box">${esc(x.name || "✓")}</span>`}
 <span style="display: flex; flex-direction: column"><b style="font-size: 16px">${esc(x.title)}</b>${x.text ? `<span style="font-size: 14px; color: #5a6880">${esc(x.text)}</span>` : ""}${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener" style="font-size: 14px; font-weight: 600">View certificate ↗</a>` : ""}</span>
 </div>`).join("\n")}
 </aside>` : ""}
@@ -384,6 +391,7 @@ ${h.faq.items.map((x) => `<details><summary>${esc(x.q)}</summary><p style="margi
 <footer style="background: #1b2a4e; color: #d6deea">
 <div style="max-width: 1180px; margin: 0 auto; padding: 36px 24px; display: flex; flex-direction: column; gap: 12px; font-size: 14px">
 <b style="color: #ffffff; font-family: Archivo, sans-serif; font-size: 17px">Dr. Sarwan Diagnostic Labs</b>
+${h.creds.items.some(credLogo) ? `<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 4px 0">${h.creds.items.filter(credLogo).map((x) => `<span title="${esc(x.title)}" style="width: 64px; height: 64px; border-radius: 14px; background: #ffffff; display: grid; place-items: center; padding: 7px; box-sizing: border-box"><img src="${credLogo(x).src}" alt="${esc(credLogo(x).alt)}" width="50" height="50" loading="lazy" style="width: 50px; height: 50px; object-fit: contain; display: block"></span>`).join("")}</div>` : ""}
 <span>${h.creds.items.map((x) => esc(x.title)).join(" · ")}</span>
 <span>Shop 37–38, Vardhaman Crown Mall, Sector 19, Dwarka, New Delhi 110078 · <a href="tel:8368143677" style="color: #d6deea">8368143677</a></span>
 <span style="display: flex; gap: 16px; flex-wrap: wrap"><a href="/contact" style="color: #d6deea">Contact us</a><a href="/privacy" style="color: #d6deea">Privacy Policy</a><a href="/service" style="color: #d6deea">Terms of Service</a><a href="/refund" style="color: #d6deea">Refunds</a><a href="/delivery" style="color: #d6deea">Delivery</a><a href="/reports/" style="color: #d6deea">My reports</a></span>
