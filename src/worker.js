@@ -3,6 +3,7 @@
 import "../public/shared/msgs.js"; // WhatsApp message texts, shared with the admin page
 import { imConfigured, imApi, imIsTest, imCreateRequest, imGetRequest, imGetPayment, imPaymentOk, imMacOk } from "./instamojo.js";
 import { renderHome, homeFromBody, homeOrDefault, HOME_DEFAULT } from "./home.js";
+import { smartPrompt, finishSmart, SMART_SCHEMA, SMART_VERSION } from "./smart.js";
 import { renderPackagePage, pageFromBody, defaultPageFor, slugify, aiGeneratePage, PAGE_SECTIONS, HORMONE_PAGE } from "./pages.js";
 const M = globalThis.DSLMsg;
 
@@ -200,6 +201,10 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS package_tests (package_id INTEGER NOT NULL, test_id INTEGER NOT NULL, sort INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (package_id, test_id))`,
   `CREATE INDEX IF NOT EXISTS package_tests_test ON package_tests(test_id)`,
   // receipts: one per paid booking, numbered DSL/<financial year>/<n> (e.g. DSL/2026-27/0001)
+  // smart reports: one per booking, built by the AI from all its report PDFs. status: queued | building | ready | failed.
+  // report_ids = the reports it was built from (rebuilt when they change); released_at = the operator chose to send it → the patient can see it
+  `CREATE TABLE IF NOT EXISTS smart_reports (booking_id TEXT PRIMARY KEY, status TEXT NOT NULL, report_ids TEXT, data TEXT, error TEXT, model TEXT,
+    tries INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, released_at TEXT, released_by TEXT)`,
   `CREATE TABLE IF NOT EXISTS receipts (booking_id TEXT PRIMARY KEY, no TEXT NOT NULL UNIQUE, fy TEXT NOT NULL, seq INTEGER NOT NULL, created_at TEXT NOT NULL)`,
   // phone numbers: calls / website / marketing = 83681 43677, WhatsApp chats = 98180 28755. Texts saved in the database had
   // briefly been switched to 98180 28755 everywhere – put the call number back, keeping WhatsApp links (wa.me/919818028755)
@@ -1184,6 +1189,8 @@ async function adminDeleteReport(env, rid) {
   const f = await env.DB.prepare("SELECT * FROM report_files WHERE id=?1").bind(rid).first();
   if (!f) return bad("Report not found", 404);
   await env.DB.batch([env.DB.prepare("DELETE FROM report_parts WHERE report_id=?1").bind(rid), env.DB.prepare("DELETE FROM report_files WHERE id=?1").bind(rid)]);
+  // the smart report was built from this file: drop it (rebuilt from the reports left, if any are still to be sent)
+  await env.DB.prepare("DELETE FROM smart_reports WHERE booking_id=?1").bind(f.booking_id).run();
   const left = await env.DB.prepare(`SELECT COUNT(*) AS n, SUM(CASE WHEN sent_at IS NULL THEN 1 ELSE 0 END) AS unsent FROM report_files WHERE booking_id=?1 AND ${LIVE_REP}`).bind(f.booking_id).first();
   const row = await env.DB.prepare("SELECT status FROM bookings WHERE id=?1").bind(f.booking_id).first();
   if (row && ["report_ready", "completed"].includes(row.status)) {
@@ -1258,6 +1265,7 @@ async function adminSent(env, req, id) {
   later(req, logHand(env, id, kind));
   const stmts = [env.DB.prepare("INSERT INTO msg_log (booking_id, kind, at) VALUES (?1, ?2, ?3)").bind(id, kind, now)];
   let completed = false, marked = [];
+  if (kind === "report" && body.smart === true) { const err = await releaseSmart(env, req, id, null); if (err) return bad(err, 409); }
   if (kind === "report") {
     const { results: files } = await env.DB.prepare(`SELECT id, sent_at FROM report_files WHERE booking_id=?1 AND ${LIVE_REP}`).bind(id).all();
     const want = Array.isArray(body.reportIds) ? body.reportIds.map(Number) : files.filter((f) => !f.sent_at).map((f) => f.id);
@@ -2089,6 +2097,8 @@ const OPERATOR_OK = [
   ["GET", /^\/api\/admin\/review$/],
   ["POST", /^\/api\/admin\/review\/\d{1,9}$/],
   ["DELETE", /^\/api\/admin\/reports\/\d{1,9}$/],
+  ["GET", /^\/api\/admin\/smart\/DSL-[A-Z0-9]{6}$/],
+  ["POST", /^\/api\/admin\/smart\/DSL-[A-Z0-9]{6}$/],
 ];
 const operatorMay = (method, p) => OPERATOR_OK.some(([m, re]) => m === method && re.test(p));
 
@@ -2229,11 +2239,17 @@ async function patientBookings(env, s) {
       env.DB.prepare(`SELECT id, booking_id, name, size, sent_at FROM report_files WHERE booking_id IN (${ph}) AND sent_at IS NOT NULL ORDER BY id`).bind(...ids).all(),
     ]);
   }
+  const smart = new Set();
+  if (ids.length) {
+    const { results: sr } = await env.DB.prepare(`SELECT booking_id FROM smart_reports WHERE status='ready' AND released_at IS NOT NULL AND booking_id IN (${ids.map((_, i) => "?" + (i + 1)).join(",")})`).bind(...ids).all();
+    sr.forEach((x) => smart.add(x.booking_id));
+  }
   for (const r of results) {
     r.slot_label = slotLabel(r.slot);
     r.status_label = PATIENT_STATUS[r.status] || r.status;
     r.tests = tests.filter((t) => t.booking_id === r.id).map((t) => t.name);
     r.reports = files.filter((f) => f.booking_id === r.id).map(({ booking_id, ...f }) => f);
+    r.smart = smart.has(r.id) && r.reports.length > 0; // shown together with the lab PDF it explains
   }
   return json({ name: s.name, bookings: results });
 }
@@ -2532,14 +2548,19 @@ async function adminReview(env) {
   const { results: files } = await env.DB.prepare(`SELECT f.id, f.booking_id, f.name, f.size, f.created_at, f.review, f.src, f.src_phone, f.centre_ok, f.ai_status,
       f.match_status, f.match_json, f.reviewed_at, f.review_note, f.centre_id, c.name AS centre,
       b.name AS patient, b.date, b.slot, b.status, b.vial_no, b.vial_reported, b.phone, (SELECT dob FROM users u WHERE u.id = b.patient_id) AS dob,
-      (SELECT name FROM centre_numbers n WHERE n.phone = f.src_phone LIMIT 1) AS sender
-    FROM report_files f LEFT JOIN bookings b ON b.id = f.booking_id LEFT JOIN centres c ON c.id = CAST(f.centre_id AS INTEGER)
+      (SELECT name FROM centre_numbers n WHERE n.phone = f.src_phone LIMIT 1) AS sender,
+      s.status AS smart_status, s.report_ids AS smart_ids, s.error AS smart_error
+    FROM report_files f LEFT JOIN bookings b ON b.id = f.booking_id LEFT JOIN centres c ON c.id = CAST(f.centre_id AS INTEGER) LEFT JOIN smart_reports s ON s.booking_id = f.booking_id
     WHERE f.review IN ('pending','held') ORDER BY f.id LIMIT 200`).all();
   for (const f of files) {
     try { f.match = JSON.parse(f.match_json || "null"); } catch { f.match = null; }
     delete f.match_json;
     f.age = ageAt(f.dob, null);
     delete f.dob;
+    // the smart report can go with this report only if it was built from it (and is ready)
+    f.smart = !f.smart_status ? (aiKey(env) ? "none" : "off") : f.smart_status === "ready" && String(f.smart_ids || "").split(",").includes(String(f.id)) ? "ready"
+      : f.smart_status === "failed" ? "failed" : "building";
+    delete f.smart_ids; delete f.smart_status;
   }
   // bookings a report can be moved to
   const { results: targets } = await env.DB.prepare(`SELECT id, name, date, status, centre_id, vial_no FROM bookings WHERE status IN ('confirmed','collected','report_ready','completed')
@@ -2588,6 +2609,8 @@ async function adminReviewAct(env, req, rid) {
   if (!bk || !["collected", "report_ready", "completed"].includes(bk.status)) return bad("Confirm the vial at the lab first (Step 3), then approve the report.", 409);
   const risky = !m || m.status !== "ok" || f.centre_ok === "unknown" || (m.best && m.best !== f.booking_id);
   if (risky && note.length < 3) return bad("This report isn't a clean match – write a short reason for approving it.", 400);
+  // "Smart report + lab PDF": released now, unless the report is kept to be sent later by hand (then it's chosen again in Reports)
+  if (b.smart === true && b.send !== false) { const err = await releaseSmart(env, req, bk.id, rid); if (err) return bad(err, 409); }
   await env.DB.prepare("UPDATE report_files SET review='approved', reviewed_by=?1, reviewed_at=?2, review_note=?3 WHERE id=?4").bind(who, now, note || null, rid).run();
   if (bk.status === "collected" || bk.status === "completed")
     await env.DB.prepare("UPDATE bookings SET status='report_ready', report_at=?1, completed_at=NULL, updated_at=?1 WHERE id=?2").bind(now, bk.id).run();
@@ -2605,6 +2628,170 @@ async function learnHint(env, f, m, bk) {
   if (!cid || !m || m.status === "off" || !(bk.vial_no || bk.vial_reported)) return;
   const label = m.vial_label ? String(m.vial_label).slice(0, 60) || "ID" : "__miss__";
   await env.DB.prepare("INSERT INTO report_hints (centre_id, label, hits) VALUES (?1, ?2, 1) ON CONFLICT(centre_id, label) DO UPDATE SET hits = hits + 1").bind(cid, label).run();
+}
+
+// =====================================================================
+// ---- smart reports (one per booking, from all its report PDFs; logic in src/smart.js) ----
+// =====================================================================
+// Built automatically every minute for bookings with reports not yet sent (and rebuilt when their reports change).
+// The operator picks "Smart report + lab PDF" or "Lab PDF only" when approving / sending; only then can the patient see it.
+const SMART_REP = "COALESCE(review,'') NOT IN ('draft','rejected','withdrawn')"; // includes reports still waiting for approval
+const SMART_STALE_MIN = 8, SMART_MAX_TRIES = 3, SMART_MAX_B64 = 30 * 1024 * 1024; // the AI API takes up to 32 MB per request
+const idsKey = (files) => files.map((f) => Number(f.id)).sort((a, b) => a - b).join(",");
+async function smartFiles(env, bid) {
+  const { results } = await env.DB.prepare(`SELECT id, name, size FROM report_files WHERE booking_id=?1 AND ${SMART_REP} ORDER BY id`).bind(bid).all();
+  return results;
+}
+// the booking's packages with the questions and "It can / can't" lists from their web pages
+async function smartContext(env, bid, files) {
+  const b = await env.DB.prepare("SELECT id, name, cycle, notes, package_id, package_name FROM bookings WHERE id=?1").bind(bid).first();
+  if (!b) return null;
+  let { results: rows } = await env.DB.prepare("SELECT t.name, p.tests, p.page FROM booking_tests t LEFT JOIN packages p ON p.id = t.package_id WHERE t.booking_id=?1 ORDER BY t.id").bind(bid).all();
+  if (!rows.length && b.package_id) rows = [await env.DB.prepare("SELECT name, tests, page FROM packages WHERE id=?1").bind(b.package_id).first()].filter(Boolean);
+  const packages = rows.map((r) => {
+    let pg = {}; try { pg = JSON.parse(r.page || "null") || {}; } catch {}
+    const q = (pg.questions && Array.isArray(pg.questions.items) ? pg.questions.items : []).filter((x) => x && x.title).slice(0, 6);
+    const cc = pg.canCant || {};
+    return { name: r.name || b.package_name || "Lab tests", tests: r.tests || "", questions: q.map((x) => ({ title: String(x.title), answered_by: String(x.answered_by || "") })),
+      can: (Array.isArray(cc.can) ? cc.can : []).map(String).filter(Boolean).slice(0, 8), cant: (Array.isArray(cc.cant) ? cc.cant : []).map(String).filter(Boolean).slice(0, 6) };
+  });
+  return { booking_id: b.id, name: b.name, cycle: [b.cycle, b.notes].filter(Boolean).join(" · "), packages, files };
+}
+async function aiSmart(env, S, ctx) {
+  const content = [];
+  let total = 0;
+  for (const f of ctx.files) {
+    const b64 = await reportB64(env, f.id);
+    total += b64.length;
+    if (total > SMART_MAX_B64) throw new Error("The report PDFs are too large together for the AI (over 22 MB)");
+    content.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 }, title: String(f.name || "report.pdf").slice(0, 200) });
+  }
+  content.push({ type: "text", text: smartPrompt(ctx) });
+  const r = await fetch(`${env.ANTHROPIC_URL || "https://api.anthropic.com"}/v1/messages`, {
+    method: "POST",
+    headers: { "x-api-key": aiKey(env), "anthropic-version": "2023-06-01", "content-type": "application/json" },
+    body: JSON.stringify({ model: S.ai_model || AI_MODEL_DEFAULT, max_tokens: 16000,
+      tools: [{ name: "smart_report", description: "The patient's smart report: every result with its printed range, and the plain-words text.", input_schema: SMART_SCHEMA }],
+      tool_choice: { type: "auto" }, messages: [{ role: "user", content }] }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.type === "error") throw new Error((j.error && j.error.message) || `AI failed (${r.status})`);
+  const use = (j.content || []).find((c) => c.type === "tool_use" && c.name === "smart_report");
+  if (use && use.input) return use.input;
+  const txt = (j.content || []).filter((c) => c.type === "text").map((c) => c.text).join("");
+  const m = /\{[\s\S]*\}/.exec(txt);
+  if (m) { try { const o = JSON.parse(m[0]); if (o && Array.isArray(o.results)) return o; } catch {} }
+  throw new Error(j.stop_reason === "max_tokens" ? "The AI's answer was cut off (report too long)" : "The AI didn't return the smart report");
+}
+// build (or rebuild) one booking's smart report now. A rebuild hides it from the patient until the operator sends it again.
+async function buildSmart(env, S, bid) {
+  const files = await smartFiles(env, bid);
+  if (!files.length) { await env.DB.prepare("DELETE FROM smart_reports WHERE booking_id=?1").bind(bid).run(); return null; }
+  const ids = idsKey(files), now = isoNow();
+  const claim = await env.DB.prepare(`INSERT INTO smart_reports (booking_id, status, report_ids, tries, created_at, updated_at) VALUES (?1, 'building', ?2, 1, ?3, ?3)
+    ON CONFLICT(booking_id) DO UPDATE SET status='building', error=NULL, updated_at=?3, released_at=NULL, released_by=NULL,
+      tries=CASE WHEN smart_reports.report_ids=?2 AND smart_reports.status!='queued' THEN smart_reports.tries+1 ELSE 1 END, report_ids=?2
+    WHERE smart_reports.status!='building' OR smart_reports.updated_at < ?4`).bind(bid, ids, now, new Date(Date.now() - SMART_STALE_MIN * 60000).toISOString()).run();
+  if (!claim.meta.changes) return null; // another run is building it
+  try {
+    const ctx = await smartContext(env, bid, files);
+    if (!ctx) throw new Error("Booking not found");
+    const data = finishSmart(await aiSmart(env, S, ctx), ctx);
+    if (!data.counts.total) throw new Error("No test results found in the PDFs");
+    data.built_at = isoNow();
+    await env.DB.prepare("UPDATE smart_reports SET status='ready', data=?1, model=?2, error=NULL, updated_at=?3 WHERE booking_id=?4 AND report_ids=?5")
+      .bind(JSON.stringify(data), S.ai_model || AI_MODEL_DEFAULT, isoNow(), bid, ids).run();
+    await logAct(env, bid, "System", "ai", `Smart report ready (${data.counts.total} results, ${data.counts.flagged} outside the range)`);
+    return data;
+  } catch (e) {
+    const row = await env.DB.prepare("SELECT tries FROM smart_reports WHERE booking_id=?1").bind(bid).first();
+    const last = !row || row.tries >= SMART_MAX_TRIES;
+    await env.DB.prepare("UPDATE smart_reports SET status=?1, error=?2, updated_at=?3 WHERE booking_id=?4 AND report_ids=?5")
+      .bind(last ? "failed" : "retry", String(e && e.message || e).slice(0, 300), isoNow(), bid, ids).run();
+    console.log("smart report", bid, String(e && e.stack || e));
+    return null;
+  }
+}
+// every minute: bookings whose reports changed (and still have reports not sent), queued rebuilds, retries
+async function smartJobs(env) {
+  if (!aiKey(env)) return;
+  const S = await getSettings(env);
+  if (S.smart_reports === "0") return;
+  const since = new Date(Date.now() - REPORT_LOOKBACK_DAYS * 86400000).toISOString();
+  const retryAfter = new Date(Date.now() - 3 * 60000).toISOString(), stale = new Date(Date.now() - SMART_STALE_MIN * 60000).toISOString();
+  const { results } = await env.DB.prepare(`SELECT f.booking_id AS bid, group_concat(f.id) AS ids, SUM(CASE WHEN f.sent_at IS NULL THEN 1 ELSE 0 END) AS unsent,
+      s.report_ids, s.status, s.tries, s.updated_at
+    FROM report_files f LEFT JOIN smart_reports s ON s.booking_id = f.booking_id
+    WHERE f.booking_id != '' AND f.created_at >= ?1 AND ${SMART_REP.replace("review", "f.review")} GROUP BY f.booking_id LIMIT 400`).bind(since).all();
+  const todo = results.filter((r) => {
+    const ids = idsKey(String(r.ids || "").split(",").filter(Boolean).map((id) => ({ id })));
+    if (!r.status) return r.unsent > 0;
+    if (r.report_ids !== ids) return r.unsent > 0 || r.status === "ready" || r.status === "failed";
+    if (r.status === "queued") return true;
+    if (r.status === "retry") return r.updated_at < retryAfter;
+    if (r.status === "building") return r.updated_at < stale && r.tries < SMART_MAX_TRIES;
+    return false;
+  }).slice(0, 2);
+  await Promise.all(todo.map((r) => buildSmart(env, S, r.bid).catch((e) => console.log("smart job", r.bid, String(e)))));
+}
+// the patient can see it from now on (the operator chose "Smart report + lab PDF")
+async function releaseSmart(env, req, bid, rid) {
+  const row = await env.DB.prepare("SELECT status, report_ids FROM smart_reports WHERE booking_id=?1").bind(bid).first();
+  if (!row || row.status !== "ready") return "The smart report isn't ready yet. Send the lab PDF only, or wait a minute and try again.";
+  const files = await smartFiles(env, bid);
+  if (row.report_ids !== idsKey(files) || (rid && !String(row.report_ids).split(",").includes(String(rid))))
+    return "The smart report is being updated with the newest report. Send the lab PDF only, or wait a minute and try again.";
+  const st = STAFF.get(req) || { name: "Admin", role: "admin" };
+  await env.DB.prepare("UPDATE smart_reports SET released_at=?1, released_by=?2 WHERE booking_id=?3").bind(isoNow(), st.name, bid).run();
+  await logAct(env, bid, st.name, st.role, "Smart report sent to the patient");
+  return null;
+}
+async function smartRow(env, bid) {
+  const r = await env.DB.prepare("SELECT * FROM smart_reports WHERE booking_id=?1").bind(bid).first();
+  if (!r) return null;
+  let data = null; try { data = JSON.parse(r.data || "null"); } catch {}
+  return { ...r, data };
+}
+async function adminSmart(env, bid) {
+  const [r, files] = await Promise.all([smartRow(env, bid), smartFiles(env, bid)]);
+  const cur = idsKey(files);
+  if (!r) return json({ status: files.length ? (aiKey(env) ? "none" : "off") : "no_reports", files: files.length });
+  return json({ status: r.status, error: r.error, data: r.data, built_from: r.report_ids, up_to_date: r.report_ids === cur, released_at: r.released_at, released_by: r.released_by, updated_at: r.updated_at, model: r.model, files: files.length });
+}
+async function adminSmartAct(env, req, bid) {
+  const b = await req.json().catch(() => ({}));
+  const st = STAFF.get(req) || { name: "Admin", role: "admin" };
+  if (b.action === "build") {
+    if (!aiKey(env)) return bad("Smart reports need the Claude API key (ANTHROPIC_API_KEY).", 409);
+    const files = await smartFiles(env, bid);
+    if (!files.length) return bad("Upload a report first.", 409);
+    await env.DB.prepare(`INSERT INTO smart_reports (booking_id, status, report_ids, tries, created_at, updated_at) VALUES (?1, 'queued', ?2, 0, ?3, ?3)
+      ON CONFLICT(booking_id) DO UPDATE SET status='queued', error=NULL, tries=0, updated_at=?3 WHERE smart_reports.status!='building'`).bind(bid, idsKey(files), isoNow()).run();
+    await logAct(env, bid, st.name, st.role, "Smart report requested");
+    return json({ ok: true, status: "queued" });
+  }
+  if (b.action === "release") { const err = await releaseSmart(env, req, bid, null); return err ? bad(err, 409) : json({ ok: true }); }
+  if (b.action === "unrelease") {
+    await env.DB.prepare("UPDATE smart_reports SET released_at=NULL, released_by=NULL WHERE booking_id=?1").bind(bid).run();
+    await logAct(env, bid, st.name, st.role, "Smart report hidden from the patient");
+    return json({ ok: true });
+  }
+  return bad("Invalid action");
+}
+// patient portal: only a released, ready smart report of the patient's own booking
+async function patientSmart(env, s, bid) {
+  const b = await env.DB.prepare(`SELECT id FROM bookings WHERE id=?3 AND status NOT IN ('cancelled','blocked') AND patient_id IN (${PATIENT_IDS})`).bind(s.s_phone, s.s_dob, bid).first();
+  const r = b ? await smartRow(env, bid) : null;
+  if (!r || r.status !== "ready" || !r.released_at || !r.data || r.report_ids !== idsKey(await smartFiles(env, bid))) return bad("Smart report not found", 404);
+  const { results: files } = await env.DB.prepare("SELECT id, name, size FROM report_files WHERE booking_id=?1 AND sent_at IS NOT NULL ORDER BY id").bind(bid).all();
+  if (!files.length) return bad("Smart report not found", 404);
+  return json({ ...r.data, files });
+}
+// told on WhatsApp in the open chat (free text can only go out while it's open – the approved template already points to /reports/)
+async function smartNote(env, S, bid, phone) {
+  const r = await env.DB.prepare("SELECT 1 FROM smart_reports WHERE booking_id=?1 AND status='ready' AND released_at IS NOT NULL").bind(bid).first();
+  if (!r || !(await chatOpen(env, phone))) return;
+  await waText(env, S, phone, `✨ Your *smart report* is ready too – every result explained in plain words, with what to ask your doctor.\nOpen it at ${SITE}/reports/ (sign in with your mobile number and date of birth).`, { by: "auto" }).catch((e) => console.log("smart note", String(e)));
 }
 
 // =====================================================================
@@ -2805,6 +2992,7 @@ async function deliver(env, bookingOrId, kind, opts = {}) {
   }
   if (sent) {
     const marked = kind === "report" ? await releaseReports(env, b, opts.reportIds) : [];
+    if (kind === "report" && m.t.to === "patient") await smartNote(env, S, b.id, to[0]);
     return { sent: true, marked };
   }
   return fail(lastErr ? lastErr.message : "Not sent", to[0]);
@@ -3227,7 +3415,10 @@ class Bot {
       if (!files.length) return this.say("Your report isn't ready yet. We'll send it here as soon as it is 🙏");
       await this.say(`Here ${files.length === 1 ? "is your report" : "are your reports"} 📄`);
       for (const f of files) await waSendPdf(env, this.S, this.phone, await reportBytes(env, f.id), `${f.name.replace(/\.pdf$/i, "")}.pdf`);
-      return this.say(`Please share ${files.length === 1 ? "it" : "them"} with your doctor. You can also open your reports at ${SITE}/reports/`);
+      const bids = [...new Set(files.map((f) => f.booking_id))];
+      const smart = await this.db.prepare(`SELECT 1 FROM smart_reports WHERE status='ready' AND released_at IS NOT NULL AND booking_id IN (${bids.map((_, i) => "?" + (i + 1)).join(",")}) LIMIT 1`).bind(...bids).first();
+      return this.say(`Please share ${files.length === 1 ? "it" : "them"} with your doctor. You can also open your reports at ${SITE}/reports/` +
+        (smart ? `\n\n✨ Your *smart report* – every result explained in plain words – is there too.` : ""));
     }
     return this.menu(true);
   }
@@ -4253,6 +4444,7 @@ async function adminSend(env, req, id) {
   const b = await req.json().catch(() => ({}));
   if (!MSG_KINDS.includes(b.kind) || b.kind === "chat") return bad("Invalid message type");
   const sug = Array.isArray(b.sug) ? b.sug.filter((s) => s && /^\d{4}-\d{2}-\d{2}$/.test(s.date) && SLOTS.includes(s.slot)).slice(0, 5) : undefined;
+  if (b.kind === "report" && b.smart === true) { const err = await releaseSmart(env, req, id, null); if (err) return bad(err, 409); }
   return json(await sendKind(env, req, id, b.kind, { sug, reportIds: b.reportIds }));
 }
 // Send one message now. → { sent } | { queued } (operator: passed to the admin's Send by hand list) | { manual } (admin sends it by hand)
@@ -4399,6 +4591,7 @@ export default {
       await ensureSchema(env);
       if (event.cron === "30 13 * * *") await waDaily(env); // 7 PM IST: visit reminders
       await reportJobs(env); // every minute: AI report checks + confirm screens for the centres
+      ctx.waitUntil(smartJobs(env).catch((e) => console.log("smart jobs", String(e)))); // smart reports (an AI call can take a minute or two)
       await paymentSweep(env).catch((e) => console.log("payment sweep", String(e))); // online payments nobody came back from
       // every 10 minutes while any message text is waiting for WhatsApp's approval: load its status from Meta
       // (Meta also tells us through the webhook, but only if "message_template_status_update" is subscribed)
@@ -4516,6 +4709,9 @@ export default {
           { const dp = p.match(/^\/api\/admin\/payments\/(\d{1,9})$/); if (dp && req.method === "DELETE") return adminDeletePayment(env, req, Number(dp[1])); }
           m = p.match(/^\/api\/admin\/payments\/(\d{1,9})\/check$/);
           if (m && req.method === "POST") return adminPaymentCheck(env, Number(m[1]));
+          m = p.match(/^\/api\/admin\/smart\/(DSL-[A-Z0-9]{6})$/);
+          if (m && req.method === "GET") return adminSmart(env, m[1]);
+          if (m && req.method === "POST") return adminSmartAct(env, req, m[1]);
           if (p === "/api/admin/review" && req.method === "GET") return adminReview(env);
           m = p.match(/^\/api\/admin\/review\/(\d{1,9})$/);
           if (m && req.method === "POST") return adminReviewAct(env, req, Number(m[1]));
@@ -4583,6 +4779,8 @@ export default {
           if (p === "/api/patient/bookings" && req.method === "GET") return patientBookings(env, s);
           m = p.match(/^\/api\/patient\/reports\/(\d{1,9})$/);
           if (m && req.method === "GET") return patientReportFile(env, s, Number(m[1]));
+          m = p.match(/^\/api\/patient\/smart\/(DSL-[A-Z0-9]{6})$/);
+          if (m && req.method === "GET") return patientSmart(env, s, m[1]);
           return bad("Not found", 404);
         }
         return bad("Not found", 404);

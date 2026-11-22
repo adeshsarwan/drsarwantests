@@ -48,6 +48,18 @@ Unpaid bookings never block a slot and are marked expired after 2 hours.
   and list their sources. Nothing is saved until you press *Save draft* / *Publish*; *Preview* shows the page before it goes live.
 - The booking form on a package page is preselected for that package (its price, tests and payment). `/sitemap.xml` lists the published pages.
 
+## Smart reports
+- One **smart report** per booking, built by Claude from **all** of the booking's report PDFs (team uploads and centre reports waiting for approval).
+  It reads every value, unit and printed normal range, and writes the plain-words parts: what stands out, an answer to each question on the
+  package's web page (*Which question brought you here?*), a line for each *It can* claim, the *It can't* list, lab notes and questions for the doctor.
+  Normal / high / low, the counts, *Something to discuss* and the ticks are worked out in code from the numbers (`src/smart.js`), never by the AI.
+- Built automatically every minute for bookings whose reports aren't all sent yet, and rebuilt whenever their reports change (a rebuild hides it
+  from the patient until it's sent again). Older bookings: **Reports → Make smart report**. Needs `ANTHROPIC_API_KEY`; uses the AI model from Admin → WhatsApp.
+- **Operations → Reports to approve**: each report shows the smart report's state with **Preview**, and a choice: *Send smart report + lab PDF* or *Send lab PDF only*.
+  The booking's **Reports** window has the same: Preview, Make again, Hide from patient and *Send the smart report too*.
+- The patient sees it in **My reports** (`/reports/`, mobile number + date of birth) as **Open smart report**, next to the lab PDF, with
+  *Talk to a doctor · ₹299* (WhatsApp 98180 28755 for now) and *Download lab PDF*. In an open WhatsApp chat they also get a short note with the link.
+
 ## Tests (single lab tests)
 - **Admin → Tests** lists every single test, *what it's for* (written by Claude, editable), category, sample, and the packages that include it.
   Price and margin per test are placeholders for later – not used anywhere yet.

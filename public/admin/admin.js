@@ -1025,10 +1025,32 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     if (!r.ok) throw new Error(j.error || 'Upload failed');
     return j;
   }
-  let repId = null, repPicked = null;
+  let repId = null, repPicked = null, repSm = null, repSmartOn = true;
+  async function loadRepSmart(id) {
+    try { repSm = await api(`/api/admin/smart/${id}`); } catch (e) { repSm = null; }
+    if (repId === id) renderRepSmart();
+    clearTimeout(loadRepSmart._t);
+    if (repSm && ['queued', 'building', 'retry'].includes(repSm.status) && $('#repDlg').open) loadRepSmart._t = setTimeout(() => repId === id && loadRepSmart(id), 15000);
+  }
+  function renderRepSmart() {
+    const s = repSm, el = $('#repSmart');
+    if (!s || ['no_reports', 'off'].includes(s.status)) { el.innerHTML = ''; return; }
+    const ready = s.status === 'ready' && s.up_to_date;
+    const t = ready ? `<b>✨ Smart report ready</b> · ${s.data.counts.total} results, ${s.data.counts.flagged} outside the range${s.released_at ? ' · <span class="m-ok">patient can see it</span>' : ''}`
+      : s.status === 'ready' ? '<b>✨ Smart report</b> · being updated with the newest report…'
+      : ['queued', 'building', 'retry'].includes(s.status) ? '<b>✨ Smart report being made…</b> <span class="meta">(about a minute)</span>'
+      : s.status === 'failed' ? `<b>✨ Smart report couldn't be made</b> <span class="meta">${esc(s.error || '')}</span>` : '<b>✨ No smart report yet</b>';
+    el.innerHTML = `<div class="sm-box"><span class="sm-t">${t}</span>
+${ready ? `<button type="button" class="btn ghost sm" data-act="sm-view" data-id="${esc(repId)}">Preview</button>` : ''}
+${!['queued', 'building'].includes(s.status) ? `<button type="button" class="btn ghost sm" data-act="sm-build" data-id="${esc(repId)}">${s.status === 'none' ? 'Make smart report' : 'Make again'}</button>` : ''}
+${ready && s.released_at ? `<button type="button" class="btn ghost sm" data-act="sm-hide" data-id="${esc(repId)}">Hide from patient</button>` : ''}
+${ready ? `<label><input type="checkbox" id="repSmartOn" ${repSmartOn ? 'checked' : ''}> Send the smart report too</label>` : ''}</div>`;
+  }
+  $('#repSmart').addEventListener('change', (e) => { if (e.target.id === 'repSmartOn') repSmartOn = e.target.checked; });
+  const repWithSmart = () => !!(repSm && repSm.status === 'ready' && repSm.up_to_date && repSmartOn);
   function openReports(id) {
-    repId = id; repPicked = null; $('#repErr').textContent = '';
-    renderRepDlg();
+    repId = id; repPicked = null; repSm = null; repSmartOn = true; $('#repErr').textContent = ''; $('#repSmart').innerHTML = '';
+    renderRepDlg(); loadRepSmart(id);
     $$('dialog[open]').forEach((x) => x !== $('#repDlg') && x.close());
     if (!$('#repDlg').open) $('#repDlg').showModal();
   }
@@ -1057,7 +1079,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
       try { const r = await uploadReport(repId, f); ok++; repPicked && repPicked.add(r.id); }
       catch (e) { $('#repErr').textContent = e.message; await new Promise((r) => setTimeout(r, 1200)); }
     }
-    await refreshAll(); renderRepDlg();
+    await refreshAll(); renderRepDlg(); if (ok) setTimeout(() => repId && loadRepSmart(repId), 1500);
     if (ok) { $('#repErr').innerHTML = `<span class="m-ok">${ok} report${ok === 1 ? '' : 's'} uploaded ✓</span>`; }
   }
   $('#repFiles').onchange = () => { const f = $('#repFiles').files; addRepFiles(f).finally(() => ($('#repFiles').value = '')); };
@@ -1071,7 +1093,7 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     if (isOp() || (WA && WA.auto)) { // the patient gets a "reports ready" message and receives the PDFs after a date-of-birth check
       $('#repSend').disabled = true;
       try {
-        const r = await post(`/api/admin/bookings/${b.id}/send`, { kind: 'report', reportIds: files.map((f) => f.id) });
+        const r = await post(`/api/admin/bookings/${b.id}/send`, { kind: 'report', reportIds: files.map((f) => f.id), smart: repWithSmart() });
         if (r.sent) { $('#repDlg').close(); toast('Patient told on WhatsApp ✓ They get the PDFs after a date-of-birth check.'); await refreshAll(); return; }
         if (isOp()) { $('#repDlg').close(); toast("Couldn't send on WhatsApp – passed to the admin"); await refreshAll(); return; }
         toast(`Couldn't send automatically (${r.error || 'API not available'}) – sending by hand`);
@@ -1079,9 +1101,32 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     }
     openWhatsApp(b.phone, msgText(b, 'report', null, files));
     $('#repDlg').close();
-    logSent(b, 'report', { reportIds: files.map((f) => f.id) });
+    logSent(b, 'report', { reportIds: files.map((f) => f.id), smart: repWithSmart() });
   };
   $('#repDone').onclick = () => { const id = repId; $('#repDlg').close(); setStatus(id, 'completed'); };
+  async function smartAct(id, action) {
+    try {
+      await post(`/api/admin/smart/${id}`, { action });
+      toast(action === 'build' ? 'Making the smart report – it takes about a minute' : 'Hidden from the patient');
+      if (repId === id && $('#repDlg').open) loadRepSmart(id);
+      loadReview().catch(() => {});
+    } catch (e) { toast(e.message); }
+  }
+  async function previewSmart(id) {
+    const w = window.open('', '_blank');
+    try {
+      const s = await api(`/api/admin/smart/${id}`);
+      if (!s.data) throw new Error('The smart report is not ready yet');
+      const b = findB(id);
+      const doc = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Smart report preview · ${DSLSmart.esc(s.data.patient.name)}</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800&family=Figtree:wght@400;500;600;700&display=swap">
+<style>body{margin:0;background:#f4f7fa}main{max-width:720px;margin:0 auto;padding:16px 16px 40px}${DSLSmart.css}</style></head><body><main>
+${DSLSmart.html(s.data, { banner: `Preview · ${b ? b.name + ' · ' : ''}${id} · the patient sees this after you send it${s.released_at ? ' (already sent)' : ''}`, pdfAttr: 'data-none', doctorHref: '#' })}
+</main></body></html>`;
+      if (!w) throw new Error('Allow pop-ups to see the preview');
+      w.document.open(); w.document.write(doc); w.document.close();
+    } catch (e) { if (w) w.close(); toast(e.message); }
+  }
   async function viewReportFile(rid) {
     const w = window.open('', '_blank');
     try {
@@ -1936,7 +1981,9 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
 
   // ================= REPORTS TO APPROVE (from collection centres, checked by the AI) =================
   let REVQ = { files: [], targets: [] };
-  const revPicked = new Set(), revSeen = new Set();
+  const revPicked = new Set(), revSeen = new Set(), revSend = new Map(); // report id → 'smart' | 'pdf'
+  const sendChoice = (f) => (f.smart === 'ready' ? revSend.get(f.id) || 'smart' : 'pdf');
+  const SM_T = { ready: '✨ Smart report ready', building: '✨ Smart report being made…', failed: "✨ Smart report couldn't be made", none: '✨ Smart report not made yet', off: '' };
   // a clean match: AI says ✅, the patient is chosen and is the one the AI found – only these can be approved together
   const revClean = (f) => f.review === 'pending' && f.match && f.match.status === 'ok' && f.booking_id && f.centre_ok !== 'unknown' && !(f.match.best && f.match.best !== f.booking_id) && !f.match.interim && f.status !== 'confirmed';
   async function loadReview() {
@@ -1944,6 +1991,8 @@ ${stops.map((b, i) => `<tr><td>${i + 1}</td><td>${esc(slotLabel(b.slot))}</td><t
     for (const f of REVQ.files) if (!revSeen.has(f.id)) { revSeen.add(f.id); if (revClean(f)) revPicked.add(f.id); }
     for (const id of [...revPicked]) if (!REVQ.files.some((f) => f.id === id && revClean(f))) revPicked.delete(id);
     renderReview();
+    clearTimeout(loadReview._t);
+    if (REVQ.files.some((f) => f.smart === 'building')) loadReview._t = setTimeout(() => loadReview().catch(() => {}), 20000);
   }
   const REV_IC = { ok: ['✅', 'ok'], check: ['⚠️', 'check'], nomatch: ['❌', 'bad'], mixed: ['❌', 'bad'], unreadable: ['❌', 'bad'], off: ['❔', 'check'] };
   const REV_T = { ok: 'Matches', check: 'Check this', nomatch: 'No matching patient', mixed: 'Mixed report – more than one patient', unreadable: "Couldn't be read", off: 'AI check off – check by hand' };
@@ -1967,8 +2016,10 @@ ${(m.reasons || []).length ? `<div class="rv-l">${(m.reasons || []).map(esc).joi
 ${best ? `<div class="rv-l rv-warn">The AI thinks it fits <b>${esc(best.name)} (${esc(best.id)})</b> better. <button type="button" class="lnk-b" data-act="rv-move" data-rid="${f.id}" data-to="${esc(best.id)}">Move it there</button></div>` : ''}
 ${vialNotOk ? `<div class="rv-l rv-warn">⚠ The vial isn't confirmed at the lab yet – do Step 3 first. <button type="button" class="lnk-b" data-act="collect" data-id="${esc(f.booking_id)}">Confirm vial</button></div>` : ''}
 <small class="meta">📄 ${esc(f.name)} · ${kb(f.size)} · from ${esc(f.centre || 'centre')}${f.sender ? ' (' + esc(f.sender) + ')' : ''} · ${f.src === 'portal' ? 'centre portal' : 'WhatsApp'} · ${when(f.created_at)}${centreSaid ? ' · ' + centreSaid : ''}${held && f.review_note ? ' · ' + esc(f.review_note) : ''}</small>
+${f.booking_id && SM_T[f.smart] ? `<div class="rv-l">${SM_T[f.smart]}${f.smart === 'ready' ? ` · <button type="button" class="lnk-b" style="display:inline;width:auto" data-act="sm-view" data-id="${esc(f.booking_id)}">Preview</button>` : ''}${f.smart === 'failed' || f.smart === 'none' ? ` · <button type="button" class="lnk-b" style="display:inline;width:auto" data-act="sm-build" data-id="${esc(f.booking_id)}">${f.smart === 'failed' ? 'Try again' : 'Make it now'}</button>${f.smart_error ? ` <span class="meta">(${esc(f.smart_error)})</span>` : ''}` : ''}</div>` : ''}
 <div class="rv-a">
 <button type="button" class="btn ghost sm" data-act="rp-view" data-rid="${f.id}">View PDF</button>
+${f.booking_id && f.smart !== 'off' ? `<select class="inp rv-send" data-rv-send="${f.id}" aria-label="What to send"><option value="smart"${sendChoice(f) === 'smart' ? ' selected' : ''}${f.smart === 'ready' ? '' : ' disabled'}>Send smart report + lab PDF</option><option value="pdf"${sendChoice(f) === 'pdf' ? ' selected' : ''}>Send lab PDF only</option></select>` : ''}
 ${f.booking_id ? `<button type="button" class="btn purple sm" data-act="rv-ok" data-rid="${f.id}">${m.interim ? 'Send interim now' : 'Approve &amp; send'}</button>` : ''}
 ${m.interim && !held ? `<button type="button" class="btn ghost sm" data-act="rv-hold" data-rid="${f.id}">Wait for final</button>` : ''}
 <select class="inp rv-sel" data-rv-move="${f.id}" aria-label="Move to another patient"><option value="">${f.booking_id ? 'Reassign…' : 'Choose the patient…'}</option>${opts}</select>
@@ -1989,6 +2040,8 @@ ${m.interim && !held ? `<button type="button" class="btn ghost sm" data-act="rv-
   $('#revList').addEventListener('change', async (e) => {
     const ck = e.target.closest('[data-rv]');
     if (ck) { const id = Number(ck.dataset.rv); ck.checked ? revPicked.add(id) : revPicked.delete(id); renderReview(); return; }
+    const sd = e.target.closest('[data-rv-send]');
+    if (sd) { revSend.set(Number(sd.dataset.rvSend), sd.value); return; }
     const sel = e.target.closest('[data-rv-move]');
     if (sel && sel.value) revAct(Number(sel.dataset.rvMove), 'reassign', { booking_id: sel.value });
   });
@@ -2011,11 +2064,12 @@ ${m.interim && !held ? `<button type="button" class="btn ghost sm" data-act="rv-
       }
     }
     const canSend = isOp() || (WA && WA.auto);
-    const r = await post(`/api/admin/review/${rid}`, { action: 'approve', note, send: bulk && !canSend ? false : undefined });
+    const r = await post(`/api/admin/review/${rid}`, { action: 'approve', note, send: bulk && !canSend ? false : undefined, smart: sendChoice(f) === 'smart' });
     if (r.send && r.send.manual && !bulk) { // manual sending: WhatsApp opens with the text, attach the PDF there
       const b = findB(r.booking_id);
       openWhatsApp(r.phone, r.text);
       if (b) await post(`/api/admin/bookings/${r.booking_id}/sent`, { kind: 'report', reportIds: [rid] });
+      if (sendChoice(f) === 'smart') toast('Tip: tell the patient their smart report is on drsarwantests.com/reports/');
     }
     return r;
   }
@@ -2360,6 +2414,9 @@ ${t.meta !== false ? `<button type="button" class="btn ghost sm" data-act="wa-su
     else if (a === 'step-unmark') markStep(id, el.dataset.kind, true);
     else if (a === 'rp-view') viewReportFile(Number(el.dataset.rid));
     else if (a === 'rv-ok') revApproveOne(Number(el.dataset.rid));
+    else if (a === 'sm-view') previewSmart(id);
+    else if (a === 'sm-build') smartAct(id, 'build');
+    else if (a === 'sm-hide') { if (confirm('Hide the smart report from the patient? They keep the lab PDF.')) smartAct(id, 'unrelease'); }
     else if (a === 'rv-all') revApproveAll();
     else if (a === 'rv-hold') revAct(Number(el.dataset.rid), 'hold');
     else if (a === 'rv-move') revAct(Number(el.dataset.rid), 'reassign', { booking_id: el.dataset.to });

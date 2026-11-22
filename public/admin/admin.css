@@ -744,3 +744,10 @@ button.stat:hover{border-color:var(--teal);box-shadow:0 0 0 2px #d8ecef}
 .pk-card{border:1px solid var(--line,#dfe6ec);border-radius:12px;padding:12px 14px;display:grid;gap:10px;margin:0}
 .pk-card legend{font-weight:700;padding:0 6px}
 .pk-ai{display:flex;gap:8px;align-items:center}.pk-ai .inp{flex:1}
+
+/* smart report: review queue + reports dialog */
+.sm-box{display:flex;gap:10px;align-items:center;flex-wrap:wrap;border:1px solid #ddd3fb;background:#f6f3ff;border-radius:12px;padding:10px 12px;margin:0 0 12px;font-size:14px}
+.sm-box b{color:#4c2fb5}
+.sm-box .sm-t{flex:1;min-width:180px}
+.sm-box label{display:flex;gap:6px;align-items:center;font-weight:600}
+.rv-send{max-width:260px}
