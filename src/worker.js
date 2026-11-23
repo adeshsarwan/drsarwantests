@@ -749,12 +749,19 @@ async function gaPurchase(env, id) {
   await logAct(env, id, "Google Analytics", "system", r.ok ? `Sale sent to Analytics (₹${b.amount}${src.get("gclid") ? ", from a Google ad" : ""}).` : `Sending the sale to Analytics failed (${r.status}).`);
 }
 
+// "engaged_visit": once per browser session, when the visitor shows real interest –
+// 15 s with the page visible, a scroll past half the page, or a tap on Book / Call / WhatsApp
+// or the booking form. Used as the Google Ads goal (purchase is too deep in the flow);
+// accidental app taps bounce within seconds and never fire it.
+const ENGAGED_JS = `(function(){var K="dsl_eng";try{if(sessionStorage.getItem(K))return;}catch(e){}var done=false,t=0,iv;function fire(r){if(done)return;done=true;try{sessionStorage.setItem(K,"1");}catch(e){}clearInterval(iv);if(window.gtag)gtag("event","engaged_visit",{reason:r,page_path:location.pathname});}iv=setInterval(function(){if(document.visibilityState==="visible"&&++t>=15)fire("time");},1000);addEventListener("scroll",function(){var d=document.documentElement,h=d.scrollHeight-innerHeight;if(h>0&&(scrollY||d.scrollTop)/h>=0.5)fire("scroll");},{passive:true});document.addEventListener("click",function(e){var a=e.target&&e.target.closest&&e.target.closest('a[href*="#book"],a[href^="tel:"],a[href*="wa.me"],#book button,#booker,#book input,#book select');if(a)fire("cta");},true);document.addEventListener("focusin",function(e){if(e.target&&e.target.closest&&e.target.closest("#book,#booker"))fire("cta");});})();`;
+
 // Google tag on the public pages ("/" and /package/<slug>) when GA4_ID is set
 function withGtag(env, res) {
   const id = String(env.GA4_ID || "");
   if (!/^G-[A-Z0-9]{4,20}$/.test(id) || !res || !(res.headers.get("content-type") || "").includes("text/html")) return res;
   const tag = `<script async src="https://www.googletagmanager.com/gtag/js?id=${id}"></script>
-<script>window.GA4_ID="${id}";window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag("js",new Date());(function(){var c="";try{c=new URLSearchParams(location.search).get("gclid")||"";if(!c){var o=JSON.parse(localStorage.getItem("dsl_src")||"null");if(o&&Date.now()-o.t<2592e6)c=new URLSearchParams(o.v).get("gclid")||"";}}catch(e){}if(c)gtag("set",{click_id:c.slice(0,100)});})();gtag("config","${id}");</script>`;
+<script>window.GA4_ID="${id}";window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag("js",new Date());(function(){var c="";try{c=new URLSearchParams(location.search).get("gclid")||"";if(!c){var o=JSON.parse(localStorage.getItem("dsl_src")||"null");if(o&&Date.now()-o.t<2592e6)c=new URLSearchParams(o.v).get("gclid")||"";}}catch(e){}if(c)gtag("set",{click_id:c.slice(0,100)});})();gtag("config","${id}");</script>
+<script>${ENGAGED_JS}</script>`;
   return new HTMLRewriter().on("head", { element(el) { el.prepend(tag, { html: true }); } }).transform(res);
 }
 
